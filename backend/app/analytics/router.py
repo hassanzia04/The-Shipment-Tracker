@@ -1,0 +1,843 @@
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, func, case, cast, String
+from datetime import datetime, timedelta, timezone
+
+from app.database import get_db
+from app.auth.dependencies import get_current_user
+from app.shipments.models import Shipment, ShipmentTask, ShipmentEvent, Container
+from app.masters.models import ShippingLine
+from app.auth.models import User
+from app.enums import ShipmentStage, TaskStatus, TaskType, Team, EventType, ContainerStatus
+
+router = APIRouter(prefix="/analytics", tags=["analytics"])
+
+
+@router.get("/dashboard")
+async def dashboard(db: AsyncSession = Depends(get_db), _: User = Depends(get_current_user)):
+    # ── Shipment counts by stage (non-IN_PROGRESS) ───────────────────────────
+    stage_counts_result = await db.execute(
+        select(Shipment.current_stage, func.count(Shipment.id))
+        .where(Shipment.current_stage != ShipmentStage.IN_PROGRESS)
+        .group_by(Shipment.current_stage)
+    )
+    by_stage = {row[0].value: row[1] for row in stage_counts_result.all()}
+
+    # ── IN_PROGRESS breakdown by active task type ─────────────────────────────
+    # BAYAN_PAYMENT is excluded — it belongs to Customer, counted separately below.
+    # Track whether each task is assigned so unassigned PRO tasks get their own bucket
+    _is_assigned = case((ShipmentTask.assigned_to_id != None, True), else_=False)
+    task_breakdown_result = await db.execute(
+        select(
+            ShipmentTask.task_type,
+            ShipmentTask.status,
+            ShipmentTask.assigned_team,
+            _is_assigned,
+            func.count(ShipmentTask.id),
+        )
+        .join(Shipment, Shipment.id == ShipmentTask.shipment_id)
+        .where(
+            Shipment.current_stage == ShipmentStage.IN_PROGRESS,
+            ShipmentTask.status.in_([TaskStatus.IN_PROGRESS, TaskStatus.ON_HOLD, TaskStatus.COMPLETED]),
+            ShipmentTask.task_type != TaskType.BAYAN_PAYMENT,
+        )
+        .group_by(ShipmentTask.task_type, ShipmentTask.status, ShipmentTask.assigned_team, _is_assigned)
+    )
+    task_rows = task_breakdown_result.all()
+
+    # Build task pipeline: {task_type: {active, on_hold, completed, unassigned}}
+    # "unassigned" = PRO task that exists but hasn't been picked up by anyone yet
+    task_pipeline: dict = {}
+    for task_type, status, assigned_team, is_assigned, count in task_rows:
+        key = task_type.value
+        if key not in task_pipeline:
+            task_pipeline[key] = {"active": 0, "on_hold": 0, "completed": 0, "unassigned": 0}
+        if status == TaskStatus.COMPLETED:
+            task_pipeline[key]["completed"] += count
+        elif status == TaskStatus.ON_HOLD:
+            task_pipeline[key]["on_hold"] += count
+        elif assigned_team == Team.PRO.value and not is_assigned:
+            task_pipeline[key]["unassigned"] += count
+        else:
+            task_pipeline[key]["active"] += count
+
+    # ── Bayan payment pending (Customer action required) ──────────────────────
+    bp_result = await db.execute(
+        select(func.count(ShipmentTask.id))
+        .where(
+            ShipmentTask.task_type == TaskType.BAYAN_PAYMENT,
+            ShipmentTask.status == TaskStatus.IN_PROGRESS,
+        )
+    )
+    bayan_payment_pending = bp_result.scalar() or 0
+
+    total_active_result = await db.execute(
+        select(func.count(Shipment.id)).where(Shipment.current_stage != ShipmentStage.COMPLETED)
+    )
+    total_active = total_active_result.scalar() or 0
+    total_completed = by_stage.get(ShipmentStage.COMPLETED.value, 0)
+
+    # ── Active holds ──────────────────────────────────────────────────────────
+    # Subquery: most recent TASK_HOLD_ASSIGNED event per task — gives the actual
+    # time the hold was placed (task.created_at is when the task was opened, not held)
+    hold_time_sq = (
+        select(
+            ShipmentEvent.task_id,
+            func.max(ShipmentEvent.created_at).label("held_at"),
+        )
+        .where(ShipmentEvent.event_type == EventType.TASK_HOLD_ASSIGNED)
+        .group_by(ShipmentEvent.task_id)
+        .subquery()
+    )
+
+    holds_result = await db.execute(
+        select(
+            ShipmentTask,
+            Shipment.bl_number,
+            Shipment.id,
+            ShippingLine.name,
+            Shipment.container_count,
+            hold_time_sq.c.held_at,
+        )
+        .join(Shipment, Shipment.id == ShipmentTask.shipment_id)
+        .outerjoin(ShippingLine, ShippingLine.id == Shipment.shipping_line_id)
+        .outerjoin(hold_time_sq, hold_time_sq.c.task_id == ShipmentTask.id)
+        .where(ShipmentTask.status == TaskStatus.ON_HOLD)
+        .order_by(hold_time_sq.c.held_at.asc().nullslast())
+    )
+    holds_rows = holds_result.all()
+    active_holds = [
+        {
+            "shipment_id": str(row[2]),
+            "bl_number": row[1],
+            "shipping_line": row[3],
+            "container_count": row[4],
+            "task_type": row[0].task_type.value,
+            "hold_entity": row[0].hold_entity.value if row[0].hold_entity else None,
+            "hold_reason": row[0].hold_reason.value if row[0].hold_reason else None,
+            "hold_remark": row[0].hold_remark,
+            # held_at: actual hold timestamp from event log; fall back to task.created_at
+            "held_at": (row[5] or row[0].created_at).isoformat() if (row[5] or row[0].created_at) else None,
+        }
+        for row in holds_rows
+    ]
+
+    # ── Hold entity breakdown ─────────────────────────────────────────────────
+    entity_counts: dict[str, int] = {}
+    for h in active_holds:
+        if h["hold_entity"]:
+            entity_counts[h["hold_entity"]] = entity_counts.get(h["hold_entity"], 0) + 1
+
+    # ── All active shipments summary (capped at 50 — full list is on /shipments) ─
+    shipments_result = await db.execute(
+        select(Shipment)
+        .where(Shipment.current_stage != ShipmentStage.COMPLETED)
+        .order_by(Shipment.pull_out_date.asc().nullslast(), Shipment.created_at.asc())
+        .limit(50)
+    )
+    shipments = shipments_result.scalars().all()
+
+    # Get active holds per shipment for the table
+    held_shipment_ids = {h["shipment_id"] for h in active_holds}
+
+    # ── Container aggregations ─────────────────────────────────────────────────
+    # Status distribution across active shipments (powers the dashboard widget).
+    # PENDING containers in TRANSPORT/DC_TRANSPORT are reported as AWAITING_TRUCK
+    # so they appear as a distinct badge rather than lumped with pre-transport pending.
+    _transport_stages = [ShipmentStage.TRANSPORT, ShipmentStage.DC_TRANSPORT]
+    _effective_status = case(
+        (
+            (Container.status == ContainerStatus.PENDING) &
+            Shipment.current_stage.in_(_transport_stages),
+            "AWAITING_TRUCK",
+        ),
+        else_=cast(Container.status, String),
+    )
+    container_status_result = await db.execute(
+        select(_effective_status, func.count(Container.id))
+        .select_from(Container)
+        .join(Shipment, Shipment.id == Container.shipment_id)
+        .where(
+            Shipment.current_stage != ShipmentStage.COMPLETED,
+            Container.status.notin_([ContainerStatus.RETURNED, ContainerStatus.CLOSED]),
+        )
+        .group_by(_effective_status)
+    )
+    container_status_counts = {str(row[0]): row[1] for row in container_status_result.all()}
+
+    # Add declared-but-not-yet-entered containers as virtual PENDING entries.
+    # These are shipments that have container_count set but fewer Container records.
+    declared_result = await db.execute(
+        select(func.sum(Shipment.container_count))
+        .where(
+            Shipment.current_stage != ShipmentStage.COMPLETED,
+            Shipment.container_count != None,
+        )
+    )
+    total_declared = declared_result.scalar() or 0
+    # Count ALL containers (including terminal statuses) so the gap reflects
+    # truly missing Container records, not ones we filtered out of the widget.
+    total_all_result = await db.execute(
+        select(func.count(Container.id))
+        .select_from(Container)
+        .join(Shipment, Shipment.id == Container.shipment_id)
+        .where(Shipment.current_stage != ShipmentStage.COMPLETED)
+    )
+    total_all = total_all_result.scalar() or 0
+    pending_gap = max(0, int(total_declared) - total_all)
+    if pending_gap > 0:
+        container_status_counts['PENDING'] = container_status_counts.get('PENDING', 0) + pending_gap
+
+    # Container count per pipeline stage (for stage-row annotations)
+    containers_by_stage_result = await db.execute(
+        select(Shipment.current_stage, func.count(Container.id))
+        .select_from(Container)
+        .join(Shipment, Shipment.id == Container.shipment_id)
+        .where(
+            Shipment.current_stage != ShipmentStage.COMPLETED,
+            Container.status.notin_([ContainerStatus.RETURNED, ContainerStatus.CLOSED]),
+        )
+        .group_by(Shipment.current_stage)
+    )
+    containers_by_stage = {row[0].value: row[1] for row in containers_by_stage_result.all()}
+
+    # Actual container count per shipment (for the summary table)
+    actual_container_counts: dict = {}
+    if shipments:
+        ship_ids = [s.id for s in shipments]
+        actual_cnt_result = await db.execute(
+            select(Container.shipment_id, func.count(Container.id))
+            .where(Container.shipment_id.in_(ship_ids))
+            .group_by(Container.shipment_id)
+        )
+        actual_container_counts = {row[0]: row[1] for row in actual_cnt_result.all()}
+
+    shipment_rows = [
+        {
+            "id": str(s.id),
+            "bl_number": s.bl_number,
+            "invoice_number": s.invoice_number,
+            "current_stage": s.current_stage.value,
+            "pull_out_date": s.pull_out_date.isoformat() if s.pull_out_date else None,
+            "created_at": s.created_at.isoformat(),
+            "on_hold": str(s.id) in held_shipment_ids,
+            "days_active": (datetime.now(timezone.utc) - s.created_at).days,
+            "container_count": s.container_count,
+            "actual_containers": actual_container_counts.get(s.id, 0),
+        }
+        for s in shipments
+    ]
+
+    # ── IN_PROGRESS shipment doc status (Permit / DO / Bayan) ────────────────
+    in_progress_ships_result = await db.execute(
+        select(Shipment.id, Shipment.bl_number, Shipment.pull_out_date)
+        .where(Shipment.current_stage == ShipmentStage.IN_PROGRESS)
+        .order_by(Shipment.pull_out_date.asc().nullslast(), Shipment.created_at.asc())
+    )
+    in_progress_ships = in_progress_ships_result.all()
+
+    in_progress_doc_status: list[dict] = []
+    if in_progress_ships:
+        in_progress_ship_ids = [r[0] for r in in_progress_ships]
+        doc_tasks_result = await db.execute(
+            select(ShipmentTask.shipment_id, ShipmentTask.task_type, ShipmentTask.status)
+            .where(
+                ShipmentTask.shipment_id.in_(in_progress_ship_ids),
+                ShipmentTask.task_type.in_([TaskType.PERMIT, TaskType.DO, TaskType.BAYAN]),
+            )
+        )
+        # Priority: ON_HOLD (most urgent) > IN_PROGRESS > COMPLETED
+        _priority = {TaskStatus.ON_HOLD: 3, TaskStatus.IN_PROGRESS: 2, TaskStatus.COMPLETED: 1}
+        task_status_map: dict = {}
+        for shipment_id, task_type, status in doc_tasks_result.all():
+            key = (shipment_id, task_type.value)
+            if key not in task_status_map or _priority[status] > _priority[task_status_map[key]]:
+                task_status_map[key] = status
+
+        def _task_status(ship_id, task_type_val: str) -> str | None:
+            s = task_status_map.get((ship_id, task_type_val))
+            return s.value if s is not None else None
+
+        in_progress_doc_status = [
+            {
+                "shipment_id": str(r[0]),
+                "bl_number": r[1],
+                "pull_out_date": r[2].isoformat() if r[2] else None,
+                "permit": _task_status(r[0], TaskType.PERMIT.value),
+                "do": _task_status(r[0], TaskType.DO.value),
+                "bayan": _task_status(r[0], TaskType.BAYAN.value),
+            }
+            for r in in_progress_ships
+        ]
+
+    # ── Average completion time (completed shipments) ─────────────────────────
+    completed_result = await db.execute(
+        select(
+            func.avg(
+                func.extract("epoch", Shipment.completed_at) -
+                func.extract("epoch", Shipment.created_at)
+            )
+        )
+        .where(Shipment.completed_at != None)
+    )
+    avg_seconds = completed_result.scalar()
+    avg_days = round(avg_seconds / 86400, 1) if avg_seconds else None
+
+    # ── Recently completed ────────────────────────────────────────────────────
+    recent_result = await db.execute(
+        select(Shipment)
+        .where(Shipment.current_stage == ShipmentStage.COMPLETED)
+        .order_by(Shipment.completed_at.desc())
+        .limit(5)
+    )
+    recent_completed = [
+        {
+            "id": str(s.id),
+            "bl_number": s.bl_number,
+            "completed_at": s.completed_at.isoformat() if s.completed_at else None,
+            "days_taken": (
+                round((s.completed_at.replace(tzinfo=None) - s.created_at.replace(tzinfo=None)).days, 1)
+                if s.completed_at else None
+            ),
+        }
+        for s in recent_result.scalars().all()
+    ]
+
+    # ── Volume by pull-out date (small summary table) ────────────────────────────
+    volume_result = await db.execute(
+        select(
+            func.min(Shipment.created_at).label("earliest_created"),
+            Shipment.pull_out_date,
+            func.count(Shipment.id).label("bl_count"),
+            func.sum(func.coalesce(Shipment.container_count, 0)).label("container_total"),
+        )
+        .where(Shipment.current_stage != ShipmentStage.COMPLETED)
+        .group_by(Shipment.pull_out_date)
+        .order_by(Shipment.pull_out_date.asc().nullslast())
+    )
+    volume_by_date = [
+        {
+            "earliest_created": row[0].date().isoformat() if row[0] else None,
+            "pull_out_date": row[1].isoformat() if row[1] else None,
+            "bl_count": row[2],
+            "container_total": int(row[3] or 0),
+        }
+        for row in volume_result.all()
+    ]
+
+    # Containers in completed shipments (for the Completed stat card)
+    completed_containers_result = await db.execute(
+        select(func.count(Container.id))
+        .select_from(Container)
+        .join(Shipment, Shipment.id == Container.shipment_id)
+        .where(Shipment.current_stage == ShipmentStage.COMPLETED)
+    )
+    completed_containers = completed_containers_result.scalar() or 0
+
+    return {
+        "summary": {
+            "total_active": total_active,
+            "total_completed": total_completed,
+            "total_on_hold": len(active_holds),
+            "avg_completion_days": avg_days,
+            "completed_containers": completed_containers,
+        },
+        "by_stage": by_stage,
+        "bayan_payment_pending": bayan_payment_pending,
+        "task_pipeline": task_pipeline,
+        "entity_breakdown": entity_counts,
+        "active_holds": active_holds,
+        "in_progress_doc_status": in_progress_doc_status,
+        "shipments": shipment_rows,
+        "recent_completed": recent_completed,
+        "container_status_counts": container_status_counts,
+        "containers_by_stage": containers_by_stage,
+        "volume_by_date": volume_by_date,
+    }
+
+
+@router.get("/productivity")
+async def productivity(
+    days: int = Query(30, ge=0),
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+):
+    is_pro_self_view = actor.team == Team.PRO and not actor.is_admin
+    if actor.team not in (Team.MANAGEMENT, Team.PRO) and not actor.is_admin:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    if is_pro_self_view:
+        users = [actor]
+    else:
+        users_result = await db.execute(
+            select(User)
+            .where(User.team.in_([Team.FFD, Team.PRO]))
+            .order_by(User.team, User.full_name)
+        )
+        users = list(users_result.scalars().all())
+    user_ids = [u.id for u in users]
+
+    time_clauses = []
+    if days > 0:
+        since = datetime.now(timezone.utc) - timedelta(days=days)
+        time_clauses.append(ShipmentTask.completed_at >= since)
+
+    # Aggregate: completed count + avg seconds per user
+    agg_result = await db.execute(
+        select(
+            ShipmentTask.completed_by_id,
+            func.count(ShipmentTask.id).label("count"),
+            func.avg(
+                func.extract("epoch", ShipmentTask.completed_at) -
+                func.extract("epoch", ShipmentTask.created_at)
+            ).label("avg_seconds"),
+        )
+        .where(
+            ShipmentTask.completed_by_id.in_(user_ids),
+            ShipmentTask.status == TaskStatus.COMPLETED,
+            *time_clauses,
+        )
+        .group_by(ShipmentTask.completed_by_id)
+    )
+    agg_by_user = {row[0]: {"count": row[1], "avg_seconds": row[2]} for row in agg_result.all()}
+
+    # Breakdown: count + avg time per user per task type
+    breakdown_result = await db.execute(
+        select(
+            ShipmentTask.completed_by_id,
+            ShipmentTask.task_type,
+            func.count(ShipmentTask.id).label("count"),
+            func.avg(
+                func.extract("epoch", ShipmentTask.completed_at) -
+                func.extract("epoch", ShipmentTask.created_at)
+            ).label("avg_seconds"),
+        )
+        .where(
+            ShipmentTask.completed_by_id.in_(user_ids),
+            ShipmentTask.status == TaskStatus.COMPLETED,
+            *time_clauses,
+        )
+        .group_by(ShipmentTask.completed_by_id, ShipmentTask.task_type)
+    )
+    breakdown_by_user: dict = {}
+    for user_id, task_type, count, avg_sec in breakdown_result.all():
+        breakdown_by_user.setdefault(user_id, {})[task_type.value] = {
+            "count": count,
+            "avg_hours": round(avg_sec / 3600, 1) if avg_sec else None,
+        }
+
+    # Team-level: active + on-hold task counts (scoped to actor for self-view)
+    if is_pro_self_view:
+        team_stats_result = await db.execute(
+            select(ShipmentTask.assigned_team, ShipmentTask.status, func.count(ShipmentTask.id))
+            .where(
+                ShipmentTask.assigned_to_id == actor.id,
+                ShipmentTask.status.in_([TaskStatus.IN_PROGRESS, TaskStatus.ON_HOLD]),
+            )
+            .group_by(ShipmentTask.assigned_team, ShipmentTask.status)
+        )
+    else:
+        team_stats_result = await db.execute(
+            select(ShipmentTask.assigned_team, ShipmentTask.status, func.count(ShipmentTask.id))
+            .where(
+                ShipmentTask.assigned_team.in_([Team.FFD.value, Team.PRO.value]),
+                ShipmentTask.status.in_([TaskStatus.IN_PROGRESS, TaskStatus.ON_HOLD]),
+            )
+            .group_by(ShipmentTask.assigned_team, ShipmentTask.status)
+        )
+    team_stats: dict = {Team.FFD.value: {"active": 0, "on_hold": 0}, Team.PRO.value: {"active": 0, "on_hold": 0}}
+    for team_name, status, count in team_stats_result.all():
+        key = "active" if status == TaskStatus.IN_PROGRESS else "on_hold"
+        if team_name in team_stats:
+            team_stats[team_name][key] = count
+
+    visible_teams = [Team.PRO.value] if is_pro_self_view else [Team.FFD.value, Team.PRO.value]
+    teams_out = []
+    for team_name in visible_teams:
+        team_users = [u for u in users if u.team.value == team_name]
+        users_out = []
+        for u in team_users:
+            agg = agg_by_user.get(u.id, {})
+            avg_sec = agg.get("avg_seconds") or 0
+            users_out.append({
+                "id": str(u.id),
+                "full_name": u.full_name,
+                "email": u.email,
+                "is_active": u.is_active,
+                "tasks_completed": agg.get("count", 0),
+                "avg_completion_hours": round(avg_sec / 3600, 1) if avg_sec else None,
+                "task_breakdown": breakdown_by_user.get(u.id, {}),
+            })
+        # Sort by tasks completed descending
+        users_out.sort(key=lambda x: x["tasks_completed"], reverse=True)
+        teams_out.append({
+            "team": team_name,
+            "active_tasks": team_stats[team_name]["active"],
+            "on_hold_tasks": team_stats[team_name]["on_hold"],
+            "users": users_out,
+        })
+
+    return {"period_days": days, "teams": teams_out}
+
+
+@router.get("/reports")
+async def reports(
+    from_year: int | None = Query(None),
+    from_month: int | None = Query(None, ge=1, le=12),
+    to_year: int | None = Query(None),
+    to_month: int | None = Query(None, ge=1, le=12),
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+):
+    import calendar as cal_mod
+
+    now = datetime.now(timezone.utc)
+    if from_year is None or from_month is None:
+        twelve_ago = datetime(now.year, now.month, 1, tzinfo=timezone.utc) - timedelta(days=365)
+        from_year, from_month = twelve_ago.year, twelve_ago.month
+    if to_year is None or to_month is None:
+        to_year, to_month = now.year, now.month
+
+    from_dt = datetime(from_year, from_month, 1, tzinfo=timezone.utc)
+    last_day = cal_mod.monthrange(to_year, to_month)[1]
+    to_dt = datetime(to_year, to_month, last_day, 23, 59, 59, tzinfo=timezone.utc)
+
+    is_customer = actor.team == Team.CUSTOMER
+    base_filter = []
+    if is_customer:
+        base_filter.append(Shipment.customer_id == actor.id)
+
+    # Shipments created within the selected period — used as the base for all queries
+    period_filter = base_filter + [Shipment.created_at >= from_dt, Shipment.created_at <= to_dt]
+
+    # ── Monthly volume ────────────────────────────────────────────────────────
+    created_monthly_q = (
+        select(
+            func.extract("year",  Shipment.created_at).label("yr"),
+            func.extract("month", Shipment.created_at).label("mo"),
+            func.count(Shipment.id).label("n"),
+        )
+        .where(*period_filter)
+        .group_by(func.extract("year", Shipment.created_at), func.extract("month", Shipment.created_at))
+        .order_by(func.extract("year", Shipment.created_at), func.extract("month", Shipment.created_at))
+    )
+    completed_monthly_q = (
+        select(
+            func.extract("year",  Shipment.completed_at).label("yr"),
+            func.extract("month", Shipment.completed_at).label("mo"),
+            func.count(Shipment.id).label("n"),
+        )
+        .where(
+            Shipment.completed_at != None,
+            Shipment.completed_at >= from_dt,
+            Shipment.completed_at <= to_dt,
+            *base_filter,
+        )
+        .group_by(func.extract("year", Shipment.completed_at), func.extract("month", Shipment.completed_at))
+        .order_by(func.extract("year", Shipment.completed_at), func.extract("month", Shipment.completed_at))
+    )
+    completed_by_ym = {
+        (int(r[0]), int(r[1])): r[2]
+        for r in (await db.execute(completed_monthly_q)).all()
+    }
+    monthly_volume = []
+    for r in (await db.execute(created_monthly_q)).all():
+        yr, mo = int(r[0]), int(r[1])
+        monthly_volume.append({
+            "month": f"{cal_mod.month_abbr[mo]} {str(yr)[2:]}",
+            "created": r[2],
+            "completed": completed_by_ym.get((yr, mo), 0),
+        })
+
+    # ── Overall summary (scoped to selected period) ───────────────────────────
+    total_shipments = (await db.execute(
+        select(func.count(Shipment.id)).where(*period_filter)
+    )).scalar() or 0
+
+    total_completed = (await db.execute(
+        select(func.count(Shipment.id)).where(
+            Shipment.current_stage == ShipmentStage.COMPLETED, *period_filter
+        )
+    )).scalar() or 0
+
+    total_active = (await db.execute(
+        select(func.count(Shipment.id)).where(
+            Shipment.current_stage != ShipmentStage.COMPLETED, *period_filter
+        )
+    )).scalar() or 0
+
+    avg_seconds = (await db.execute(
+        select(func.avg(
+            func.extract("epoch", Shipment.completed_at) -
+            func.extract("epoch", Shipment.created_at)
+        )).where(Shipment.completed_at != None, *period_filter)
+    )).scalar()
+    avg_cycle_days = round(avg_seconds / 86400, 1) if avg_seconds else None
+
+    # ── On-time rate ──────────────────────────────────────────────────────────
+    completed_rows = (await db.execute(
+        select(Shipment).where(
+            Shipment.current_stage == ShipmentStage.COMPLETED,
+            Shipment.completed_at != None,
+            *period_filter,
+        )
+    )).scalars().all()
+    on_time = sum(
+        1 for s in completed_rows
+        if s.pull_out_date is None or s.completed_at.replace(tzinfo=None).date() <= s.pull_out_date
+    )
+    late = len(completed_rows) - on_time
+
+    # ── Container movement counts in the period ───────────────────────────────
+    containers_returned = (await db.execute(
+        select(func.count(Container.id))
+        .select_from(Container)
+        .join(Shipment, Shipment.id == Container.shipment_id)
+        .where(
+            Container.status == ContainerStatus.RETURNED,
+            *period_filter,
+        )
+    )).scalar() or 0
+
+    containers_closed = (await db.execute(
+        select(func.count(Container.id))
+        .select_from(Container)
+        .join(Shipment, Shipment.id == Container.shipment_id)
+        .where(
+            Container.status == ContainerStatus.CLOSED,
+            *period_filter,
+        )
+    )).scalar() or 0
+
+    result: dict = {
+        "from_year": from_year,
+        "from_month": from_month,
+        "to_year": to_year,
+        "to_month": to_month,
+        "monthly_volume": monthly_volume,
+        "summary": {
+            "total_shipments": total_shipments,
+            "total_completed": total_completed,
+            "total_active": total_active,
+            "avg_cycle_days": avg_cycle_days,
+            "on_time": on_time,
+            "late": late,
+            "containers_returned": containers_returned,
+            "containers_closed": containers_closed,
+        },
+    }
+
+    # ── Stage average duration ────────────────────────────────────────────────
+    stage_dur_q = (
+        select(
+            ShipmentEvent.stage_from,
+            func.avg(ShipmentEvent.duration_seconds).label("avg_sec"),
+            func.count(ShipmentEvent.id).label("n"),
+        )
+        .join(Shipment, Shipment.id == ShipmentEvent.shipment_id)
+        .where(
+            ShipmentEvent.event_type == EventType.STAGE_CHANGED,
+            ShipmentEvent.stage_from != None,
+            ShipmentEvent.duration_seconds != None,
+            ShipmentEvent.duration_seconds > 0,
+            *period_filter,
+        )
+        .group_by(ShipmentEvent.stage_from)
+    )
+    stage_durations = [
+        {"stage": r[0].value, "avg_days": round(r[1] / 86400, 1), "count": r[2]}
+        for r in (await db.execute(stage_dur_q)).all()
+        if r[0] is not None and r[1] is not None
+    ]
+
+    # ── Hold analysis: count + avg hold duration per external entity ──────────
+    # Query TASK_HOLD_ASSIGNED events (immutable — data survives hold release).
+    # hold_entity / hold_reason are stored on the event itself since migration e5f6a7b8c9d0.
+    # For avg duration, join the most recent TASK_HOLD_RELEASED event per task.
+    released_sq = (
+        select(
+            ShipmentEvent.task_id,
+            func.max(ShipmentEvent.created_at).label("released_at"),
+        )
+        .where(ShipmentEvent.event_type == EventType.TASK_HOLD_RELEASED)
+        .group_by(ShipmentEvent.task_id)
+        .subquery()
+    )
+
+    hold_entity_q = (
+        select(
+            ShipmentEvent.hold_entity,
+            func.count(ShipmentEvent.id).label("n"),
+            func.avg(
+                func.extract("epoch", released_sq.c.released_at) -
+                func.extract("epoch", ShipmentEvent.created_at)
+            ).label("avg_hold_seconds"),
+        )
+        .join(Shipment, Shipment.id == ShipmentEvent.shipment_id)
+        .outerjoin(released_sq, released_sq.c.task_id == ShipmentEvent.task_id)
+        .where(
+            ShipmentEvent.event_type == EventType.TASK_HOLD_ASSIGNED,
+            ShipmentEvent.hold_entity != None,
+            *period_filter,
+        )
+        .group_by(ShipmentEvent.hold_entity)
+        .order_by(func.count(ShipmentEvent.id).desc())
+    )
+    holds_by_entity = [
+        {
+            "entity": r[0].value,
+            "count": r[1],
+            "avg_hold_days": round(r[2] / 86400, 1) if r[2] else None,
+        }
+        for r in (await db.execute(hold_entity_q)).all()
+        if r[0]
+    ]
+
+    hold_reason_q = (
+        select(ShipmentEvent.hold_reason, func.count(ShipmentEvent.id).label("n"))
+        .join(Shipment, Shipment.id == ShipmentEvent.shipment_id)
+        .where(
+            ShipmentEvent.event_type == EventType.TASK_HOLD_ASSIGNED,
+            ShipmentEvent.hold_reason != None,
+            *period_filter,
+        )
+        .group_by(ShipmentEvent.hold_reason)
+        .order_by(func.count(ShipmentEvent.id).desc())
+        .limit(8)
+    )
+    top_hold_reasons = [
+        {"reason": r[0].value, "count": r[1]}
+        for r in (await db.execute(hold_reason_q)).all()
+        if r[0]
+    ]
+
+    # ── Shipping line breakdown ───────────────────────────────────────────────
+    # Shipment count per shipping line (period-scoped)
+    sl_shipment_q = (
+        select(ShippingLine.name, func.count(Shipment.id).label("n"))
+        .join(ShippingLine, ShippingLine.id == Shipment.shipping_line_id)
+        .where(Shipment.shipping_line_id != None, *period_filter)
+        .group_by(ShippingLine.name)
+    )
+    sl_shipment_counts = {row[0]: row[1] for row in (await db.execute(sl_shipment_q)).all()}
+
+    # Hold count + avg duration per shipping line — reuses released_sq from above
+    sl_hold_q = (
+        select(
+            ShippingLine.name,
+            func.count(ShipmentEvent.id).label("hold_count"),
+            func.avg(
+                func.extract("epoch", released_sq.c.released_at) -
+                func.extract("epoch", ShipmentEvent.created_at)
+            ).label("avg_hold_seconds"),
+        )
+        .select_from(ShipmentEvent)
+        .join(Shipment, Shipment.id == ShipmentEvent.shipment_id)
+        .join(ShippingLine, ShippingLine.id == Shipment.shipping_line_id)
+        .outerjoin(released_sq, released_sq.c.task_id == ShipmentEvent.task_id)
+        .where(
+            ShipmentEvent.event_type == EventType.TASK_HOLD_ASSIGNED,
+            Shipment.shipping_line_id != None,
+            *period_filter,
+        )
+        .group_by(ShippingLine.name)
+    )
+    sl_hold_data = {
+        row[0]: {"hold_count": row[1], "avg_hold_days": round(row[2] / 86400, 1) if row[2] else None}
+        for row in (await db.execute(sl_hold_q)).all()
+    }
+
+    # Top hold reason per shipping line
+    sl_reason_q = (
+        select(
+            ShippingLine.name,
+            ShipmentEvent.hold_reason,
+            func.count(ShipmentEvent.id).label("n"),
+        )
+        .select_from(ShipmentEvent)
+        .join(Shipment, Shipment.id == ShipmentEvent.shipment_id)
+        .join(ShippingLine, ShippingLine.id == Shipment.shipping_line_id)
+        .where(
+            ShipmentEvent.event_type == EventType.TASK_HOLD_ASSIGNED,
+            ShipmentEvent.hold_reason != None,
+            Shipment.shipping_line_id != None,
+            *period_filter,
+        )
+        .group_by(ShippingLine.name, ShipmentEvent.hold_reason)
+    )
+    top_reason_by_sl: dict = {}
+    for sl_name, reason, count in (await db.execute(sl_reason_q)).all():
+        if sl_name not in top_reason_by_sl or count > top_reason_by_sl[sl_name][1]:
+            top_reason_by_sl[sl_name] = (reason, count)
+
+    all_sl_names = set(sl_shipment_counts.keys()) | set(sl_hold_data.keys())
+    shipping_line_breakdown = sorted(
+        [
+            {
+                "shipping_line": name,
+                "shipment_count": sl_shipment_counts.get(name, 0),
+                "hold_count": sl_hold_data.get(name, {}).get("hold_count", 0),
+                "avg_hold_days": sl_hold_data.get(name, {}).get("avg_hold_days"),
+                "top_reason": top_reason_by_sl[name][0].value if name in top_reason_by_sl else None,
+            }
+            for name in all_sl_names
+        ],
+        key=lambda x: x["hold_count"],
+        reverse=True,
+    )
+
+    # ── Document rejection rate ───────────────────────────────────────────────
+    rejection_q = (
+        select(ShipmentEvent.event_type, func.count(ShipmentEvent.id))
+        .join(Shipment, Shipment.id == ShipmentEvent.shipment_id)
+        .where(
+            ShipmentEvent.event_type.in_([
+                EventType.DOCUMENTS_APPROVED,
+                EventType.DOCUMENTS_REJECTED,
+            ]),
+            *period_filter,
+        )
+        .group_by(ShipmentEvent.event_type)
+    )
+    rej = {
+        (r[0].value if hasattr(r[0], "value") else str(r[0])): r[1]
+        for r in (await db.execute(rejection_q)).all()
+    }
+
+    # ── Task avg completion time ──────────────────────────────────────────────
+    task_dur_q = (
+        select(
+            ShipmentTask.task_type,
+            func.avg(
+                func.extract("epoch", ShipmentTask.completed_at) -
+                func.extract("epoch", ShipmentTask.created_at)
+            ).label("avg_sec"),
+            func.count(ShipmentTask.id).label("n"),
+        )
+        .join(Shipment, Shipment.id == ShipmentTask.shipment_id)
+        .where(
+            ShipmentTask.status == TaskStatus.COMPLETED,
+            ShipmentTask.completed_at != None,
+            *period_filter,
+        )
+        .group_by(ShipmentTask.task_type)
+    )
+    task_durations = [
+        {"task": r[0].value, "avg_days": round(r[1] / 86400, 1), "count": r[2]}
+        for r in (await db.execute(task_dur_q)).all()
+        if r[0] is not None and r[1] is not None
+    ]
+
+    result.update({
+        "stage_durations": stage_durations,
+        "holds_by_entity": holds_by_entity,
+        "top_hold_reasons": top_hold_reasons,
+        "shipping_line_breakdown": shipping_line_breakdown,
+        "rejection": {
+            "approved": rej.get(EventType.DOCUMENTS_APPROVED.value, 0),
+            "rejected": rej.get(EventType.DOCUMENTS_REJECTED.value, 0),
+        },
+        "task_durations": task_durations,
+    })
+
+    return result

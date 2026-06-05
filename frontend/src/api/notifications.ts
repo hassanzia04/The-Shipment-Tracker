@@ -1,0 +1,47 @@
+import { api } from '@/lib/api'
+
+export interface CCConfig {
+  id: string
+  team: string | null
+  pro_user_id: string | null
+  cc_email: string
+}
+
+export interface CCConfigCreate {
+  team?: string
+  pro_user_id?: string
+  cc_email: string
+}
+
+export interface DailyReportConfig {
+  send_time: string
+  last_sent_date: string | null
+}
+
+export interface DailyReportRecipient {
+  id: string
+  email: string
+}
+
+export const notificationsApi = {
+  // Alert CC configs
+  listCCConfigs: () => api.get<CCConfig[]>('/notifications/cc-configs'),
+  createCCConfig: (data: CCConfigCreate) => api.post<CCConfig>('/notifications/cc-configs', data),
+  deleteCCConfig: (id: string) => api.delete(`/notifications/cc-configs/${id}`),
+
+  // Daily report config
+  getDailyReportConfig: () => api.get<DailyReportConfig>('/notifications/daily-report/config'),
+  updateDailyReportConfig: (send_time: string) =>
+    api.patch<DailyReportConfig>('/notifications/daily-report/config', { send_time }),
+
+  // Daily report recipients
+  listDailyReportRecipients: () =>
+    api.get<DailyReportRecipient[]>('/notifications/daily-report/recipients'),
+  addDailyReportRecipient: (email: string) =>
+    api.post<DailyReportRecipient>('/notifications/daily-report/recipients', { email }),
+  removeDailyReportRecipient: (id: string) =>
+    api.delete(`/notifications/daily-report/recipients/${id}`),
+
+  // Manual trigger
+  sendDailyReportNow: () => api.post('/notifications/daily-report/send'),
+}

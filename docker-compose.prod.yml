@@ -1,0 +1,89 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ffd_tracker
+      POSTGRES_USER: ${DB_USER:-ffd}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env.prod}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-ffd} -d ffd_tracker"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # No ports: db is not reachable from the internet, only from other containers
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    # No ports: redis is not reachable from the internet, only from other containers
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    # No ports: nginx inside the frontend container proxies /api/ to backend:8000
+    env_file: .env.prod
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${DB_USER:-ffd}:${DB_PASSWORD:?Set DB_PASSWORD in .env.prod}@db:5432/ffd_tracker
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: .env.prod
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${DB_USER:-ffd}:${DB_PASSWORD:?Set DB_PASSWORD in .env.prod}@db:5432/ffd_tracker
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery -A app.worker worker --loglevel=info
+
+  beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: .env.prod
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${DB_USER:-ffd}:${DB_PASSWORD:?Set DB_PASSWORD in .env.prod}@db:5432/ffd_tracker
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery -A app.worker beat --loglevel=info
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: prod
+    restart: unless-stopped
+    ports:
+      - "80:80"    # Only this port is exposed to the internet
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
