@@ -48,3 +48,7 @@ desktop.ini
 
 # Docker
 *.log
+
+# Celery
+backend/celerybeat-schedule
+backend/celerybeat.pid
