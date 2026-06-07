@@ -9,7 +9,7 @@ export interface PaginatedShipments {
 }
 
 export const shipmentsApi = {
-  list: (params?: { skip?: number; limit?: number; search?: string; stage?: string; my_queue?: boolean; missing_date?: boolean }) =>
+  list: (params?: { skip?: number; limit?: number; search?: string; stage?: string; my_queue?: boolean; missing_date?: boolean; amls_search?: string; missing_amls?: boolean }) =>
     api.get<PaginatedShipments>('/shipments', { params }),
 
   get: (id: string) => api.get<Shipment>(`/shipments/${id}`),
@@ -138,6 +138,18 @@ export const shipmentsApi = {
     api.post<Shipment>(`/shipments/${shipmentId}/containers/${containerId}/mark-arrived`, { arrived_at: arrivedAt ?? null }),
 
   delete: (id: string) => api.delete(`/shipments/${id}`),
+
+  exportContainerBilling: (id: string, params?: { search?: string; from_date?: string; to_date?: string }) =>
+    api.get(`/shipments/${id}/container-billing-export`, { params, responseType: 'blob' }),
+
+  containerViewExport: (params?: { search?: string; from_date?: string; to_date?: string; status?: string; historical?: boolean }) =>
+    api.get('/shipments/container-view-export', { params, responseType: 'blob' }),
+
+  blExport: (params?: { search?: string; stage?: string; my_queue?: boolean; missing_date?: boolean; amls_search?: string; missing_amls?: boolean }) =>
+    api.get('/shipments/bl-export', { params, responseType: 'blob' }),
+
+  setAmlsJob: (id: string, amls_job_number: string | null) =>
+    api.patch(`/shipments/${id}/amls-job`, { amls_job_number }),
 
   importTemplate: () =>
     api.get('/shipments/import-template', { responseType: 'blob' }),

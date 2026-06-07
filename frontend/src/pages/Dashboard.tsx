@@ -5,9 +5,10 @@ import { api } from '@/lib/api'
 import { formatDate, formatDateTime } from '@/lib/dates'
 import { STAGE_LABELS, ENTITY_LABELS, HOLD_REASON_LABELS, TASK_TYPE_LABELS } from '@/types'
 import type { ShipmentStage, ExternalEntity, HoldReason, TaskType } from '@/types'
-import { AlertTriangle, CheckCircle, Clock, Package, TrendingUp, ArrowRight, Minus, ChevronDown, Layers } from 'lucide-react'
+import { AlertTriangle, CheckCircle, Clock, Package, TrendingUp, ArrowRight, Minus, ChevronDown, Layers, Sparkles, Loader } from 'lucide-react'
 import { useSortable } from '@/lib/sort'
 import { SortableHeader } from '@/components/SortableHeader'
+import { useAuth } from '@/hooks/useAuth'
 import clsx from 'clsx'
 
 const STAGE_COLORS: Record<string, string> = {
@@ -118,6 +119,25 @@ export function Dashboard() {
   const [docStatusOpen, setDocStatusOpen] = useState(false)
   const [holdsOpen, setHoldsOpen] = useState(true)
   const [volumeOpen, setVolumeOpen] = useState(true)
+  const [aiSummary, setAiSummary] = useState<string | null>(null)
+  const [aiLoading, setAiLoading] = useState(false)
+
+  const { user } = useAuth()
+  const canUseAi = user?.team === 'MANAGEMENT' || user?.team === 'CUSTOMER' || user?.is_admin
+
+  async function fetchAiSummary() {
+    if (aiLoading) return
+    setAiLoading(true)
+    setAiSummary(null)
+    try {
+      const { data } = await api.post('/analytics/ai-summary')
+      setAiSummary(data.summary)
+    } catch {
+      setAiSummary('Unable to generate summary — please try again.')
+    } finally {
+      setAiLoading(false)
+    }
+  }
 
   const { data, isLoading } = useQuery({
     queryKey: ['dashboard'],
@@ -177,7 +197,7 @@ export function Dashboard() {
 
   if (isLoading) return (
     <div className="space-y-6 animate-pulse">
-      <div className="grid grid-cols-4 gap-4">{[...Array(4)].map((_, i) => <div key={i} className="h-24 bg-gray-100 dark:bg-gray-800 rounded-xl" />)}</div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">{[...Array(4)].map((_, i) => <div key={i} className="h-24 bg-gray-100 dark:bg-gray-800 rounded-xl" />)}</div>
       <div className="h-48 bg-gray-100 dark:bg-gray-800 rounded-xl" />
       <div className="h-64 bg-gray-100 dark:bg-gray-800 rounded-xl" />
     </div>
@@ -247,6 +267,30 @@ export function Dashboard() {
         )
       })()}
 
+      {/* ── AI Summary bar ── */}
+      {canUseAi && (
+        <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-xl px-5 py-4">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-2 shrink-0">
+              <Sparkles size={16} className="text-purple-500" />
+              <span className="text-sm font-semibold text-gray-800 dark:text-gray-100">AI Summary</span>
+            </div>
+            {aiSummary ? (
+              <p className="text-sm text-gray-600 dark:text-gray-300 flex-1">{aiSummary}</p>
+            ) : (
+              <p className="text-sm text-gray-400 dark:text-gray-500 flex-1 italic">Click to generate a plain-English summary of the active pipeline.</p>
+            )}
+            <button
+              onClick={fetchAiSummary}
+              disabled={aiLoading}
+              className="shrink-0 text-xs bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5"
+            >
+              {aiLoading ? <><Loader size={12} className="animate-spin" /> Generating…</> : aiSummary ? 'Refresh' : 'Generate'}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* ── Container Status widget ── */}
       {container_status_counts && Object.keys(container_status_counts).length > 0 && (
         <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-xl px-5 py-4">
@@ -285,9 +329,9 @@ export function Dashboard() {
 
         {/* Column headers */}
         <div className="flex items-center gap-3 mb-2 pb-2 border-b dark:border-gray-700">
-          <span className="text-xs font-medium text-gray-400 dark:text-gray-500 w-48 shrink-0 uppercase tracking-wide">Stage</span>
+          <span className="text-xs font-medium text-gray-400 dark:text-gray-500 w-28 sm:w-48 shrink-0 uppercase tracking-wide">Stage</span>
           <span className="flex-1" />
-          <span className="text-xs font-medium text-gray-400 dark:text-gray-500 shrink-0" style={{ minWidth: '9rem', textAlign: 'right' }}>Count</span>
+          <span className="text-xs font-medium text-gray-400 dark:text-gray-500 shrink-0 w-20 sm:w-36 text-right">Count</span>
         </div>
 
         <div className="space-y-1">
@@ -301,13 +345,13 @@ export function Dashboard() {
                   const pct = Math.round((inProgressCount / totalInPipeline) * 100)
                   return (
                     <div className="flex items-center gap-3 py-1.5">
-                      <span className="text-sm font-medium text-blue-700 dark:text-blue-400 w-48 shrink-0">
+                      <span className="text-sm font-medium text-blue-700 dark:text-blue-400 w-28 sm:w-48 shrink-0">
                         In Progress
                       </span>
                       <div className="flex-1 bg-gray-100 dark:bg-gray-700 rounded-full h-2 overflow-hidden">
                         <div className="h-full bg-blue-400 dark:bg-blue-500 rounded-full transition-all" style={{ width: `${pct}%` }} />
                       </div>
-                      <span className="text-sm font-semibold text-blue-700 dark:text-blue-400 shrink-0 text-right" style={{ minWidth: '9rem' }}>
+                      <span className="text-sm font-semibold text-blue-700 dark:text-blue-400 shrink-0 text-right w-20 sm:w-36">
                         <span className="block">{inProgressCount} {inProgressCount === 1 ? 'shipment' : 'shipments'}</span>
                         {inProgressContainers > 0 && (
                           <span className="block text-xs font-normal opacity-60 mt-0.5">{inProgressContainers} containers</span>
@@ -333,7 +377,7 @@ export function Dashboard() {
                   const totalPct       = completedPct + unassignedPct + activePct + holdPct
                   return (
                     <div key={taskType} className="flex items-center gap-3 py-1 pl-4 border-l-2 border-blue-100 dark:border-blue-900 ml-3">
-                      <span className="text-sm text-gray-500 dark:text-gray-400 w-44 shrink-0">
+                      <span className="text-sm text-gray-500 dark:text-gray-400 w-24 sm:w-44 shrink-0">
                         {TASK_LABELS[taskType] || taskType}
                       </span>
                       <div className="flex-1 bg-gray-100 dark:bg-gray-700 rounded-full h-1.5 overflow-hidden">
@@ -346,7 +390,7 @@ export function Dashboard() {
                           </div>
                         )}
                       </div>
-                      <div className="flex items-center gap-1.5 shrink-0 justify-end flex-wrap" style={{ minWidth: '9rem' }}>
+                      <div className="flex items-center gap-1.5 shrink-0 justify-end flex-wrap w-20 sm:w-36">
                         {completed > 0 && (
                           <span className="text-xs bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 px-1.5 py-0.5 rounded-full font-medium">
                             ✓ {completed}
@@ -380,7 +424,7 @@ export function Dashboard() {
                   const isEmpty = count === 0
                   return (
                     <div className="flex items-center gap-3 py-1.5 mt-1">
-                      <span className={clsx('text-sm w-48 shrink-0', isEmpty ? 'text-gray-400 dark:text-gray-600' : 'text-gray-700 dark:text-gray-300 font-medium')}>
+                      <span className={clsx('text-sm w-28 sm:w-48 shrink-0', isEmpty ? 'text-gray-400 dark:text-gray-600' : 'text-gray-700 dark:text-gray-300 font-medium')}>
                         {STAGE_LABELS['TRANSPORT']}
                       </span>
                       <div className="flex-1">
@@ -390,7 +434,7 @@ export function Dashboard() {
                           </div>
                         )}
                       </div>
-                      <span className={clsx('text-sm shrink-0 text-right', isEmpty ? 'text-gray-400 dark:text-gray-600' : 'font-semibold text-gray-800 dark:text-gray-100')} style={{ minWidth: '9rem' }}>
+                      <span className={clsx('text-sm shrink-0 text-right w-20 sm:w-36', isEmpty ? 'text-gray-400 dark:text-gray-600' : 'font-semibold text-gray-800 dark:text-gray-100')}>
                         {isEmpty ? '—' : (
                           <>
                             <span className="block">{count}</span>
@@ -413,7 +457,7 @@ export function Dashboard() {
             const isEmpty = count === 0
             return (
               <div key={stage} className="flex items-center gap-3 py-1.5">
-                <span className={clsx('text-sm w-48 shrink-0', isEmpty ? 'text-gray-400 dark:text-gray-600' : 'text-gray-700 dark:text-gray-300 font-medium')}>
+                <span className={clsx('text-sm w-28 sm:w-48 shrink-0', isEmpty ? 'text-gray-400 dark:text-gray-600' : 'text-gray-700 dark:text-gray-300 font-medium')}>
                   {PIPELINE_LABELS[stage] ?? STAGE_LABELS[stage]}
                 </span>
                 <div className="flex-1">
@@ -423,7 +467,7 @@ export function Dashboard() {
                     </div>
                   )}
                 </div>
-                <div className="flex items-center gap-2 shrink-0 justify-end" style={{ minWidth: '9rem' }}>
+                <div className="flex items-center gap-2 shrink-0 justify-end w-20 sm:w-36">
                   <span className={clsx('text-sm text-right', isEmpty ? 'text-gray-400 dark:text-gray-600' : 'font-semibold text-gray-800 dark:text-gray-100')}>
                     {isEmpty ? '—' : (
                       <>
@@ -494,7 +538,7 @@ export function Dashboard() {
                 <Link
                   key={s.shipment_id}
                   to={`/shipments/${s.shipment_id}`}
-                  className="flex items-center justify-between px-5 py-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors gap-4"
+                  className="flex flex-wrap items-center justify-between px-5 py-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors gap-2"
                 >
                   <div className="min-w-0">
                     <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">BL: {s.bl_number}</p>
@@ -502,11 +546,11 @@ export function Dashboard() {
                       <p className="text-xs text-gray-400 mt-0.5">Pull-out {formatDate(s.pull_out_date)}</p>
                     )}
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex items-center gap-1.5 flex-wrap">
                     <DocStatusPill label="Permit" status={s.permit} />
                     <DocStatusPill label="DO" status={s.do} />
                     <DocStatusPill label="Bayan" status={s.bayan} />
-                    <ArrowRight size={14} className="text-gray-300 ml-1" />
+                    <ArrowRight size={14} className="text-gray-300" />
                   </div>
                 </Link>
               ))}
@@ -551,14 +595,14 @@ export function Dashboard() {
           <p className="text-sm text-gray-400 py-10 text-center">No active holds — all shipments are moving</p>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-sm min-w-[700px]">
+            <table className="w-full text-sm">
               <thead className="bg-gray-50 dark:bg-gray-700/50 border-b dark:border-gray-700">
                 <tr>
                   <SortableHeader label="B/L Number"   column="bl"         sort={holdSort} onSort={holdToggle} className="px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
                   <SortableHeader label="Held By"      column="held_by"    sort={holdSort} onSort={holdToggle} className="px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
-                  <SortableHeader label="Specific Party" column="party"    sort={holdSort} onSort={holdToggle} className="px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
-                  <SortableHeader label="Containers"   column="containers" sort={holdSort} onSort={holdToggle} className="px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
-                  <SortableHeader label="Hold Reason"  column="reason"     sort={holdSort} onSort={holdToggle} className="px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
+                  <SortableHeader label="Specific Party" column="party"    sort={holdSort} onSort={holdToggle} className="hidden sm:table-cell px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
+                  <SortableHeader label="Containers"   column="containers" sort={holdSort} onSort={holdToggle} className="hidden sm:table-cell px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
+                  <SortableHeader label="Hold Reason"  column="reason"     sort={holdSort} onSort={holdToggle} className="hidden md:table-cell px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
                   <SortableHeader label="Time on Hold" column="time"       sort={holdSort} onSort={holdToggle} className="px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
                   <th />
                 </tr>
@@ -580,15 +624,15 @@ export function Dashboard() {
                           {ENTITY_LABELS[hold.hold_entity as ExternalEntity] || hold.hold_entity}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-sm text-gray-700 dark:text-gray-200 font-medium">
+                      <td className="hidden sm:table-cell px-4 py-3 text-sm text-gray-700 dark:text-gray-200 font-medium">
                         {specificParty}
                       </td>
-                      <td className="px-4 py-3 text-center">
+                      <td className="hidden sm:table-cell px-4 py-3 text-center">
                         <span className="text-sm font-semibold text-gray-800 dark:text-gray-100">
                           {hold.container_count ?? '—'}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-xs text-gray-600 dark:text-gray-300 max-w-[200px]">
+                      <td className="hidden md:table-cell px-4 py-3 text-xs text-gray-600 dark:text-gray-300 max-w-[200px]">
                         {hold.hold_reason ? HOLD_REASON_LABELS[hold.hold_reason as HoldReason] : '—'}
                         {hold.hold_remark && (
                           <p className="text-gray-400 dark:text-gray-500 italic truncate mt-0.5">"{hold.hold_remark}"</p>
@@ -686,11 +730,11 @@ export function Dashboard() {
             <thead className="bg-gray-50 dark:bg-gray-700/50 border-b dark:border-gray-700">
               <tr>
                     <SortableHeader label="BL Number"    column="bl"         sort={shipSort} onSort={shipToggle} className="px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
-                  <SortableHeader label="Invoice"      column="invoice"    sort={shipSort} onSort={shipToggle} className="px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
+                  <SortableHeader label="Invoice"      column="invoice"    sort={shipSort} onSort={shipToggle} className="hidden sm:table-cell px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
                   <SortableHeader label="Stage"        column="stage"      sort={shipSort} onSort={shipToggle} className="px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
-                  <SortableHeader label="Containers"   column="containers" sort={shipSort} onSort={shipToggle} className="px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
-                  <SortableHeader label="Pull-out Date" column="pull_out"  sort={shipSort} onSort={shipToggle} className="px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
-                  <SortableHeader label="Days Active"  column="days"       sort={shipSort} onSort={shipToggle} className="px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
+                  <SortableHeader label="Containers"   column="containers" sort={shipSort} onSort={shipToggle} className="hidden sm:table-cell px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
+                  <SortableHeader label="Pull-out Date" column="pull_out"  sort={shipSort} onSort={shipToggle} className="hidden sm:table-cell px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
+                  <SortableHeader label="Days Active"  column="days"       sort={shipSort} onSort={shipToggle} className="hidden sm:table-cell px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
                   <SortableHeader label="Status"       column="status"     sort={shipSort} onSort={shipToggle} className="px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
                   <th />
               </tr>
@@ -705,13 +749,13 @@ export function Dashboard() {
                 return (
                   <tr key={s.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
                     <td className="px-4 py-3 font-semibold text-gray-900 dark:text-white">{s.bl_number}</td>
-                    <td className="px-4 py-3 text-gray-500 dark:text-gray-400">{s.invoice_number}</td>
+                    <td className="hidden sm:table-cell px-4 py-3 text-gray-500 dark:text-gray-400">{s.invoice_number}</td>
                     <td className="px-4 py-3">
                       <span className={clsx('text-xs font-medium px-2.5 py-1 rounded-full', STAGE_COLORS[s.current_stage] || 'bg-gray-100 text-gray-700')}>
                         {STAGE_LABELS[s.current_stage as ShipmentStage]}
                       </span>
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="hidden sm:table-cell px-4 py-3">
                       {(hasDeclared || s.actual_containers > 0) ? (
                         <span className={clsx(
                           'text-xs font-semibold px-2 py-0.5 rounded-full tabular-nums',
@@ -725,8 +769,8 @@ export function Dashboard() {
                         <span className="text-gray-400 dark:text-gray-600 text-sm">—</span>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-gray-500 dark:text-gray-400">{formatDate(s.pull_out_date)}</td>
-                    <td className="px-4 py-3">
+                    <td className="hidden sm:table-cell px-4 py-3 text-gray-500 dark:text-gray-400">{formatDate(s.pull_out_date)}</td>
+                    <td className="hidden sm:table-cell px-4 py-3">
                       <span className={clsx('font-medium', s.days_active > 14 ? 'text-red-600' : s.days_active > 7 ? 'text-amber-600' : 'text-gray-700')}>
                         {s.days_active}d
                       </span>

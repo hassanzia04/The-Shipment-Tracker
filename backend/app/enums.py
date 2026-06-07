@@ -105,6 +105,8 @@ class DocumentType(str, Enum):
     HALAL_CERT = "HALAL_CERT"
     BL = "BL"
     HEALTH_CERT = "HEALTH_CERT"
+    # Customer optional document
+    MISCELLANEOUS = "MISCELLANEOUS"
     # Process documents (uploaded during workflow)
     PERMIT = "PERMIT"
     BAYAN = "BAYAN"

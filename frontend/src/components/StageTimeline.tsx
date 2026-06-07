@@ -62,7 +62,7 @@ function getLabel(event: ShipmentEvent, taskName: string | undefined): string {
   switch (event.event_type) {
     case 'SHIPMENT_CREATED':       return 'Shipment created'
     case 'DOCUMENTS_SUBMITTED':    return 'Documents submitted for review'
-    case 'DOCUMENTS_REJECTED':     return 'Documents rejected — returned to customer'
+    case 'DOCUMENTS_REJECTED':     return 'Documents sent back — returned to customer'
     case 'DOCUMENTS_APPROVED':     return 'Documents approved — tasks opened'
     case 'TASK_CREATED':           return t ? `${t} task opened` : 'Task opened'
     case 'TASK_ASSIGNED':          return t ? `${t} task assigned to PRO member` : 'Task assigned'

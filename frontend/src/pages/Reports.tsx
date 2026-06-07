@@ -558,9 +558,9 @@ function OperationalReports({ data, fromLabel, toLabel }: { data: any; fromLabel
           accent="bg-emerald-50 dark:bg-emerald-900/30"
         />
         <KpiCard
-          label="Doc Rejection Rate"
+          label="Doc Send-back Rate"
           value={`${rejPct}%`}
-          sub={`${data.rejection?.rejected || 0} rejected of ${rejTotal}`}
+          sub={`${data.rejection?.rejected || 0} sent back of ${rejTotal}`}
           icon={<AlertTriangle size={16} className="text-red-500" />}
           accent="bg-red-50 dark:bg-red-900/30"
         />

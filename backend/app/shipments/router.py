@@ -26,12 +26,15 @@ async def list_shipments(
     stage: Optional[ShipmentStage] = Query(None),
     my_queue: bool = Query(False),
     missing_date: bool = Query(False),
+    amls_search: Optional[str] = Query(None),
+    missing_amls: bool = Query(False),
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ):
     items, total = await service.list_shipments(
         db, actor, skip=skip, limit=limit, search=search or None, stage=stage,
         my_queue=my_queue, missing_date=missing_date,
+        amls_search=amls_search or None, missing_amls=missing_amls,
     )
     return {"items": items, "total": total, "skip": skip, "limit": limit}
 
@@ -65,7 +68,7 @@ async def bulk_ccro_upload(
     return await service.bulk_upload_ccros(db, shipment_id, actor, files)
 
 
-# Must be defined BEFORE /{shipment_id} so FastAPI doesn't try to parse "container-view" as a UUID
+# Must be defined BEFORE /{shipment_id} so FastAPI doesn't try to parse the path segment as a UUID
 @router.get("/container-view", response_model=list[schemas.ContainerViewItem])
 async def container_view(
     historical: bool = Query(False),
@@ -77,6 +80,43 @@ async def container_view(
     return await service.get_container_view(db, actor, historical=historical, skip=skip, limit=limit)
 
 
+@router.get("/container-view-export")
+async def container_view_export(
+    search: Optional[str] = Query(None),
+    from_date: Optional[str] = Query(None),
+    to_date: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    historical: bool = Query(False),
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+):
+    content = await service.export_container_view(db, actor, search=search, from_date=from_date, to_date=to_date, status=status, historical=historical)
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="containers.xlsx"'},
+    )
+
+
+@router.get("/bl-export")
+async def bl_export(
+    search: Optional[str] = Query(None),
+    stage: Optional[str] = Query(None),
+    my_queue: bool = Query(False),
+    missing_date: bool = Query(False),
+    amls_search: Optional[str] = Query(None),
+    missing_amls: bool = Query(False),
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+):
+    content = await service.export_shipments_list(db, actor, search=search, stage=stage, my_queue=my_queue, missing_date=missing_date, amls_search=amls_search or None, missing_amls=missing_amls)
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="shipments.xlsx"'},
+    )
+
+
 @router.get("/{shipment_id}", response_model=schemas.ShipmentOut)
 async def get_shipment(shipment_id: uuid.UUID, db: AsyncSession = Depends(get_db), actor: User = Depends(get_current_user)):
     shipment = await service.get_shipment(db, shipment_id, actor)
@@ -86,6 +126,11 @@ async def get_shipment(shipment_id: uuid.UUID, db: AsyncSession = Depends(get_db
 @router.patch("/{shipment_id}", response_model=schemas.ShipmentOut)
 async def update_shipment(shipment_id: uuid.UUID, body: schemas.ShipmentUpdate, db: AsyncSession = Depends(get_db), actor: User = Depends(get_current_user)):
     return await service.update_shipment(db, shipment_id, actor, **body.model_dump(exclude_none=True))
+
+
+@router.patch("/{shipment_id}/amls-job", response_model=schemas.ShipmentOut)
+async def set_amls_job(shipment_id: uuid.UUID, body: schemas.AmlsJobRequest, db: AsyncSession = Depends(get_db), actor: User = Depends(get_current_user)):
+    return schemas.ShipmentOut.from_shipment(await service.set_amls_job_number(db, shipment_id, actor, body.amls_job_number))
 
 
 @router.delete("/{shipment_id}", status_code=204)
@@ -236,3 +281,20 @@ async def mark_arrived(shipment_id: uuid.UUID, container_id: uuid.UUID, body: sc
 @router.post("/{shipment_id}/mark-offloaded", response_model=schemas.ShipmentOut)
 async def mark_offloaded(shipment_id: uuid.UUID, body: schemas.MarkOffloadedRequest, db: AsyncSession = Depends(get_db), actor: User = Depends(get_current_user)):
     return await service.mark_offloaded(db, shipment_id, actor, body.container_id)
+
+
+@router.get("/{shipment_id}/container-billing-export")
+async def container_billing_export(
+    shipment_id: uuid.UUID,
+    search: Optional[str] = Query(None),
+    from_date: Optional[str] = Query(None),
+    to_date: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+):
+    content = await service.export_container_billing(db, shipment_id, actor, search=search, from_date=from_date, to_date=to_date)
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="containers_{shipment_id}.xlsx"'},
+    )

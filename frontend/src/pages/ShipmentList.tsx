@@ -11,7 +11,7 @@ import {
   Plus, Search, AlertTriangle, Clock, Table2,
   ChevronLeft, ChevronRight, Save, X, Calendar,
   ChevronDown, ChevronUp, UserCheck, ListTodo, Box,
-  CheckCircle, DollarSign, Pencil,
+  CheckCircle, DollarSign, Pencil, FileSpreadsheet,
 } from 'lucide-react'
 import { STAGE_LABELS, TASK_TYPE_LABELS } from '@/types'
 import type { ShipmentListItem, ShipmentStage, TaskType, TaskStatus } from '@/types'
@@ -306,11 +306,29 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
 }) {
   const qc = useQueryClient()
   const offset = (page - 1) * PAGE_SIZE
-  const colSpan = isFFD ? 9 : 8
+  const colSpan = isFFD ? 10 : 9
 
   const [editingDateId, setEditingDateId] = useState<string | null>(null)
   const [dateValue, setDateValue] = useState('')
   const [savingDateId, setSavingDateId] = useState<string | null>(null)
+
+  const [editingAmlsId, setEditingAmlsId] = useState<string | null>(null)
+  const [amlsValue, setAmlsValue] = useState('')
+  const [savingAmlsId, setSavingAmlsId] = useState<string | null>(null)
+
+  async function saveAmlsJob(shipmentId: string) {
+    setSavingAmlsId(shipmentId)
+    try {
+      await shipmentsApi.setAmlsJob(shipmentId, amlsValue.trim() || null)
+      toast.success('AMLS Job# updated')
+      qc.invalidateQueries({ queryKey: ['shipments'] })
+      setEditingAmlsId(null)
+    } catch (e: any) {
+      toast.error(e.response?.data?.detail || 'Failed to update AMLS Job#')
+    } finally {
+      setSavingAmlsId(null)
+    }
+  }
 
   async function savePullOutDate(shipmentId: string) {
     if (!dateValue) return
@@ -352,16 +370,17 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
   return (
     <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-xl overflow-hidden">
       <div className="overflow-x-auto">
-        <table className="w-full text-sm min-w-[520px] sm:min-w-[700px]">
+        <table className="w-full text-sm">
           <thead className="bg-gray-50 dark:bg-gray-700 border-b dark:border-gray-600">
             <tr>
-              <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">#</th>
-              <SortableHeader label="BL Number"    column="bl"       sort={sort} onSort={toggle} className="px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
-              <SortableHeader label="Invoice"      column="invoice"  sort={sort} onSort={toggle} className="hidden sm:table-cell px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
-              <SortableHeader label={isPRO ? 'My Task' : 'Stage'} column="stage" sort={sort} onSort={toggle} className="px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
-              <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap">Progress</th>
-              <SortableHeader label="Pull-out Date" column="pull_out" sort={sort} onSort={toggle} className="hidden sm:table-cell px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
-              <SortableHeader label="Time Left"    column="time"     sort={sort} onSort={toggle} className="px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
+              <th className="text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">#</th>
+              <SortableHeader label="BL Number"    column="bl"       sort={sort} onSort={toggle} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
+              <SortableHeader label="Invoice"      column="invoice"  sort={sort} onSort={toggle} className="hidden md:table-cell px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
+              <SortableHeader label={isPRO ? 'My Task' : 'Stage'} column="stage" sort={sort} onSort={toggle} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
+              <th className="text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap">Progress</th>
+              <SortableHeader label="Pull-out Date" column="pull_out" sort={sort} onSort={toggle} className="hidden md:table-cell px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
+              <SortableHeader label="Time Left"    column="time"     sort={sort} onSort={toggle} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
+              <th className="hidden lg:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap">AMLS Job#</th>
               <th />
               {isFFD && <th />}
             </tr>
@@ -389,16 +408,16 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                       isExpanded && '!bg-blue-50 dark:!bg-blue-900/10',
                     )}
                   >
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-3">
                       <div className="flex items-center gap-1.5">
                         {isOverdue && <AlertTriangle size={14} className="text-red-500" />}
                         {!isOverdue && isUrgent && <Clock size={14} className="text-amber-500" />}
                         <span className="text-xs font-bold text-gray-400 dark:text-gray-500">#{offset + idx + 1}</span>
                       </div>
                     </td>
-                    <td className="px-4 py-3 font-semibold text-gray-900 dark:text-white">{s.bl_number}</td>
-                    <td className="hidden sm:table-cell px-4 py-3 text-gray-500 dark:text-gray-400">{s.invoice_number}</td>
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-3 font-semibold text-gray-900 dark:text-white">{s.bl_number}</td>
+                    <td className="hidden md:table-cell px-3 py-3 text-gray-500 dark:text-gray-400">{s.invoice_number}</td>
+                    <td className="px-3 py-3">
                       {isPRO && s.current_stage === 'IN_PROGRESS' ? (
                         <div className="flex flex-col gap-1">
                           {s.permit_status && s.permit_status !== 'COMPLETED' && (
@@ -458,10 +477,10 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                         </span>
                       )}
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-3">
                       <ProgressCell s={s} />
                     </td>
-                    <td className="hidden sm:table-cell px-4 py-3 text-gray-600 dark:text-gray-300">
+                    <td className="hidden md:table-cell px-3 py-3 text-gray-600 dark:text-gray-300">
                       {isCustomer && editingDateId === s.id ? (
                         <div className="flex items-center gap-1">
                           <input
@@ -506,8 +525,57 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                         </div>
                       )}
                     </td>
-                    <td className={clsx('px-4 py-3 text-xs', u.color)}>{u.label}</td>
-                    <td className="px-4 py-3">
+                    <td className={clsx('px-3 py-3 text-xs', u.color)}>{u.label}</td>
+                    <td className="hidden lg:table-cell px-3 py-3">
+                      {isFFD && editingAmlsId === s.id ? (
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="text"
+                            value={amlsValue}
+                            onChange={e => setAmlsValue(e.target.value)}
+                            autoFocus
+                            placeholder="Job#…"
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') saveAmlsJob(s.id)
+                              if (e.key === 'Escape') setEditingAmlsId(null)
+                            }}
+                            className="text-xs border dark:border-gray-600 rounded px-2 py-1 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500 w-24"
+                          />
+                          <button
+                            onClick={() => saveAmlsJob(s.id)}
+                            disabled={savingAmlsId === s.id}
+                            className="p-1 text-green-600 hover:text-green-700 disabled:opacity-40"
+                            title="Save"
+                          >
+                            <CheckCircle size={14} />
+                          </button>
+                          <button
+                            onClick={() => setEditingAmlsId(null)}
+                            disabled={savingAmlsId === s.id}
+                            className="p-1 text-gray-400 hover:text-gray-600 disabled:opacity-40"
+                            title="Cancel"
+                          >
+                            <X size={12} />
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5 group/amls">
+                          <span className="text-xs text-gray-600 dark:text-gray-300">
+                            {s.amls_job_number || <span className="text-gray-400">—</span>}
+                          </span>
+                          {isFFD && (
+                            <button
+                              onClick={() => { setEditingAmlsId(s.id); setAmlsValue(s.amls_job_number ?? '') }}
+                              className="opacity-0 group-hover/amls:opacity-100 transition-opacity p-0.5 text-gray-400 hover:text-blue-600"
+                              title="Edit AMLS Job#"
+                            >
+                              <Pencil size={11} />
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </td>
+                    <td className="px-3 py-3">
                       <div className="flex items-center gap-2">
                         {showPaymentBtn && (
                           <button
@@ -523,7 +591,7 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                       </div>
                     </td>
                     {isFFD && (
-                      <td className="px-4 py-3">
+                      <td className="px-3 py-3">
                         {showAssignBtn && (
                           <button
                             onClick={() => onExpand?.(isExpanded ? null : s.id)}
@@ -589,6 +657,9 @@ export function ShipmentList() {
     isTransport || isDC ? 'containers' : 'priority'
   )
   const [missingDate, setMissingDate] = useState(false)
+  const [amlsSearch, setAmlsSearch] = useState('')
+  const [debouncedAmlsSearch, setDebouncedAmlsSearch] = useState('')
+  const [missingAmls, setMissingAmls] = useState(false)
   const [pendingDates, setPendingDates] = useState<Record<string, string>>({})
   const [savingDates, setSavingDates] = useState(false)
   const [expandedId, setExpandedId] = useState<string | null>(null)
@@ -630,18 +701,44 @@ export function ShipmentList() {
     setSavingDates(false)
   }
 
+  async function handleBlExport() {
+    try {
+      const { data } = await shipmentsApi.blExport({
+        search: debouncedSearch || undefined,
+        stage: isMyQueue ? undefined : (stageFilter || undefined),
+        my_queue: isMyQueue || undefined,
+        missing_date: missingDate || undefined,
+        amls_search: debouncedAmlsSearch || undefined,
+        missing_amls: missingAmls || undefined,
+      })
+      const url = URL.createObjectURL(new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'shipments.xlsx'
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch {
+      toast.error('Failed to export')
+    }
+  }
+
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search), 300)
     return () => clearTimeout(t)
   }, [search])
 
-  useEffect(() => { setPage(1) }, [debouncedSearch, stageFilter, missingDate])
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedAmlsSearch(amlsSearch), 300)
+    return () => clearTimeout(t)
+  }, [amlsSearch])
+
+  useEffect(() => { setPage(1) }, [debouncedSearch, stageFilter, missingDate, debouncedAmlsSearch, missingAmls])
 
   const skip = (page - 1) * PAGE_SIZE
   const isMyQueue = stageFilter === 'my_queue'
 
   const { data, isLoading } = useQuery({
-    queryKey: ['shipments', skip, debouncedSearch, stageFilter, missingDate],
+    queryKey: ['shipments', skip, debouncedSearch, stageFilter, missingDate, debouncedAmlsSearch, missingAmls],
     queryFn: () => shipmentsApi.list({
       skip,
       limit: PAGE_SIZE,
@@ -649,6 +746,8 @@ export function ShipmentList() {
       stage: isMyQueue ? undefined : (stageFilter || undefined),
       my_queue: isMyQueue || undefined,
       missing_date: missingDate || undefined,
+      amls_search: debouncedAmlsSearch || undefined,
+      missing_amls: missingAmls || undefined,
     }).then(r => r.data),
     placeholderData: prev => prev,
   })
@@ -697,8 +796,8 @@ export function ShipmentList() {
         </div>
       )}
 
-      {/* Controls */}
-      <div className="flex flex-wrap gap-2 mb-4">
+      {/* Controls — row 1: search + stage + view toggle */}
+      <div className="flex flex-wrap gap-2 mb-2">
         <div className="relative flex-1 min-w-[160px]">
           <Search size={14} className="absolute left-3 top-2.5 text-gray-400" />
           <input
@@ -709,8 +808,8 @@ export function ShipmentList() {
           />
         </div>
 
-        {/* Stage dropdown — hidden for PRO (they use chips above) */}
-        {!isPRO && (
+        {/* Stage dropdown — only in B/L table view */}
+        {!isPRO && view !== 'containers' && (
           <select
             value={stageFilter}
             onChange={e => setStageFilter(e.target.value as ShipmentStage | '' | 'my_queue')}
@@ -726,21 +825,8 @@ export function ShipmentList() {
           </select>
         )}
 
-        <button
-          onClick={() => setMissingDate(v => !v)}
-          className={clsx(
-            'flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border transition-colors whitespace-nowrap',
-            missingDate
-              ? 'bg-amber-500 text-white border-amber-500'
-              : 'border-gray-300 dark:border-gray-600 text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700'
-          )}
-        >
-          <Calendar size={14} />
-          <span className="hidden sm:inline">No date</span>
-        </button>
-
         {hasContainerView && (
-          <div className="flex border dark:border-gray-600 rounded-lg overflow-hidden">
+          <div className="flex border dark:border-gray-600 rounded-lg overflow-hidden ml-auto">
             <button
               onClick={() => setView('containers')}
               className={clsx('px-3 py-2 flex items-center gap-1.5 text-sm transition-colors',
@@ -759,9 +845,57 @@ export function ShipmentList() {
         )}
       </div>
 
+      {/* Controls — row 2: filters + export (B/L table only) */}
+      {view !== 'containers' && (
+        <div className="flex flex-wrap gap-2 mb-4">
+          <button
+            onClick={() => setMissingDate(v => !v)}
+            className={clsx(
+              'flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border transition-colors whitespace-nowrap',
+              missingDate
+                ? 'bg-amber-500 text-white border-amber-500'
+                : 'border-gray-300 dark:border-gray-600 text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700'
+            )}
+          >
+            <Calendar size={14} />
+            No date
+          </button>
+
+          <div className="relative">
+            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+            <input
+              value={amlsSearch}
+              onChange={e => setAmlsSearch(e.target.value)}
+              placeholder="AMLS Job#…"
+              className="w-36 border dark:border-gray-600 dark:bg-gray-800 dark:text-white rounded-lg pl-7 pr-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+
+          <button
+            onClick={() => setMissingAmls(v => !v)}
+            className={clsx(
+              'flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border transition-colors whitespace-nowrap',
+              missingAmls
+                ? 'bg-rose-500 text-white border-rose-500'
+                : 'border-gray-300 dark:border-gray-600 text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700'
+            )}
+          >
+            No AMLS
+          </button>
+
+          <button
+            onClick={handleBlExport}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-green-300 dark:border-green-700 text-green-700 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors whitespace-nowrap ml-auto"
+          >
+            <FileSpreadsheet size={14} />
+            Export to Excel
+          </button>
+        </div>
+      )}
+
       {/* Legend for B/L table view */}
       {view !== 'containers' && (
-        <div className="flex items-center gap-4 mb-3 text-xs text-gray-500 dark:text-gray-400 flex-wrap">
+        <div className="flex items-center gap-4 mb-3 mt-1 text-xs text-gray-500 dark:text-gray-400 flex-wrap">
           <span className="flex items-center gap-1"><AlertTriangle size={12} className="text-red-500" /> Overdue</span>
           <span className="flex items-center gap-1"><Clock size={12} className="text-amber-500" /> Within 3 days</span>
           <span>Sorted by earliest pull-out date</span>

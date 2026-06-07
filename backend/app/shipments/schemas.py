@@ -32,6 +32,10 @@ class ShipmentUpdate(BaseModel):
     offloading_point_id: Optional[UUID] = None
 
 
+class AmlsJobRequest(BaseModel):
+    amls_job_number: Optional[str] = None
+
+
 class TaskOut(BaseModel):
     model_config = {"from_attributes": True}
     id: UUID
@@ -89,6 +93,8 @@ class ContainerOut(BaseModel):
     offloading_point_id: Optional[UUID]
     status: ContainerStatus
     revalidation_remark: Optional[str] = None
+    actual_pull_out_date: Optional[datetime] = None
+    offloaded_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 
@@ -111,6 +117,7 @@ class ShipmentOut(BaseModel):
     completed_at: Optional[datetime]
     do_validity_date: Optional[date] = None
     container_count: Optional[int] = None
+    amls_job_number: Optional[str] = None
     offloading_point_name: Optional[str] = None
     product_type_name: Optional[str] = None
     loading_port_name: Optional[str] = None
@@ -149,6 +156,7 @@ class ShipmentListOut(BaseModel):
     do_revalidation_count: int = 0
     ccro_returned_count: int = 0
     dc_health_cert_missing: bool = False
+    amls_job_number: Optional[str] = None
 
 
 class PaginatedShipments(BaseModel):
@@ -266,6 +274,9 @@ class ContainerViewItem(BaseModel):
     revalidation_remark: Optional[str] = None
     dn_document_id: Optional[UUID] = None
     dc_health_cert_uploaded: bool = False
+    actual_pull_out_date: Optional[datetime] = None
+    offloaded_at: Optional[datetime] = None
+    pull_out_date: Optional[date] = None
 
 
 class DoRevalidationRequest(BaseModel):

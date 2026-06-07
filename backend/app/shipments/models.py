@@ -33,6 +33,7 @@ class Shipment(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     do_validity_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     container_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    amls_job_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     tasks: Mapped[list["ShipmentTask"]] = relationship("ShipmentTask", back_populates="shipment", order_by="ShipmentTask.created_at")
     events: Mapped[list["ShipmentEvent"]] = relationship("ShipmentEvent", back_populates="shipment", order_by="ShipmentEvent.created_at")
@@ -212,6 +213,8 @@ class Container(Base):
         SAEnum(ContainerStatus, name="container_status_enum"), default=ContainerStatus.PENDING, nullable=False
     )
     arrived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    actual_pull_out_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    offloaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revalidation_remark: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)

@@ -11,7 +11,7 @@ import { formatDate, formatDateTime } from '@/lib/dates'
 import type { ContainerViewItem, Truck } from '@/types'
 import {
   AlertTriangle, CheckCircle, Clock, Download, Truck as TruckIcon,
-  Package, MapPin, Upload, Trash2, Eye,
+  Package, MapPin, Upload, Trash2, Eye, Search, FileSpreadsheet, X,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
@@ -278,7 +278,7 @@ function ContainerRow({ c, team, trucks, onUpdated, historical = false }: {
     <>
       <tr className="hover:bg-gray-50 dark:hover:bg-gray-700/40 transition-colors">
         {/* B/L */}
-        <td className="px-4 py-3">
+        <td className="px-3 py-3">
           <p className="text-sm font-semibold text-gray-900 dark:text-white">{c.bl_number}</p>
           <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
             {c.container_count ? `${c.container_count} containers on B/L` : ''}
@@ -290,7 +290,7 @@ function ContainerRow({ c, team, trucks, onUpdated, historical = false }: {
           )}
         </td>
         {/* Container # */}
-        <td className="px-4 py-3">
+        <td className="px-3 py-3">
           <p className="text-sm font-medium text-gray-800 dark:text-gray-100">{c.container_number}</p>
           <div className="flex items-center gap-1 mt-0.5 flex-wrap">
             <span className={clsx('text-xs px-1.5 py-0.5 rounded font-medium', STATUS_BADGE[c.status])}>
@@ -307,9 +307,9 @@ function ContainerRow({ c, team, trucks, onUpdated, historical = false }: {
           )}
         </td>
         {/* DO Validity */}
-        <td className={clsx('px-4 py-3 text-sm', validity.color)}>{validity.label}</td>
+        <td className={clsx('px-3 py-3 text-sm', validity.color)}>{validity.label}</td>
         {/* Truck / Driver */}
-        <td className="px-4 py-3 text-sm">
+        <td className="px-3 py-3 text-sm">
           {c.plate_number ? (
             <>
               <p className="font-medium text-gray-800 dark:text-gray-100">{c.plate_number}</p>
@@ -320,23 +320,31 @@ function ContainerRow({ c, team, trucks, onUpdated, historical = false }: {
           )}
         </td>
         {/* Offloading Location */}
-        <td className="px-4 py-3 text-sm text-gray-600 dark:text-gray-300">
+        <td className="px-3 py-3 text-sm text-gray-600 dark:text-gray-300">
           {c.offloading_point_name ?? <span className="text-gray-400 italic text-xs">—</span>}
         </td>
         {/* ETA / Arrived */}
-        <td className="px-4 py-3 text-sm">
+        <td className="px-3 py-3 text-sm">
           {c.arrived_at ? (
-            <span className="text-green-600 dark:text-green-400 text-xs font-medium flex items-center gap-1">
-              <CheckCircle size={12} /> Arrived {formatDateTime(c.arrived_at)}
-            </span>
+            <div className="text-green-600 dark:text-green-400 text-xs font-medium">
+              <span className="flex items-center gap-1"><CheckCircle size={12} /> Arrived</span>
+              <span className="text-gray-500 dark:text-gray-400 font-normal">{formatDateTime(c.arrived_at)}</span>
+            </div>
           ) : c.expected_arrival_at ? (
             <span className="text-gray-600 dark:text-gray-300 text-xs">{formatDateTime(c.expected_arrival_at)}</span>
           ) : (
             <span className="text-gray-400 text-xs italic">Not set</span>
           )}
         </td>
+        {/* Offloading Date */}
+        <td className="px-3 py-3 text-sm text-gray-600 dark:text-gray-300">
+          {c.offloaded_at
+            ? <span className="text-green-600 dark:text-green-400 text-xs">{formatDateTime(c.offloaded_at)}</span>
+            : <span className="text-gray-400 text-xs italic">—</span>
+          }
+        </td>
         {/* Actions */}
-        <td className="px-4 py-3">
+        <td className="px-3 py-3">
           <div className="flex items-center gap-1.5 flex-wrap">
             {/* CCRO Download — not shown to DC */}
             {c.ccro_document_id && team !== 'DC' && (
@@ -452,7 +460,7 @@ function ContainerRow({ c, team, trucks, onUpdated, historical = false }: {
       {/* ── Assign truck form ── */}
       {expanded === 'assign' && (
         <tr>
-          <td colSpan={7} className="p-0">
+          <td colSpan={8} className="p-0">
             <div className="px-5 py-3 bg-blue-50 dark:bg-blue-900/10 border-t border-b dark:border-gray-700 space-y-3">
               <p className="text-xs font-semibold text-blue-700 dark:text-blue-400">Assign Truck & Driver</p>
               <div className="flex flex-wrap gap-3">
@@ -480,7 +488,7 @@ function ContainerRow({ c, team, trucks, onUpdated, historical = false }: {
       {/* ── Return to FFD form ── */}
       {expanded === 'return' && (
         <tr>
-          <td colSpan={7} className="p-0">
+          <td colSpan={8} className="p-0">
             <div className="px-5 py-3 bg-orange-50 dark:bg-orange-900/10 border-t border-b dark:border-gray-700 space-y-2">
               <p className="text-xs font-semibold text-orange-700 dark:text-orange-400">Return CCRO to FFD</p>
               <p className="text-xs text-orange-600 dark:text-orange-500">Explain why a truck could not be assigned for this container.</p>
@@ -506,7 +514,7 @@ function ContainerRow({ c, team, trucks, onUpdated, historical = false }: {
       {/* ── Arrival time form ── */}
       {expanded === 'arrived' && (
         <tr>
-          <td colSpan={7} className="p-0">
+          <td colSpan={8} className="p-0">
             <div className="px-5 py-3 bg-purple-50 dark:bg-purple-900/10 border-t border-b dark:border-gray-700 space-y-2">
               <p className="text-xs font-semibold text-purple-700 dark:text-purple-400">
                 {c.arrived_at ? 'Edit Arrival Time' : 'Record Arrival Time'}
@@ -532,7 +540,7 @@ function ContainerRow({ c, team, trucks, onUpdated, historical = false }: {
       {/* ── DO revalidation request form ── */}
       {expanded === 'revalidation' && (
         <tr>
-          <td colSpan={7} className="p-0">
+          <td colSpan={8} className="p-0">
             <div className="px-5 py-3 bg-rose-50 dark:bg-rose-900/10 border-t border-b dark:border-gray-700 space-y-2">
               <p className="text-xs font-semibold text-rose-700 dark:text-rose-400">Request DO Revalidation</p>
               <p className="text-xs text-rose-600 dark:text-rose-500">Explain why the DO needs to be revalidated before this container can be returned.</p>
@@ -558,7 +566,7 @@ function ContainerRow({ c, team, trucks, onUpdated, historical = false }: {
       {/* ── Issue (breakdown / delay) form ── */}
       {expanded === 'issue' && (
         <tr>
-          <td colSpan={7} className="p-0">
+          <td colSpan={8} className="p-0">
             <div className="px-5 py-3 bg-amber-50 dark:bg-amber-900/10 border-t border-b dark:border-gray-700 space-y-3">
               <p className="text-xs font-semibold text-amber-700 dark:text-amber-400">Report Issue</p>
               <div className="flex gap-2">
@@ -594,6 +602,11 @@ export function ContainerView({ team }: Props) {
   const qc = useQueryClient()
   const [downloadingCcros, setDownloadingCcros] = useState(false)
   const [historical, setHistorical] = useState(false)
+  const [search, setSearch] = useState('')
+  const [filterFrom, setFilterFrom] = useState('')
+  const [filterTo, setFilterTo] = useState('')
+  const [statusFilter, setStatusFilter] = useState('')
+  const [exporting, setExporting] = useState(false)
 
   const { data: containers = [], isLoading, refetch } = useQuery({
     queryKey: ['container-view', historical],
@@ -643,6 +656,40 @@ export function ContainerView({ team }: Props) {
       setDownloadingCcros(false)
     }
   }
+
+  async function handleExport() {
+    setExporting(true)
+    try {
+      const { data } = await shipmentsApi.containerViewExport({
+        search: search || undefined,
+        from_date: filterFrom || undefined,
+        to_date: filterTo || undefined,
+        status: statusFilter || undefined,
+        historical,
+      })
+      const url = URL.createObjectURL(new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `containers_${historical ? 'history' : 'active'}.xlsx`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch {
+      toast.error('Failed to export')
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  const filteredContainers = sortedContainers.filter(c => {
+    if (search) {
+      const term = search.toLowerCase()
+      if (!c.container_number.toLowerCase().includes(term) && !c.bl_number.toLowerCase().includes(term)) return false
+    }
+    if (statusFilter && c.status !== statusFilter) return false
+    if (filterFrom && (!c.offloaded_at || c.offloaded_at < filterFrom)) return false
+    if (filterTo && (!c.offloaded_at || c.offloaded_at.slice(0, 10) > filterTo)) return false
+    return true
+  })
 
   if (isLoading) {
     return <div className="space-y-2">{[...Array(4)].map((_, i) => <div key={i} className="h-12 bg-gray-100 dark:bg-gray-700 rounded-xl animate-pulse" />)}</div>
@@ -735,24 +782,67 @@ export function ContainerView({ team }: Props) {
         </div>
       </div>
 
+      {/* Search / filter / export bar */}
+      <div className="flex flex-wrap gap-2 items-center">
+        <div className="relative flex-1 min-w-[180px]">
+          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search container or B/L…"
+            className="w-full pl-7 pr-2 py-1.5 text-xs border dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          />
+        </div>
+        <select
+          value={statusFilter}
+          onChange={e => setStatusFilter(e.target.value)}
+          className="text-xs border dark:border-gray-600 rounded-lg px-2 py-1.5 bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+        >
+          <option value="">All statuses</option>
+          {Object.entries(STATUS_LABEL).map(([val, label]) => (
+            <option key={val} value={val}>{label}</option>
+          ))}
+        </select>
+        <div className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
+          <span>Offloaded from</span>
+          <input type="date" value={filterFrom} onChange={e => setFilterFrom(e.target.value)} className="border dark:border-gray-600 rounded px-2 py-1.5 bg-white dark:bg-gray-800 dark:text-white text-xs" />
+          <span>to</span>
+          <input type="date" value={filterTo} onChange={e => setFilterTo(e.target.value)} className="border dark:border-gray-600 rounded px-2 py-1.5 bg-white dark:bg-gray-800 dark:text-white text-xs" />
+          {(filterFrom || filterTo) && (
+            <button onClick={() => { setFilterFrom(''); setFilterTo('') }} className="text-gray-400 hover:text-red-500"><X size={13} /></button>
+          )}
+        </div>
+        <button
+          onClick={handleExport}
+          disabled={exporting}
+          className="flex items-center gap-1.5 text-xs border border-green-300 dark:border-green-700 text-green-700 dark:text-green-400 px-3 py-1.5 rounded-lg hover:bg-green-50 dark:hover:bg-green-900/20 disabled:opacity-50 whitespace-nowrap"
+        >
+          <FileSpreadsheet size={13} /> {exporting ? 'Exporting…' : 'Export Excel'}
+        </button>
+      </div>
+
       {/* Table */}
-      {containers.length > 0 && (
+      {filteredContainers.length === 0 && containers.length > 0 && (
+        <p className="text-sm text-gray-400 dark:text-gray-500">No containers match the current filters.</p>
+      )}
+      {filteredContainers.length > 0 && (
         <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-xl overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full text-sm min-w-[900px]">
+            <table className="w-full text-sm">
               <thead className="bg-gray-50 dark:bg-gray-700 border-b dark:border-gray-600">
                 <tr>
-                  <SortableHeader label="B/L Number"        column="bl"        sort={contSort} onSort={contToggle} className="px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
-                  <SortableHeader label="Container"          column="container" sort={contSort} onSort={contToggle} className="px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
-                  <SortableHeader label="DO Validity"        column="do"        sort={contSort} onSort={contToggle} className="px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
-                  <SortableHeader label="Truck / Driver"     column="truck"     sort={contSort} onSort={contToggle} className="px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
-                  <SortableHeader label="Offloading Location" column="location" sort={contSort} onSort={contToggle} className="px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
-                  <SortableHeader label="ETA / Arrived"      column="eta"       sort={contSort} onSort={contToggle} className="px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
-                  <th className="px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Actions</th>
+                  <SortableHeader label="B/L Number"        column="bl"        sort={contSort} onSort={contToggle} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
+                  <SortableHeader label="Container"          column="container" sort={contSort} onSort={contToggle} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
+                  <SortableHeader label="DO Validity"        column="do"        sort={contSort} onSort={contToggle} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
+                  <SortableHeader label="Truck / Driver"     column="truck"     sort={contSort} onSort={contToggle} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
+                  <SortableHeader label="Offloading Location" column="location" sort={contSort} onSort={contToggle} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
+                  <SortableHeader label="ETA / Arrived"      column="eta"       sort={contSort} onSort={contToggle} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
+                  <th className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap">Offloading Date</th>
+                  <th className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y dark:divide-gray-700">
-                {sortedContainers.map(c => (
+                {filteredContainers.map(c => (
                   <ContainerRow
                     key={c.container_id}
                     c={c}

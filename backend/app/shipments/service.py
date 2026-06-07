@@ -308,6 +308,8 @@ async def list_shipments(
     stage: ShipmentStage | None = None,
     my_queue: bool = False,
     missing_date: bool = False,
+    amls_search: str | None = None,
+    missing_amls: bool = False,
 ) -> tuple[list[Shipment], int]:
     from sqlalchemy import func as sa_func
 
@@ -384,6 +386,10 @@ async def list_shipments(
         base_where.append(Shipment.current_stage == stage)
     if missing_date:
         base_where.append(Shipment.pull_out_date == None)
+    if amls_search:
+        base_where.append(Shipment.amls_job_number.ilike(f"%{amls_search}%"))
+    if missing_amls:
+        base_where.append(Shipment.amls_job_number == None)
 
     count_q = select(sa_func.count(Shipment.id))
     for clause in base_where:
@@ -426,6 +432,14 @@ async def get_shipment(db: AsyncSession, shipment_id: uuid.UUID, actor: User) ->
     if actor.team == Team.CUSTOMER and shipment.customer_id != actor.id:
         raise HTTPException(status_code=403, detail="Access denied")
     return shipment
+
+
+async def set_amls_job_number(db: AsyncSession, shipment_id: uuid.UUID, actor: User, amls_job_number: str | None) -> Shipment:
+    _assert_team(actor, Team.FFD)
+    shipment = await _get_shipment(db, shipment_id)
+    shipment.amls_job_number = amls_job_number.strip() if amls_job_number else None
+    await db.commit()
+    return await _get_shipment(db, shipment_id)
 
 
 # ── Customer: Submit documents ────────────────────────────────────────────────
@@ -851,6 +865,7 @@ async def assign_truck(
     container.expected_arrival_at = expected_arrival_at
     container.offloading_point_id = offloading_point_id
     container.status = ContainerStatus.ASSIGNED
+    container.actual_pull_out_date = datetime.now(timezone.utc)
 
     db.add(ContainerEvent(container_id=container_id, event_type="TRUCK_ASSIGNED", actor_id=actor.id))
     await _record_event(db, shipment, EventType.TRUCK_ASSIGNED, actor, remark=f"Container {container.container_number}")
@@ -1067,6 +1082,7 @@ async def mark_offloaded(db: AsyncSession, shipment_id: uuid.UUID, actor: User, 
         raise HTTPException(status_code=400, detail="Upload the Delivery Note (DN) for this container before marking it offloaded")
 
     container.status = ContainerStatus.OFFLOADED
+    container.offloaded_at = datetime.now(timezone.utc)
     db.add(ContainerEvent(container_id=container_id, event_type="OFFLOADED", actor_id=actor.id))
     await _record_event(db, shipment, EventType.CONTAINER_OFFLOADED, actor, remark=f"Container {container.container_number}")
     await db.commit()
@@ -1422,6 +1438,267 @@ async def bulk_upload_ccros(
     return {"results": results, "matched": matched, "created": created, "failed": failed, "duplicates": duplicates}
 
 
+async def export_container_billing(
+    db: AsyncSession,
+    shipment_id: uuid.UUID,
+    actor: User,
+    search: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+) -> bytes:
+    from app.masters.models import Truck
+    shipment = await _get_shipment(db, shipment_id)
+    if actor.team == Team.CUSTOMER and shipment.customer_id != actor.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    from datetime import date as date_type
+    from datetime import datetime as dt_type
+
+    # Parse date bounds
+    from_dt: datetime | None = None
+    to_dt: datetime | None = None
+    if from_date:
+        try:
+            from_dt = datetime.fromisoformat(from_date).replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+    if to_date:
+        try:
+            to_dt = datetime.fromisoformat(to_date).replace(hour=23, minute=59, second=59, tzinfo=timezone.utc)
+        except ValueError:
+            pass
+
+    containers = shipment.containers
+    # Apply search
+    if search:
+        term = search.lower()
+        containers = [c for c in containers if term in c.container_number.lower()]
+    # Apply date filter on offloaded_at
+    if from_dt:
+        containers = [c for c in containers if c.offloaded_at and c.offloaded_at >= from_dt]
+    if to_dt:
+        containers = [c for c in containers if c.offloaded_at and c.offloaded_at <= to_dt]
+
+    # Fetch trucks in one query
+    truck_ids = [c.truck_id for c in containers if c.truck_id]
+    trucks: dict[uuid.UUID, object] = {}
+    if truck_ids:
+        truck_result = await db.execute(select(Truck).where(Truck.id.in_(truck_ids)))
+        trucks = {t.id: t for t in truck_result.scalars().all()}
+
+    # Fetch offloading point names
+    from app.masters.models import OffloadingPoint
+    op_ids = [c.offloading_point_id for c in containers if c.offloading_point_id]
+    if not op_ids and shipment.offloading_point_id:
+        op_ids = [shipment.offloading_point_id]
+    offloading_points: dict[uuid.UUID, str] = {}
+    if op_ids:
+        op_result = await db.execute(select(OffloadingPoint).where(OffloadingPoint.id.in_(op_ids)))
+        offloading_points = {op.id: op.name for op in op_result.scalars().all()}
+
+    def _fmt(val) -> str:
+        if val is None:
+            return ""
+        if isinstance(val, datetime):
+            return val.strftime("%d/%m/%Y %H:%M")
+        if isinstance(val, date_type):
+            return val.strftime("%d/%m/%Y")
+        return str(val)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Container Billing"
+    headers = [
+        "Container Number", "BL Number", "Invoice Number",
+        "Planned Pull Out Date", "Actual Pull Out Date", "Offloading Date",
+        "Truck Plate", "Driver", "Contractor", "Offloading Point", "Status",
+    ]
+    ws.append(headers)
+    for col_idx, _ in enumerate(headers, 1):
+        ws.column_dimensions[ws.cell(1, col_idx).column_letter].width = 22
+
+    for c in containers:
+        truck = trucks.get(c.truck_id) if c.truck_id else None
+        op_id = c.offloading_point_id or shipment.offloading_point_id
+        op_name = offloading_points.get(op_id, "") if op_id else ""
+        ws.append([
+            c.container_number,
+            shipment.bl_number,
+            shipment.invoice_number,
+            _fmt(shipment.pull_out_date),
+            _fmt(c.actual_pull_out_date),
+            _fmt(c.offloaded_at),
+            truck.plate_number if truck else "",
+            truck.driver_name if truck else "",
+            truck.contractor if truck else "",
+            op_name,
+            c.status.value,
+        ])
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+async def export_container_view(
+    db: AsyncSession,
+    actor: User,
+    search: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    status: str | None = None,
+    historical: bool = False,
+) -> bytes:
+    from datetime import date as date_type
+
+    rows = await get_container_view(db, actor, historical=historical, skip=0, limit=10000)
+
+    # Apply extra filters client-side (data already team-scoped by get_container_view)
+    from_dt = None
+    to_dt = None
+    if from_date:
+        try:
+            from_dt = datetime.fromisoformat(from_date).replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+    if to_date:
+        try:
+            to_dt = datetime.fromisoformat(to_date).replace(hour=23, minute=59, second=59, tzinfo=timezone.utc)
+        except ValueError:
+            pass
+
+    def _matches(r: dict) -> bool:
+        if search:
+            term = search.lower()
+            if term not in r["container_number"].lower() and term not in r["bl_number"].lower():
+                return False
+        if status and r["status"].value != status:
+            return False
+        if from_dt and (not r["offloaded_at"] or r["offloaded_at"] < from_dt):
+            return False
+        if to_dt and (not r["offloaded_at"] or r["offloaded_at"] > to_dt):
+            return False
+        return True
+
+    rows = [r for r in rows if _matches(r)]
+
+    def _fmt(val) -> str:
+        if val is None:
+            return ""
+        if isinstance(val, datetime):
+            return val.strftime("%d/%m/%Y %H:%M")
+        if isinstance(val, date_type):
+            return val.strftime("%d/%m/%Y")
+        if hasattr(val, 'value'):
+            return val.value
+        return str(val)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Containers"
+    headers = [
+        "Container Number", "BL Number", "Status",
+        "Planned Pull Out Date", "Actual Pull Out Date", "Offloading Date",
+        "Truck Plate", "Driver", "Contractor", "Offloading Point", "ETA / Arrived",
+    ]
+    ws.append(headers)
+    for col_idx, _ in enumerate(headers, 1):
+        ws.column_dimensions[ws.cell(1, col_idx).column_letter].width = 22
+
+    for r in rows:
+        ws.append([
+            r["container_number"],
+            r["bl_number"],
+            _fmt(r["status"]),
+            _fmt(r.get("pull_out_date")),
+            _fmt(r.get("actual_pull_out_date")),
+            _fmt(r.get("offloaded_at")),
+            r["plate_number"] or "",
+            r["driver_name"] or "",
+            r["contractor"] or "",
+            r["offloading_point_name"] or "",
+            _fmt(r["arrived_at"] or r["expected_arrival_at"]),
+        ])
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+async def export_shipments_list(
+    db: AsyncSession,
+    actor: User,
+    search: str | None = None,
+    stage: str | None = None,
+    my_queue: bool = False,
+    missing_date: bool = False,
+    amls_search: str | None = None,
+    missing_amls: bool = False,
+) -> bytes:
+    from datetime import date as date_type
+
+    stage_enum: ShipmentStage | None = None
+    if stage:
+        try:
+            stage_enum = ShipmentStage(stage)
+        except ValueError:
+            pass
+
+    shipments, _ = await list_shipments(
+        db, actor, skip=0, limit=10000,
+        search=search or None,
+        stage=stage_enum,
+        my_queue=my_queue,
+        missing_date=missing_date,
+        amls_search=amls_search or None,
+        missing_amls=missing_amls,
+    )
+
+    def _fmt(val) -> str:
+        if val is None:
+            return ""
+        if isinstance(val, datetime):
+            return val.strftime("%d/%m/%Y %H:%M")
+        if isinstance(val, date_type):
+            return val.strftime("%d/%m/%Y")
+        return str(val)
+
+    def _task_status(s: Shipment, task_type: str) -> str:
+        for t in s.tasks:
+            if t.task_type.value == task_type:
+                return t.status.value
+        return ""
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Shipments"
+    headers = [
+        "BL Number", "Invoice Number", "Stage", "Pull Out Date",
+        "Offloading Point", "AMLS Job#", "Permit", "DO", "Bayan", "Created At",
+    ]
+    ws.append(headers)
+    for col_idx, _ in enumerate(headers, 1):
+        ws.column_dimensions[ws.cell(1, col_idx).column_letter].width = 20
+
+    for s in shipments:
+        ws.append([
+            s.bl_number,
+            s.invoice_number,
+            s.current_stage.value,
+            _fmt(s.pull_out_date),
+            s.offloading_point.name if s.offloading_point else "",
+            s.amls_job_number or "",
+            _task_status(s, "PERMIT"),
+            _task_status(s, "DO"),
+            _task_status(s, "BAYAN"),
+            _fmt(s.created_at),
+        ])
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
 async def rename_container(
     db: AsyncSession, shipment_id: uuid.UUID, container_id: uuid.UUID,
     actor: User, container_number: str,
@@ -1558,6 +1835,7 @@ async def get_container_view(db: AsyncSession, actor: User, historical: bool = F
             dn_document_id_sq.label("dn_document_id"),
             has_dc_health_cert_sq.label("dc_health_cert_uploaded"),
             func.coalesce(Container.offloading_point_id, Shipment.offloading_point_id).label("resolved_offloading_point_id"),
+            Shipment.pull_out_date.label("pull_out_date"),
         )
         .join(Shipment, Shipment.id == Container.shipment_id)
         .outerjoin(Truck, Truck.id == Container.truck_id)
@@ -1592,6 +1870,9 @@ async def get_container_view(db: AsyncSession, actor: User, historical: bool = F
             "revalidation_remark": row[0].revalidation_remark,
             "dn_document_id": str(row[11]) if row[11] else None,
             "dc_health_cert_uploaded": bool(row[12]),
+            "actual_pull_out_date": row[0].actual_pull_out_date,
+            "offloaded_at": row[0].offloaded_at,
+            "pull_out_date": row[14],
         }
         for row in rows.all()
     ]

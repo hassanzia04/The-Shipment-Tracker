@@ -9,6 +9,7 @@ from app.shipments.models import Shipment, ShipmentTask, ShipmentEvent, Containe
 from app.masters.models import ShippingLine
 from app.auth.models import User
 from app.enums import ShipmentStage, TaskStatus, TaskType, Team, EventType, ContainerStatus
+from app.config import settings
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
@@ -841,3 +842,68 @@ async def reports(
     })
 
     return result
+
+
+@router.post("/ai-summary")
+async def ai_summary(
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+):
+    if actor.team not in (Team.MANAGEMENT, Team.CUSTOMER) and not actor.is_admin:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    if not settings.ANTHROPIC_API_KEY:
+        raise HTTPException(status_code=503, detail="AI summary is not configured")
+
+    # Build pipeline context scoped to the actor
+    base_filter = []
+    if actor.team == Team.CUSTOMER:
+        base_filter.append(Shipment.customer_id == actor.id)
+
+    active_filter = base_filter + [Shipment.current_stage != ShipmentStage.COMPLETED]
+
+    total_active = (await db.execute(
+        select(func.count(Shipment.id)).where(*active_filter)
+    )).scalar() or 0
+
+    stage_counts_result = await db.execute(
+        select(Shipment.current_stage, func.count(Shipment.id))
+        .where(*active_filter)
+        .group_by(Shipment.current_stage)
+    )
+    by_stage = {row[0].value: row[1] for row in stage_counts_result.all()}
+
+    holds_count = (await db.execute(
+        select(func.count(ShipmentTask.id))
+        .join(Shipment, Shipment.id == ShipmentTask.shipment_id)
+        .where(ShipmentTask.status == TaskStatus.ON_HOLD, *active_filter)
+    )).scalar() or 0
+
+    stage_lines = ", ".join(
+        f"{count} in {stage.replace('_', ' ').title()}"
+        for stage, count in by_stage.items()
+        if stage != ShipmentStage.COMPLETED.value and count > 0
+    )
+
+    prompt = (
+        f"You are summarising a shipment tracking system for a logistics company. "
+        f"Give a brief 2-3 sentence plain-English summary of the current pipeline state. "
+        f"Be professional and factual. Do not use bullet points or headers.\n\n"
+        f"Data: {total_active} active shipments. "
+        f"Breakdown: {stage_lines or 'none'}. "
+        f"Tasks currently on hold: {holds_count}."
+    )
+
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        message = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=200,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        summary = message.content[0].text.strip()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"AI service error: {str(e)}")
+
+    return {"summary": summary}

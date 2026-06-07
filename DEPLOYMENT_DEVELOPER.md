@@ -283,11 +283,16 @@ scp -i /path/to/key.key /local/path/to/file.py ubuntu@<SERVER_IP>:/home/ubuntu/f
 
 # On server — rebuild only changed service
 cd ~/ffd-tracker
-docker compose -f docker-compose.prod.yml up -d --build backend worker beat
-# OR rebuild frontend if frontend files changed:
-docker compose -f docker-compose.prod.yml up -d --build frontend
 
-# If DB schema changed
+# Backend only (Python files changed)
+docker compose -f docker-compose.prod.yml up -d --build backend worker beat
+
+# Frontend (any .tsx / .ts / .css file changed) — always use --no-cache
+# Without it Docker serves the old JS bundle from cache
+docker compose -f docker-compose.prod.yml build --no-cache frontend
+docker compose -f docker-compose.prod.yml up -d frontend
+
+# If DB schema changed (new migration files copied)
 docker compose -f docker-compose.prod.yml exec backend alembic upgrade head
 ```
 
@@ -310,6 +315,8 @@ docker compose -f docker-compose.prod.yml exec backend alembic upgrade head
 | SMTP `SMTPAuthenticationError` | SMTP AUTH disabled on the mailbox | Enable SMTP AUTH in Exchange Admin Center for that mailbox |
 | SMTP `SMTPConnectError` | Wrong host/port or firewall blocking outbound 587 | Check OCI security list allows outbound 587; verify `SMTP_HOST` |
 | OCI SDK not found | `oci` package not installed | Ensure `oci>=2.0.0` is in `requirements.txt` and image was rebuilt |
+| Frontend changes not visible after rebuild | Docker build cache served the old JS bundle | Always use `--no-cache` when rebuilding the frontend: `docker compose build --no-cache frontend` |
+| Browser still shows old version after server rebuild | PWA service worker cached the previous bundle | Open DevTools → Application → Service Workers → Unregister, then hard-refresh. Or test in an incognito window. |
 
 ---
 

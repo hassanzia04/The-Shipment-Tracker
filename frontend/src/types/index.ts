@@ -33,6 +33,7 @@ export type DocumentType =
   | 'HALAL_CERT'
   | 'BL'
   | 'HEALTH_CERT'
+  | 'MISCELLANEOUS'
   | 'PERMIT'
   | 'BAYAN'
   | 'DO'
@@ -99,6 +100,8 @@ export interface Container {
   offloading_point_id: string | null
   status: ContainerStatus
   revalidation_remark: string | null
+  actual_pull_out_date: string | null
+  offloaded_at: string | null
   created_at: string
   updated_at: string
 }
@@ -119,6 +122,7 @@ export interface Shipment {
   completed_at: string | null
   do_validity_date: string | null
   container_count: number | null
+  amls_job_number: string | null
   offloading_point_name: string | null
   product_type_name: string | null
   loading_port_name: string | null
@@ -150,6 +154,7 @@ export interface ShipmentListItem {
   do_revalidation_count: number
   ccro_returned_count: number
   dc_health_cert_missing: boolean
+  amls_job_number: string | null
 }
 
 export interface ContainerViewItem {
@@ -174,6 +179,9 @@ export interface ContainerViewItem {
   revalidation_remark: string | null
   dn_document_id: string | null
   dc_health_cert_uploaded: boolean
+  actual_pull_out_date: string | null
+  offloaded_at: string | null
+  pull_out_date: string | null
 }
 
 export interface Document {
@@ -254,6 +262,7 @@ export const DOC_TYPE_LABELS: Record<DocumentType, string> = {
   HALAL_CERT: 'Halal Certificate',
   BL: 'Bill of Lading',
   HEALTH_CERT: 'Health Certificate',
+  MISCELLANEOUS: 'Miscellaneous',
   PERMIT: 'Permit',
   BAYAN: 'Bayan',
   DO: 'Delivery Order',
@@ -269,6 +278,10 @@ export const CUSTOMER_REQUIRED_DOCS: DocumentType[] = [
   'HALAL_CERT',
   'BL',
   'HEALTH_CERT',
+]
+
+export const DOC_TYPE_OPTIONAL_DOCS: DocumentType[] = [
+  'MISCELLANEOUS',
 ]
 
 export const TEAM_HOLD_PERMISSIONS: Partial<Record<Team, ExternalEntity[]>> = {

@@ -3,7 +3,7 @@ import { useDropzone } from 'react-dropzone'
 import { Upload, X, CheckCircle, FileText, AlertCircle, Loader } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { documentsApi } from '@/api/documents'
-import { CUSTOMER_REQUIRED_DOCS, DOC_TYPE_LABELS } from '@/types'
+import { CUSTOMER_REQUIRED_DOCS, DOC_TYPE_LABELS, DOC_TYPE_OPTIONAL_DOCS } from '@/types'
 import type { Document, DocumentType } from '@/types'
 import { formatFileSize } from '@/lib/dates'
 import clsx from 'clsx'
@@ -205,6 +205,34 @@ export function DocumentUploadPanel({ shipmentId, documents, onUploaded, readonl
             </div>
           )
         })}
+
+        {/* Optional documents */}
+        {DOC_TYPE_OPTIONAL_DOCS.map(docType => {
+          const doc = documents.find(d => d.doc_type === docType)
+          return (
+            <div key={docType} className={clsx('flex items-center justify-between p-3 rounded-lg border border-dashed', doc ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800' : 'border-gray-300 dark:border-gray-600')}>
+              <div className="flex items-center gap-2">
+                {doc ? <CheckCircle size={18} className="text-green-500 shrink-0" /> : <FileText size={18} className="text-gray-300 dark:text-gray-600 shrink-0" />}
+                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">{DOC_TYPE_LABELS[docType]}</span>
+                <span className="text-xs text-gray-400 dark:text-gray-500 italic">optional</span>
+                {doc && (
+                  <span className="text-xs text-gray-500 dark:text-gray-400">
+                    {formatFileSize(doc.compressed_size_bytes)}
+                  </span>
+                )}
+              </div>
+              {doc ? (
+                <div className="flex items-center gap-2">
+                  <button onClick={() => openDocument(doc)} className="text-xs text-blue-600 hover:underline">View</button>
+                  <button onClick={() => downloadDocument(doc)} className="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">Download</button>
+                  {!readonly && <button onClick={() => deleteDocument(doc)} className="text-xs text-red-500 hover:text-red-700"><X size={14} /></button>}
+                </div>
+              ) : (
+                <span className="text-xs text-gray-400 dark:text-gray-500">Not uploaded</span>
+              )}
+            </div>
+          )
+        })}
       </div>
 
       {/* Drop zone */}
@@ -222,7 +250,7 @@ export function DocumentUploadPanel({ shipmentId, documents, onUploaded, readonl
             <p className="text-sm text-gray-600 dark:text-gray-300">
               <span className="font-medium text-blue-600">Click to select files</span> or drag and drop
             </p>
-            <p className="text-xs text-gray-400 mt-1">You can select all 6 documents at once — PDF, JPG, PNG</p>
+            <p className="text-xs text-gray-400 mt-1">You can select all documents at once — PDF, JPG, PNG</p>
           </div>
 
           {/* Pending files */}
@@ -278,6 +306,9 @@ export function DocumentUploadPanel({ shipmentId, documents, onUploaded, readonl
                             </option>
                           )
                         })}
+                        {DOC_TYPE_OPTIONAL_DOCS.map(t => (
+                          <option key={t} value={t}>{DOC_TYPE_LABELS[t]} (optional)</option>
+                        ))}
                       </select>
                     </div>
 

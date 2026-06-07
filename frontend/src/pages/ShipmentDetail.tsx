@@ -59,7 +59,7 @@ function getLatestRemarkForTeam(
 }
 
 const REMARK_STYLE: Record<string, { bg: string; border: string; icon: JSX.Element; label: string }> = {
-  DOCUMENTS_REJECTED:    { bg: 'bg-red-50', border: 'border-red-300', icon: <AlertTriangle size={18} className="text-red-500 shrink-0 mt-0.5" />, label: 'Documents rejected by FFD team' },
+  DOCUMENTS_REJECTED:    { bg: 'bg-red-50', border: 'border-red-300', icon: <AlertTriangle size={18} className="text-red-500 shrink-0 mt-0.5" />, label: 'Documents sent back by FFD team' },
   SENT_BACK_TO_FFD:      { bg: 'bg-amber-50', border: 'border-amber-300', icon: <AlertTriangle size={18} className="text-amber-500 shrink-0 mt-0.5" />, label: 'Shipment returned to FFD' },
   SENT_BACK_TO_CUSTOMER: { bg: 'bg-amber-50', border: 'border-amber-300', icon: <AlertTriangle size={18} className="text-amber-500 shrink-0 mt-0.5" />, label: 'Shipment sent back by FFD — please review and re-submit' },
   TASK_CREATED:          { bg: 'bg-blue-50', border: 'border-blue-300', icon: <Info size={18} className="text-blue-500 shrink-0 mt-0.5" />, label: 'New task assigned to your team' },
@@ -519,7 +519,7 @@ export function ShipmentDetail() {
           )
         })()}
         <div>
-          <span className="text-gray-500 dark:text-gray-400">Pull-out date</span>
+          <span className="text-gray-500 dark:text-gray-400">Planned Pull Out Date</span>
           {team === 'CUSTOMER' && editingDate ? (
             <div className="flex items-center gap-2 mt-1">
               <input
@@ -598,10 +598,10 @@ export function ShipmentDetail() {
       {stage === 'FFD_REVIEW' && team === 'FFD' && (
         <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-xl p-4 space-y-3">
           <h2 className="font-semibold text-gray-800 dark:text-gray-100">Review Documents</h2>
-          <textarea value={remark} onChange={e => setRemark(e.target.value)} placeholder="Rejection remarks (required if rejecting)…" className="w-full border dark:border-gray-600 rounded-lg p-2 text-sm resize-none h-20 bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500" />
+          <textarea value={remark} onChange={e => setRemark(e.target.value)} placeholder="Reason for sending back (required)…" className="w-full border dark:border-gray-600 rounded-lg p-2 text-sm resize-none h-20 bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500" />
           <div className="flex gap-2">
             <button onClick={() => action(() => shipmentsApi.rejectDocs(id!, remark), 'Sent back to customer')} disabled={!remark.trim() || submitting} className="bg-red-500 text-white px-4 py-2 rounded-lg text-sm hover:bg-red-600 disabled:opacity-50">
-              Reject
+              Send Back
             </button>
             <button onClick={() => action(() => shipmentsApi.approveDocs(id!), 'Approved — Permit + DO tasks opened')} disabled={submitting} className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-green-700 disabled:opacity-50">
               Approve &amp; Open Tasks
@@ -797,6 +797,17 @@ export function ShipmentDetail() {
                       )}
                       {truck && (
                         <span className="text-xs text-gray-400 dark:text-gray-500">{truck.plate_number} — {truck.driver_name}</span>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1">
+                      {shipment.pull_out_date && (
+                        <span className="text-xs text-gray-400 dark:text-gray-500">Planned pull out: <span className="text-gray-600 dark:text-gray-300 font-medium">{formatDate(shipment.pull_out_date)}</span></span>
+                      )}
+                      {c.actual_pull_out_date && (
+                        <span className="text-xs text-gray-400 dark:text-gray-500">Actual pull out: <span className="text-gray-600 dark:text-gray-300 font-medium">{formatDateTime(c.actual_pull_out_date)}</span></span>
+                      )}
+                      {c.offloaded_at && (
+                        <span className="text-xs text-gray-400 dark:text-gray-500">Offloaded: <span className="text-green-600 dark:text-green-400 font-medium">{formatDateTime(c.offloaded_at)}</span></span>
                       )}
                     </div>
                     {c.status === 'DO_REVALIDATION' && c.revalidation_remark && (
@@ -1348,6 +1359,12 @@ function BulkCcroUpload({ shipmentId, onUploaded }: { shipmentId: string; onUplo
             <span className="text-blue-600 dark:text-blue-400 font-medium">● {results.matched} matched</span>
             {results.failed > 0 && <span className="text-amber-600 dark:text-amber-400 font-medium">⚠ {results.failed} not detected</span>}
             {results.duplicates > 0 && <span className="text-red-600 dark:text-red-400 font-medium">✕ {results.duplicates} duplicate — already active</span>}
+            <button
+              onClick={() => setResults(null)}
+              className="ml-auto text-xs text-blue-600 dark:text-blue-400 hover:underline"
+            >
+              Upload again
+            </button>
           </div>
           <div className="divide-y dark:divide-gray-700 max-h-52 overflow-y-auto">
             {results.results.map((r, i) => (
@@ -1664,7 +1681,7 @@ function TransportDcLayout({ shipment, trucks, team, stage, submitting, action, 
           </div>
           {shipment.pull_out_date && (
             <div>
-              <p className="text-xs text-gray-500 dark:text-gray-400">Pull-out Date</p>
+              <p className="text-xs text-gray-500 dark:text-gray-400">Planned Pull Out Date</p>
               <p className="font-medium dark:text-gray-100">{formatDate(shipment.pull_out_date)}</p>
             </div>
           )}
@@ -1698,7 +1715,7 @@ function TransportDcLayout({ shipment, trucks, team, stage, submitting, action, 
         })()}
 
         {/* DC Health Certificate (per BL) */}
-        {team === 'DC' && (
+        {(team === 'DC' || team === 'PRO') && (
           <div className={clsx(
             'rounded-xl border p-4 space-y-2',
             dcHealthCertDoc
@@ -1787,7 +1804,7 @@ function TransportDcLayout({ shipment, trucks, team, stage, submitting, action, 
           </div>
         )}
 
-        {/* Containers table */}
+      {/* Containers table */}
         <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-xl overflow-hidden">
           {shipment.containers.length === 0 ? (
             <p className="text-sm text-gray-400 dark:text-gray-500 p-4">No containers on this shipment yet.</p>
@@ -1795,13 +1812,15 @@ function TransportDcLayout({ shipment, trucks, team, stage, submitting, action, 
             <div className="overflow-x-auto">
             <>
               {/* Table header */}
-              <div className="grid grid-cols-[1.5fr_1fr_1fr_1fr_1.2fr_1.4fr_auto] gap-3 px-4 py-2.5 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide border-b dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30 min-w-[700px]">
+              <div className="grid grid-cols-[1.5fr_1fr_1fr_1fr_1.2fr_1.2fr_1.2fr_1.2fr_auto] gap-3 px-4 py-2.5 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide border-b dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30 min-w-[1000px]">
                 <span>Container</span>
                 <span>Truck</span>
                 <span>Driver</span>
                 <span>Status</span>
                 <span>DC Location</span>
-                <span>ETA to DC</span>
+                <span>Planned Pull Out</span>
+                <span>Actual Pull Out</span>
+                <span>Offloaded</span>
                 <span></span>
               </div>
 
@@ -1818,6 +1837,7 @@ function TransportDcLayout({ shipment, trucks, team, stage, submitting, action, 
                   action={action}
                   onUpdated={onUpdated}
                   offloadingPointName={shipment.offloading_point_name}
+                  plannedPullOutDate={shipment.pull_out_date}
                   documents={documents}
                 />
               ))}
@@ -1830,7 +1850,7 @@ function TransportDcLayout({ shipment, trucks, team, stage, submitting, action, 
   )
 }
 
-function ContainerTableRow({ container, truck, shipmentId, team, trucks, submitting, action, onUpdated, offloadingPointName, documents }: {
+function ContainerTableRow({ container, truck, shipmentId, team, trucks, submitting, action, onUpdated, offloadingPointName, plannedPullOutDate, documents }: {
   container: Container
   truck: Truck | undefined
   shipmentId: string
@@ -1840,6 +1860,7 @@ function ContainerTableRow({ container, truck, shipmentId, team, trucks, submitt
   action: (fn: () => Promise<any>, msg: string) => Promise<void>
   onUpdated: () => void
   offloadingPointName: string | null | undefined
+  plannedPullOutDate: string | null | undefined
   documents: ShipmentDoc[]
 }) {
   const [expanded, setExpanded] = useState(false)
@@ -1866,7 +1887,7 @@ function ContainerTableRow({ container, truck, shipmentId, team, trucks, submitt
   return (
     <div className="border-b dark:border-gray-700 last:border-0">
       {/* Main row */}
-      <div className="grid grid-cols-[1.5fr_1fr_1fr_1fr_1.2fr_1.4fr_auto] gap-3 px-4 py-3 text-sm items-center hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors min-w-[700px]">
+      <div className="grid grid-cols-[1.5fr_1fr_1fr_1fr_1.2fr_1.2fr_1.2fr_1.2fr_auto] gap-3 px-4 py-3 text-sm items-center hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors min-w-[1000px]">
         <span className="font-medium text-gray-900 dark:text-gray-100">{container.container_number}</span>
         <span className="text-gray-700 dark:text-gray-300 truncate">{truck?.plate_number ?? <span className="text-gray-400 dark:text-gray-500 italic">—</span>}</span>
         <span className="text-gray-700 dark:text-gray-300 truncate">{truck?.driver_name ?? <span className="text-gray-400 dark:text-gray-500 italic">—</span>}</span>
@@ -1878,8 +1899,14 @@ function ContainerTableRow({ container, truck, shipmentId, team, trucks, submitt
         <span className="text-gray-700 dark:text-gray-300 text-xs truncate">
           {offloadingPointName ?? <span className="text-gray-400 dark:text-gray-500 italic">—</span>}
         </span>
-        <span className="text-gray-700 dark:text-gray-300 text-xs">
-          {container.expected_arrival_at ? formatDateTime(container.expected_arrival_at) : <span className="text-gray-400 dark:text-gray-500 italic">—</span>}
+        <span className="text-gray-600 dark:text-gray-400 text-xs">
+          {plannedPullOutDate ? formatDate(plannedPullOutDate) : <span className="text-gray-400 dark:text-gray-500 italic">—</span>}
+        </span>
+        <span className="text-gray-600 dark:text-gray-400 text-xs">
+          {container.actual_pull_out_date ? formatDate(container.actual_pull_out_date) : <span className="text-gray-400 dark:text-gray-500 italic">—</span>}
+        </span>
+        <span className="text-xs">
+          {container.offloaded_at ? <span className="text-green-600 dark:text-green-400 font-medium">{formatDate(container.offloaded_at)}</span> : <span className="text-gray-400 dark:text-gray-500 italic">—</span>}
         </span>
         <div className="flex gap-1.5 items-center justify-end shrink-0">
           {needsAssign && (
