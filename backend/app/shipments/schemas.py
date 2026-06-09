@@ -17,6 +17,9 @@ class ShipmentCreate(BaseModel):
     loading_port_id: Optional[UUID] = None
     shipping_line_id: Optional[UUID] = None
     offloading_point_id: Optional[UUID] = None
+    bayan_type_id: Optional[UUID] = None
+    eta_at_port: Optional[date] = None
+    consignee_id: Optional[UUID] = None
     remark: Optional[str] = None
 
 
@@ -30,6 +33,9 @@ class ShipmentUpdate(BaseModel):
     loading_port_id: Optional[UUID] = None
     rop_inspection_type_id: Optional[UUID] = None
     offloading_point_id: Optional[UUID] = None
+    bayan_type_id: Optional[UUID] = None
+    eta_at_port: Optional[date] = None
+    consignee_id: Optional[UUID] = None
 
 
 class AmlsJobRequest(BaseModel):
@@ -95,6 +101,8 @@ class ContainerOut(BaseModel):
     revalidation_remark: Optional[str] = None
     actual_pull_out_date: Optional[datetime] = None
     offloaded_at: Optional[datetime] = None
+    outsourced_truck_id: Optional[UUID] = None
+    outsourced_expected_arrival_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 
@@ -122,6 +130,11 @@ class ShipmentOut(BaseModel):
     product_type_name: Optional[str] = None
     loading_port_name: Optional[str] = None
     shipping_line_name: Optional[str] = None
+    bayan_type_id: Optional[UUID] = None
+    bayan_type_name: Optional[str] = None
+    eta_at_port: Optional[date] = None
+    consignee_id: Optional[UUID] = None
+    consignee_name: Optional[str] = None
     tasks: list[TaskOut] = []
     containers: list[ContainerOut] = []
     events: list[EventOut] = []
@@ -157,6 +170,9 @@ class ShipmentListOut(BaseModel):
     ccro_returned_count: int = 0
     dc_health_cert_missing: bool = False
     amls_job_number: Optional[str] = None
+    do_validity_date: Optional[date] = None
+    eta_at_port: Optional[date] = None
+    consignee_name: Optional[str] = None
 
 
 class PaginatedShipments(BaseModel):
@@ -248,6 +264,7 @@ class RequestBayanPaymentRequest(BaseModel):
 
 class ShipmentImportResult(BaseModel):
     inserted: int
+    inserted_bls: list[str] = []
     skipped: int
     errors: list[str]
 
@@ -277,6 +294,11 @@ class ContainerViewItem(BaseModel):
     actual_pull_out_date: Optional[datetime] = None
     offloaded_at: Optional[datetime] = None
     pull_out_date: Optional[date] = None
+    offloading_is_amls: bool = False
+    outsourced_truck_id: Optional[UUID] = None
+    outsourced_expected_arrival_at: Optional[datetime] = None
+    outsourced_plate_number: Optional[str] = None
+    outsourced_driver_name: Optional[str] = None
 
 
 class DoRevalidationRequest(BaseModel):
@@ -289,3 +311,8 @@ class ReturnContainerRequest(BaseModel):
 
 class CloseContainerRequest(BaseModel):
     remark: str
+
+
+class AssignOutsourcedTruckRequest(BaseModel):
+    outsourced_truck_id: UUID
+    expected_arrival_at: datetime

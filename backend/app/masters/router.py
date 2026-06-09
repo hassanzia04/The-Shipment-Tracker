@@ -28,6 +28,11 @@ async def import_trucks(file: UploadFile = File(...), db: AsyncSession = Depends
     return await service.import_trucks_excel(db, file)
 
 
+@router.delete("/trucks/{truck_id}", status_code=204)
+async def delete_truck(truck_id: uuid.UUID, db: AsyncSession = Depends(get_db), _=Depends(require_admin)):
+    await service.delete_truck(db, truck_id)
+
+
 @router.patch("/trucks/{truck_id}/deactivate", response_model=schemas.TruckOut)
 async def deactivate_truck(truck_id: uuid.UUID, db: AsyncSession = Depends(get_db), _=Depends(require_admin)):
     return await service.deactivate_truck(db, truck_id)
@@ -192,3 +197,81 @@ async def shipping_lines_template(_=Depends(get_current_user)):
     data = service.build_simple_template("Shipping Lines", "Name")
     return Response(content=data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": "attachment; filename=shipping_lines_template.xlsx"})
+
+
+# ── Bayan Types ────────────────────────────────────────────────────────────────
+
+@router.get("/bayan-types", response_model=list[schemas.SimpleMasterOut])
+async def list_bayan_types(db: AsyncSession = Depends(get_db), _=Depends(get_current_user)):
+    return await service.list_bayan_types(db)
+
+
+@router.post("/bayan-types", response_model=schemas.SimpleMasterOut)
+async def create_bayan_type(body: schemas.SimpleMasterIn, db: AsyncSession = Depends(get_db), _=Depends(get_current_user)):
+    return await service.create_bayan_type(db, body.name)
+
+
+@router.delete("/bayan-types/{record_id}", status_code=204)
+async def delete_bayan_type(record_id: uuid.UUID, db: AsyncSession = Depends(get_db), _=Depends(require_admin)):
+    await service.delete_bayan_type(db, record_id)
+
+
+@router.patch("/bayan-types/{record_id}/deactivate", response_model=schemas.SimpleMasterOut)
+async def deactivate_bayan_type(record_id: uuid.UUID, db: AsyncSession = Depends(get_db), _=Depends(require_admin)):
+    return await service.deactivate_bayan_type(db, record_id)
+
+
+# ── Consignees ────────────────────────────────────────────────────────────────
+
+@router.get("/consignees", response_model=list[schemas.SimpleMasterOut])
+async def list_consignees(db: AsyncSession = Depends(get_db), _=Depends(get_current_user)):
+    return await service.list_consignees(db)
+
+
+@router.post("/consignees", response_model=schemas.SimpleMasterOut)
+async def create_consignee(body: schemas.SimpleMasterIn, db: AsyncSession = Depends(get_db), _=Depends(get_current_user)):
+    return await service.create_consignee(db, body.name)
+
+
+@router.delete("/consignees/{record_id}", status_code=204)
+async def delete_consignee(record_id: uuid.UUID, db: AsyncSession = Depends(get_db), _=Depends(require_admin)):
+    await service.delete_consignee(db, record_id)
+
+
+@router.patch("/consignees/{record_id}/deactivate", response_model=schemas.SimpleMasterOut)
+async def deactivate_consignee(record_id: uuid.UUID, db: AsyncSession = Depends(get_db), _=Depends(require_admin)):
+    return await service.deactivate_consignee(db, record_id)
+
+
+# ── Outsourced Trucks ──────────────────────────────────────────────────────────
+
+@router.get("/outsourced-trucks", response_model=list[schemas.OutsourcedTruckOut])
+async def list_outsourced_trucks(db: AsyncSession = Depends(get_db), _=Depends(get_current_user)):
+    return await service.list_outsourced_trucks(db)
+
+
+@router.post("/outsourced-trucks", response_model=schemas.OutsourcedTruckOut)
+async def create_outsourced_truck(body: schemas.OutsourcedTruckIn, db: AsyncSession = Depends(get_db), _=Depends(get_current_user)):
+    return await service.create_outsourced_truck(db, body.plate_number, body.driver_name, body.contractor, body.nationality)
+
+
+@router.post("/outsourced-trucks/import", response_model=schemas.ExcelImportResult)
+async def import_outsourced_trucks(file: UploadFile = File(...), db: AsyncSession = Depends(get_db), _=Depends(require_admin)):
+    return await service.import_outsourced_trucks_excel(db, file)
+
+
+@router.delete("/outsourced-trucks/{truck_id}", status_code=204)
+async def delete_outsourced_truck(truck_id: uuid.UUID, db: AsyncSession = Depends(get_db), _=Depends(require_admin)):
+    await service.delete_outsourced_truck(db, truck_id)
+
+
+@router.patch("/outsourced-trucks/{truck_id}/deactivate", response_model=schemas.OutsourcedTruckOut)
+async def deactivate_outsourced_truck(truck_id: uuid.UUID, db: AsyncSession = Depends(get_db), _=Depends(require_admin)):
+    return await service.deactivate_outsourced_truck(db, truck_id)
+
+
+@router.get("/outsourced-trucks/template")
+async def outsourced_trucks_template(_=Depends(require_admin)):
+    data = service.build_trucks_template()
+    return Response(content=data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": "attachment; filename=outsourced_trucks_template.xlsx"})

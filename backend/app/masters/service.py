@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from openpyxl import load_workbook, Workbook
 
-from app.masters.models import Truck, ProductType, RopInspectionType, OffloadingPoint, LoadingPort, ShippingLine
+from app.masters.models import Truck, OutsourcedTruck, ProductType, RopInspectionType, BayanType, Consignee, OffloadingPoint, LoadingPort, ShippingLine
 from app.masters.schemas import ExcelImportResult
 
 
@@ -33,6 +33,46 @@ async def deactivate_truck(db: AsyncSession, truck_id: uuid.UUID) -> Truck:
     await db.commit()
     await db.refresh(truck)
     return truck
+
+
+async def delete_truck(db: AsyncSession, truck_id: uuid.UUID) -> None:
+    result = await db.execute(select(Truck).where(Truck.id == truck_id))
+    truck = result.scalar_one_or_none()
+    if not truck:
+        raise HTTPException(status_code=404, detail="Truck not found")
+
+    from app.shipments.models import Container
+    in_use = await db.execute(
+        select(Container.id).where(Container.truck_id == truck_id).limit(1)
+    )
+    if in_use.scalar_one_or_none():
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot delete: truck is assigned to one or more containers.",
+        )
+
+    await db.delete(truck)
+    await db.commit()
+
+
+async def delete_outsourced_truck(db: AsyncSession, truck_id: uuid.UUID) -> None:
+    result = await db.execute(select(OutsourcedTruck).where(OutsourcedTruck.id == truck_id))
+    truck = result.scalar_one_or_none()
+    if not truck:
+        raise HTTPException(status_code=404, detail="Outsourced truck not found")
+
+    from app.shipments.models import Container
+    in_use = await db.execute(
+        select(Container.id).where(Container.outsourced_truck_id == truck_id).limit(1)
+    )
+    if in_use.scalar_one_or_none():
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot delete: truck is assigned to one or more containers.",
+        )
+
+    await db.delete(truck)
+    await db.commit()
 
 
 async def _delete_simple(db: AsyncSession, model, record_id: uuid.UUID, fk_column):
@@ -205,6 +245,83 @@ async def list_shipping_lines(db): return await _list_simple(db, ShippingLine)
 async def create_shipping_line(db, name): return await _create_simple(db, ShippingLine, name)
 async def import_shipping_lines(db, file): return await _import_simple_excel(db, ShippingLine, file)
 
+async def list_bayan_types(db): return await _list_simple(db, BayanType)
+async def create_bayan_type(db, name): return await _create_simple(db, BayanType, name)
+async def import_bayan_types(db, file): return await _import_simple_excel(db, BayanType, file)
+
+async def list_consignees(db): return await _list_simple(db, Consignee)
+async def create_consignee(db, name): return await _create_simple(db, Consignee, name)
+async def import_consignees(db, file): return await _import_simple_excel(db, Consignee, file)
+
+async def list_outsourced_trucks(db: AsyncSession) -> list[OutsourcedTruck]:
+    result = await db.execute(select(OutsourcedTruck).where(OutsourcedTruck.is_active == True).order_by(OutsourcedTruck.plate_number))
+    return list(result.scalars().all())
+
+async def create_outsourced_truck(db: AsyncSession, plate: str, driver: str, contractor: str, nationality: str) -> OutsourcedTruck:
+    truck = OutsourcedTruck(plate_number=plate, driver_name=driver, contractor=contractor, nationality=nationality)
+    db.add(truck)
+    await db.commit()
+    await db.refresh(truck)
+    return truck
+
+async def import_outsourced_trucks_excel(db: AsyncSession, file) -> ExcelImportResult:
+    return await _import_trucks_excel_generic(db, OutsourcedTruck, file)
+
+async def deactivate_outsourced_truck(db: AsyncSession, truck_id: uuid.UUID) -> OutsourcedTruck:
+    result = await db.execute(select(OutsourcedTruck).where(OutsourcedTruck.id == truck_id))
+    truck = result.scalar_one_or_none()
+    if not truck:
+        raise HTTPException(status_code=404, detail="Outsourced truck not found")
+
+    from app.shipments.models import Container
+    from app.enums import ContainerStatus
+    in_use = await db.execute(
+        select(Container.id).where(
+            Container.outsourced_truck_id == truck_id,
+            Container.status.notin_([ContainerStatus.RETURNED, ContainerStatus.CLOSED, ContainerStatus.OFFLOADED]),
+        ).limit(1)
+    )
+    if in_use.scalar_one_or_none():
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot deactivate: outsourced truck is assigned to one or more active containers.",
+        )
+
+    truck.is_active = False
+    await db.commit()
+    await db.refresh(truck)
+    return truck
+
+
+async def _import_trucks_excel_generic(db: AsyncSession, model, file) -> ExcelImportResult:
+    from openpyxl import load_workbook
+    import io
+    content = await file.read()
+    wb = load_workbook(io.BytesIO(content), read_only=True)
+    ws = wb.active
+    rows = list(ws.iter_rows(min_row=2, values_only=True))
+
+    inserted, skipped, errors = 0, 0, []
+    for i, row in enumerate(rows, start=2):
+        if not any(row):
+            continue
+        try:
+            plate, driver, contractor, nationality = (str(c).strip() if c else "" for c in row[:4])
+            if not plate:
+                errors.append(f"Row {i}: plate number is required")
+                continue
+            existing = await db.execute(select(model).where(model.plate_number == plate))
+            if existing.scalar_one_or_none():
+                skipped += 1
+                continue
+            db.add(model(plate_number=plate, driver_name=driver, contractor=contractor, nationality=nationality))
+            inserted += 1
+        except Exception as e:
+            errors.append(f"Row {i}: {e}")
+
+    await db.commit()
+    return ExcelImportResult(inserted=inserted, skipped=skipped, errors=errors)
+
 
 # Deactivation wrappers — each checks for active FK references before setting is_active=False
 async def deactivate_product_type(db, record_id):
@@ -244,3 +361,19 @@ async def delete_loading_port(db, record_id):
 async def delete_shipping_line(db, record_id):
     from app.shipments.models import Shipment
     return await _delete_simple(db, ShippingLine, record_id, Shipment.shipping_line_id)
+
+async def delete_bayan_type(db, record_id):
+    from app.shipments.models import Shipment
+    return await _delete_simple(db, BayanType, record_id, Shipment.bayan_type_id)
+
+async def delete_consignee(db, record_id):
+    from app.shipments.models import Shipment
+    return await _delete_simple(db, Consignee, record_id, Shipment.consignee_id)
+
+async def deactivate_bayan_type(db, record_id):
+    from app.shipments.models import Shipment
+    return await _deactivate_simple(db, BayanType, record_id, Shipment.bayan_type_id, Shipment)
+
+async def deactivate_consignee(db, record_id):
+    from app.shipments.models import Shipment
+    return await _deactivate_simple(db, Consignee, record_id, Shipment.consignee_id, Shipment)

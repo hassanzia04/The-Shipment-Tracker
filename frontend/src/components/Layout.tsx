@@ -3,8 +3,29 @@ import { ReactNode } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
 import { useTheme } from '@/hooks/useTheme'
-import { Ship, LayoutDashboard, Settings, LogOut, Users, Moon, Sun, BarChart2, Truck, FolderOpen, Menu, X, TrendingUp, Database } from 'lucide-react'
+import { Ship, LayoutDashboard, Settings, LogOut, Users, Moon, Sun, BarChart2, Truck, FolderOpen, Menu, X, TrendingUp, Database, ClipboardList } from 'lucide-react'
 import clsx from 'clsx'
+
+type NavItem = { label: string; href: string; icon: React.ElementType }
+
+function getBottomNavItems(user: { team: string; is_admin: boolean } | null): NavItem[] {
+  const D = { label: 'Dashboard',   href: '/',           icon: LayoutDashboard }
+  const S = { label: 'Shipments',   href: '/shipments',  icon: Ship }
+  const R = { label: 'Reports',     href: '/reports',    icon: TrendingUp }
+  const T = { label: 'Trucks',      href: '/trucks',     icon: Truck }
+  const P = { label: 'PRO Tasks',   href: '/pro-tasks',  icon: ClipboardList }
+  const Y = { label: 'Productivity',href: '/productivity',icon: BarChart2 }
+
+  switch (user?.team) {
+    case 'CUSTOMER':   return [D, S, R]
+    case 'FFD':        return [D, S, R, P]
+    case 'MANAGEMENT': return [D, S, R, P]
+    case 'PRO':        return [D, S, R, Y]
+    case 'TRANSPORT':  return [D, S, T, R]
+    case 'DC':         return [D, S, R]
+    default:           return user?.is_admin ? [D, S, P, R] : [D, S, R]
+  }
+}
 
 interface Props { children: ReactNode }
 
@@ -64,6 +85,7 @@ export function Layout({ children }: Props) {
         {NAV.map(({ label, href, icon }) => navLink(href, label, icon))}
         {(user?.team === 'MANAGEMENT' || user?.team === 'PRO' || user?.is_admin) && navLink('/productivity', 'Productivity', BarChart2)}
         {(user?.team === 'FFD' || user?.team === 'MANAGEMENT' || user?.team === 'CUSTOMER' || user?.team === 'TRANSPORT' || user?.is_admin) && navLink('/reports', 'Reports', TrendingUp)}
+        {(user?.team === 'FFD' || user?.team === 'MANAGEMENT' || user?.is_admin) && navLink('/pro-tasks', 'PRO Tasks', ClipboardList)}
         {(user?.team === 'FFD' || user?.team === 'CUSTOMER' || user?.is_admin) && navLink('/masters', 'Masters', Database)}
         {user?.team === 'CUSTOMER' && navLink('/import', 'Create Shipment', FolderOpen)}
         {(user?.team === 'TRANSPORT' || user?.is_admin) && navLink('/trucks', 'Trucks', Truck)}
@@ -135,11 +157,46 @@ export function Layout({ children }: Props) {
         </header>
 
         <main className="flex-1 overflow-auto">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
+          <div className="max-w-[1600px] mx-auto px-4 sm:px-6 py-6 sm:py-8 pb-24 lg:pb-8">
             {children}
           </div>
         </main>
       </div>
+
+      {/* Mobile bottom nav */}
+      {(() => {
+        const bottomItems = getBottomNavItems(user)
+        return (
+          <nav className="lg:hidden fixed bottom-0 inset-x-0 z-20 bg-white dark:bg-gray-800 border-t dark:border-gray-700 flex items-stretch h-16">
+            {bottomItems.map(({ label, href, icon: Icon }) => {
+              const active = href === '/' ? location.pathname === '/' : location.pathname.startsWith(href)
+              return (
+                <Link
+                  key={href}
+                  to={href}
+                  className={clsx(
+                    'flex-1 flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium transition-colors',
+                    active
+                      ? 'text-blue-600 dark:text-blue-400'
+                      : 'text-gray-500 dark:text-gray-400'
+                  )}
+                >
+                  <Icon size={20} strokeWidth={active ? 2.5 : 1.8} />
+                  {label}
+                </Link>
+              )
+            })}
+            {/* More — opens sidebar */}
+            <button
+              onClick={() => setOpen(true)}
+              className="flex-1 flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium text-gray-500 dark:text-gray-400"
+            >
+              <Menu size={20} strokeWidth={1.8} />
+              More
+            </button>
+          </nav>
+        )
+      })()}
     </div>
   )
 }

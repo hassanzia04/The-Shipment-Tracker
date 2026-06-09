@@ -70,6 +70,16 @@ const STAGE_COLORS: Record<string, string> = {
   COMPLETED:   'bg-green-100 text-green-800',
 }
 
+function doValidityStyle(date: string | null): { color: string } {
+  if (!date) return { color: 'text-gray-400' }
+  const d = parseISO(date)
+  if (!isValid(d)) return { color: 'text-gray-400' }
+  const days = differenceInCalendarDays(d, new Date())
+  if (days < 0)  return { color: 'text-red-600 font-semibold' }
+  if (days <= 3)  return { color: 'text-amber-600 font-semibold' }
+  return { color: 'text-gray-600 dark:text-gray-300' }
+}
+
 function urgency(pullOutDate: string | null): { label: string; color: string; days: number | null } {
   if (!pullOutDate) return { label: 'No date', color: 'text-gray-400', days: null }
   const date = parseISO(pullOutDate)
@@ -306,7 +316,7 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
 }) {
   const qc = useQueryClient()
   const offset = (page - 1) * PAGE_SIZE
-  const colSpan = isFFD ? 10 : 9
+  const colSpan = isFFD ? 13 : 12
 
   const [editingDateId, setEditingDateId] = useState<string | null>(null)
   const [dateValue, setDateValue] = useState('')
@@ -376,10 +386,13 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
               <th className="text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">#</th>
               <SortableHeader label="BL Number"    column="bl"       sort={sort} onSort={toggle} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
               <SortableHeader label="Invoice"      column="invoice"  sort={sort} onSort={toggle} className="hidden md:table-cell px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
+              <th className="hidden lg:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap">Consignee</th>
               <SortableHeader label={isPRO ? 'My Task' : 'Stage'} column="stage" sort={sort} onSort={toggle} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
               <th className="text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap">Progress</th>
               <SortableHeader label="Pull-out Date" column="pull_out" sort={sort} onSort={toggle} className="hidden md:table-cell px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
               <SortableHeader label="Time Left"    column="time"     sort={sort} onSort={toggle} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
+              <th className="hidden xl:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap">ETA to Port</th>
+              <th className="hidden xl:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap">DO Validity</th>
               <th className="hidden lg:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap">AMLS Job#</th>
               <th />
               {isFFD && <th />}
@@ -417,6 +430,9 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                     </td>
                     <td className="px-3 py-3 font-semibold text-gray-900 dark:text-white">{s.bl_number}</td>
                     <td className="hidden md:table-cell px-3 py-3 text-gray-500 dark:text-gray-400">{s.invoice_number}</td>
+                    <td className="hidden lg:table-cell px-3 py-3 text-sm text-gray-600 dark:text-gray-300 max-w-[160px]">
+                      <span className="truncate block" title={s.consignee_name ?? undefined}>{s.consignee_name ?? <span className="text-gray-400 dark:text-gray-500 italic text-xs">—</span>}</span>
+                    </td>
                     <td className="px-3 py-3">
                       {isPRO && s.current_stage === 'IN_PROGRESS' ? (
                         <div className="flex flex-col gap-1">
@@ -526,6 +542,18 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                       )}
                     </td>
                     <td className={clsx('px-3 py-3 text-xs', u.color)}>{u.label}</td>
+                    <td className="hidden xl:table-cell px-3 py-3 text-xs text-gray-600 dark:text-gray-300 whitespace-nowrap">
+                      {formatDate(s.eta_at_port)}
+                    </td>
+                    <td className="hidden xl:table-cell px-3 py-3 whitespace-nowrap">
+                      {s.do_validity_date ? (
+                        <span className={clsx('text-xs', doValidityStyle(s.do_validity_date).color)}>
+                          {formatDate(s.do_validity_date)}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-gray-400">—</span>
+                      )}
+                    </td>
                     <td className="hidden lg:table-cell px-3 py-3">
                       {isFFD && editingAmlsId === s.id ? (
                         <div className="flex items-center gap-1">
@@ -798,15 +826,17 @@ export function ShipmentList() {
 
       {/* Controls — row 1: search + stage + view toggle */}
       <div className="flex flex-wrap gap-2 mb-2">
-        <div className="relative flex-1 min-w-[160px]">
-          <Search size={14} className="absolute left-3 top-2.5 text-gray-400" />
-          <input
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder="Search BL or invoice…"
-            className="w-full border dark:border-gray-600 dark:bg-gray-800 dark:text-white rounded-lg pl-8 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-        </div>
+        {view !== 'containers' && (
+          <div className="relative flex-1 min-w-[160px]">
+            <Search size={14} className="absolute left-3 top-2.5 text-gray-400" />
+            <input
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search BL or invoice…"
+              className="w-full border dark:border-gray-600 dark:bg-gray-800 dark:text-white rounded-lg pl-8 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+        )}
 
         {/* Stage dropdown — only in B/L table view */}
         {!isPRO && view !== 'containers' && (

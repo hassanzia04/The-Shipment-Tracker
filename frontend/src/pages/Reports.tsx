@@ -200,14 +200,14 @@ function HBar({ label, sub, value, max, colorClass, badge }: {
   )
 }
 
-function HoldDurationChart({ data }: { data: { entity: string; avg_hold_days: number | null; count: number }[] }) {
-  const withDuration = data.filter(d => d.avg_hold_days != null)
+function HoldDurationChart({ data }: { data: { entity: string; avg_hold_hours: number | null; count: number }[] }) {
+  const withDuration = data.filter(d => d.avg_hold_hours != null)
   if (withDuration.length === 0) return (
     <p className="text-sm text-gray-400 py-8 text-center">
       No resolved holds yet — duration data appears after a hold is released
     </p>
   )
-  const maxVal = Math.max(...withDuration.map(d => d.avg_hold_days!), 1)
+  const maxVal = Math.max(...withDuration.map(d => d.avg_hold_hours!), 1)
   const chartH = 120
 
   return (
@@ -215,16 +215,16 @@ function HoldDurationChart({ data }: { data: { entity: string; avg_hold_days: nu
       <div className="flex items-end gap-4" style={{ height: chartH + 28 }}>
         {withDuration.map((d, i) => {
           const c = ENTITY_COLOR[d.entity] ?? ENTITY_COLOR['OTHER']
-          const barH = Math.max((d.avg_hold_days! / maxVal) * chartH, 6)
+          const barH = Math.max((d.avg_hold_hours! / maxVal) * chartH, 6)
           return (
             <div key={i} className="flex-1 flex flex-col items-center justify-end gap-1.5">
               <span className="text-sm font-bold text-gray-700 dark:text-gray-200 leading-none tabular-nums">
-                {d.avg_hold_days}d
+                {d.avg_hold_hours}h
               </span>
               <div
                 className={clsx('w-full rounded-t-lg cursor-default', c.bar)}
                 style={{ height: `${barH}px` }}
-                title={`${ENTITY_LABELS[d.entity as ExternalEntity] ?? d.entity}: ${d.avg_hold_days}d avg · ${d.count} hold${d.count !== 1 ? 's' : ''}`}
+                title={`${ENTITY_LABELS[d.entity as ExternalEntity] ?? d.entity}: ${d.avg_hold_hours}h avg · ${d.count} hold${d.count !== 1 ? 's' : ''}`}
               />
             </div>
           )
@@ -248,11 +248,19 @@ function HoldDurationChart({ data }: { data: { entity: string; avg_hold_days: nu
 }
 
 function ShippingLineTable({ rows }: {
-  rows: { shipping_line: string; shipment_count: number; hold_count: number; avg_hold_days: number | null; top_reason: string | null }[]
+  rows: { shipping_line: string; shipment_count: number; hold_count: number; avg_hold_hours: number | null; top_reason: string | null }[]
 }) {
   if (!rows || rows.length === 0) return (
     <p className="text-sm text-gray-400 py-4 text-center">No shipping line data for this period</p>
   )
+
+  function fmtHours(h: number): string {
+    if (h < 24) return `${h}h`
+    const days = Math.floor(h / 24)
+    const rem = Math.round(h % 24)
+    return rem > 0 ? `${days}d ${rem}h` : `${days}d`
+  }
+
   return (
     <div className="overflow-x-auto -mx-1">
       <table className="w-full text-sm border-collapse">
@@ -260,39 +268,66 @@ function ShippingLineTable({ rows }: {
           <tr className="border-b dark:border-gray-700">
             <th className="text-left py-2.5 px-3 text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Shipping Line</th>
             <th className="text-center py-2.5 px-3 text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Shipments</th>
-            <th className="text-center py-2.5 px-3 text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Holds</th>
+            <th className="text-center py-2.5 px-3 text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+              <span title="Number of holds assigned against this shipping line">Holds</span>
+            </th>
+            <th className="text-center py-2.5 px-3 text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+              <span title="Holds per shipment">Hold Rate</span>
+            </th>
             <th className="text-left py-2.5 px-3 text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Top Reason</th>
-            <th className="text-right py-2.5 px-3 text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Avg Hold</th>
+            <th className="text-right py-2.5 px-3 text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+              <span title="Average duration of resolved holds only. 'Open' means all holds are still active.">Avg Hold Duration</span>
+            </th>
           </tr>
         </thead>
         <tbody className="divide-y divide-gray-100 dark:divide-gray-700/60">
-          {rows.map((row, i) => (
-            <tr key={i} className="hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors">
-              <td className="py-3 px-3 font-semibold text-gray-800 dark:text-gray-100">{row.shipping_line}</td>
-              <td className="py-3 px-3 text-center tabular-nums text-gray-600 dark:text-gray-300">{row.shipment_count}</td>
-              <td className="py-3 px-3 text-center">
-                {row.hold_count > 0 ? (
-                  <span className="inline-flex items-center justify-center min-w-[1.5rem] px-1.5 py-0.5 rounded-full text-xs font-bold bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 tabular-nums">
-                    {row.hold_count}
-                  </span>
-                ) : (
-                  <span className="text-gray-300 dark:text-gray-600 text-xs">—</span>
-                )}
-              </td>
-              <td className="py-3 px-3 text-gray-600 dark:text-gray-300 max-w-[200px]">
-                {row.top_reason ? (
-                  <span className="truncate block text-xs" title={HOLD_REASON_LABELS[row.top_reason as HoldReason] ?? row.top_reason}>
-                    {HOLD_REASON_LABELS[row.top_reason as HoldReason] ?? row.top_reason}
-                  </span>
-                ) : (
-                  <span className="text-gray-300 dark:text-gray-600 text-xs">—</span>
-                )}
-              </td>
-              <td className="py-3 px-3 text-right tabular-nums text-gray-600 dark:text-gray-300 text-xs font-medium">
-                {row.avg_hold_days != null ? `${row.avg_hold_days}d` : <span className="text-gray-300 dark:text-gray-600">—</span>}
-              </td>
-            </tr>
-          ))}
+          {rows.map((row, i) => {
+            const holdRate = row.shipment_count > 0 ? (row.hold_count / row.shipment_count) : 0
+            return (
+              <tr key={i} className="hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors">
+                <td className="py-3 px-3 font-semibold text-gray-800 dark:text-gray-100">{row.shipping_line}</td>
+                <td className="py-3 px-3 text-center tabular-nums text-gray-600 dark:text-gray-300">{row.shipment_count}</td>
+                <td className="py-3 px-3 text-center">
+                  {row.hold_count > 0 ? (
+                    <span className="inline-flex items-center justify-center min-w-[1.5rem] px-1.5 py-0.5 rounded-full text-xs font-bold bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 tabular-nums">
+                      {row.hold_count}
+                    </span>
+                  ) : (
+                    <span className="text-gray-300 dark:text-gray-600 text-xs">—</span>
+                  )}
+                </td>
+                <td className="py-3 px-3 text-center tabular-nums text-xs">
+                  {row.hold_count > 0 ? (
+                    <span className={holdRate >= 0.5 ? 'text-red-600 dark:text-red-400 font-semibold' : holdRate >= 0.25 ? 'text-amber-600 dark:text-amber-400 font-medium' : 'text-gray-500 dark:text-gray-400'}>
+                      {Math.round(holdRate * 100)}%
+                    </span>
+                  ) : (
+                    <span className="text-gray-300 dark:text-gray-600">—</span>
+                  )}
+                </td>
+                <td className="py-3 px-3 text-gray-600 dark:text-gray-300 max-w-[200px]">
+                  {row.top_reason ? (
+                    <span className="truncate block text-xs" title={HOLD_REASON_LABELS[row.top_reason as HoldReason] ?? row.top_reason}>
+                      {HOLD_REASON_LABELS[row.top_reason as HoldReason] ?? row.top_reason}
+                    </span>
+                  ) : (
+                    <span className="text-gray-300 dark:text-gray-600 text-xs">—</span>
+                  )}
+                </td>
+                <td className="py-3 px-3 text-right tabular-nums text-xs font-medium">
+                  {row.avg_hold_hours != null ? (
+                    <span className="text-gray-600 dark:text-gray-300">{fmtHours(row.avg_hold_hours)}</span>
+                  ) : row.hold_count > 0 ? (
+                    <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400 font-medium" title="All holds still active — no resolved holds to average">
+                      Open
+                    </span>
+                  ) : (
+                    <span className="text-gray-300 dark:text-gray-600">—</span>
+                  )}
+                </td>
+              </tr>
+            )
+          })}
         </tbody>
       </table>
     </div>
@@ -522,8 +557,8 @@ function OperationalReports({ data, fromLabel, toLabel }: { data: any; fromLabel
   const rejPct   = Math.round(((data.rejection?.rejected || 0) / rejTotal) * 100)
 
   const maxHoldCount = Math.max(...(data.holds_by_entity || []).map((h: any) => h.count), 1)
-  const maxStageDays = Math.max(...(data.stage_durations || []).map((d: any) => d.avg_days), 1)
-  const maxTaskDays  = Math.max(...(data.task_durations  || []).map((t: any) => t.avg_days), 1)
+  const maxStageHours = Math.max(...(data.stage_durations || []).map((d: any) => d.avg_hours), 1)
+  const maxTaskHours  = Math.max(...(data.task_durations  || []).map((t: any) => t.avg_hours), 1)
 
   const stageOrder = ['CUSTOMER', 'FFD_REVIEW', 'IN_PROGRESS', 'TRANSPORT', 'DC_TRANSPORT', 'COMPLETED']
   const sortedStages = [...(data.stage_durations || [])].sort(
@@ -602,7 +637,7 @@ function OperationalReports({ data, fromLabel, toLabel }: { data: any; fromLabel
 
       {/* Row 2: Stage + Task durations */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <SectionCard title="Avg Time per Stage" sub={`Days per stage — ${periodSub}`} accentClass="bg-indigo-500">
+        <SectionCard title="Avg Time per Stage" sub={`Hours per stage — ${periodSub}`} accentClass="bg-indigo-500">
           {sortedStages.length > 0 ? (
             <div className="space-y-4">
               {sortedStages.map((s: any) => (
@@ -610,10 +645,10 @@ function OperationalReports({ data, fromLabel, toLabel }: { data: any; fromLabel
                   key={s.stage}
                   label={STAGE_LABELS[s.stage as ShipmentStage] ?? s.stage}
                   sub={`${s.count} transitions`}
-                  value={s.avg_days}
-                  max={maxStageDays}
+                  value={s.avg_hours}
+                  max={maxStageHours}
                   colorClass={STAGE_COLOR[s.stage] ?? 'bg-gray-400'}
-                  badge={<span className="text-xs font-semibold text-gray-600 dark:text-gray-300 tabular-nums">{s.avg_days}d</span>}
+                  badge={<span className="text-xs font-semibold text-gray-600 dark:text-gray-300 tabular-nums">{s.avg_hours}h</span>}
                 />
               ))}
             </div>
@@ -624,16 +659,16 @@ function OperationalReports({ data, fromLabel, toLabel }: { data: any; fromLabel
           {data.task_durations?.length > 0 ? (
             <div className="space-y-4">
               {(data.task_durations as any[])
-                .sort((a, b) => b.avg_days - a.avg_days)
+                .sort((a, b) => b.avg_hours - a.avg_hours)
                 .map((t: any) => (
                   <HBar
                     key={t.task}
                     label={TASK_LABEL[t.task] ?? t.task}
                     sub={`${t.count} tasks`}
-                    value={t.avg_days}
-                    max={maxTaskDays}
+                    value={t.avg_hours}
+                    max={maxTaskHours}
                     colorClass={TASK_COLOR[t.task] ?? 'bg-gray-400'}
-                    badge={<span className="text-xs font-semibold text-gray-600 dark:text-gray-300 tabular-nums">{t.avg_days}d</span>}
+                    badge={<span className="text-xs font-semibold text-gray-600 dark:text-gray-300 tabular-nums">{t.avg_hours}h</span>}
                   />
                 ))}
             </div>
@@ -655,9 +690,9 @@ function OperationalReports({ data, fromLabel, toLabel }: { data: any; fromLabel
                         {ENTITY_LABELS[h.entity as ExternalEntity] ?? h.entity}
                       </span>
                       <div className="flex items-center gap-3">
-                        {h.avg_hold_days != null && (
+                        {h.avg_hold_hours != null && (
                           <span className="text-xs text-gray-500 dark:text-gray-400 tabular-nums">
-                            avg {h.avg_hold_days}d
+                            avg {h.avg_hold_hours}h
                           </span>
                         )}
                         <span className={clsx('text-xl font-bold tabular-nums', c.text)}>{h.count}</span>

@@ -1,4 +1,5 @@
 from celery import Celery
+from celery.schedules import crontab
 from app.config import settings
 
 celery_app = Celery(
@@ -16,6 +17,10 @@ celery_app.conf.update(
         "check-daily-report": {
             "task": "notifications.check_daily_report",
             "schedule": 300.0,  # every 5 minutes
+        },
+        "send-do-expiry-alerts": {
+            "task": "notifications.send_do_expiry_alerts",
+            "schedule": crontab(hour=4, minute=30),  # 08:30 Muscat (UTC+4)
         },
     },
 )

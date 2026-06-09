@@ -5,7 +5,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 from app.database import Base
 from app.auth.models import User  # noqa: F401 — needed for relationship
-from app.masters.models import OffloadingPoint, ProductType, LoadingPort, ShippingLine  # noqa: F401 — needed for relationships
+from app.masters.models import OffloadingPoint, ProductType, LoadingPort, ShippingLine, BayanType, Consignee  # noqa: F401 — needed for relationships
 from app.enums import (
     ShipmentStage, TaskType, TaskStatus, ExternalEntity,
     HoldReason, ContainerStatus, EventType
@@ -34,6 +34,9 @@ class Shipment(Base):
     do_validity_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     container_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     amls_job_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    bayan_type_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("bayan_types.id"), nullable=True)
+    eta_at_port: Mapped[date | None] = mapped_column(Date, nullable=True)
+    consignee_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("consignees.id"), nullable=True)
 
     tasks: Mapped[list["ShipmentTask"]] = relationship("ShipmentTask", back_populates="shipment", order_by="ShipmentTask.created_at")
     events: Mapped[list["ShipmentEvent"]] = relationship("ShipmentEvent", back_populates="shipment", order_by="ShipmentEvent.created_at")
@@ -42,6 +45,8 @@ class Shipment(Base):
     product_type: Mapped["ProductType | None"] = relationship("ProductType", foreign_keys=[product_type_id])
     loading_port: Mapped["LoadingPort | None"] = relationship("LoadingPort", foreign_keys=[loading_port_id])
     shipping_line: Mapped["ShippingLine | None"] = relationship("ShippingLine", foreign_keys=[shipping_line_id])
+    bayan_type: Mapped["BayanType | None"] = relationship("BayanType", foreign_keys=[bayan_type_id])
+    consignee: Mapped["Consignee | None"] = relationship("Consignee", foreign_keys=[consignee_id])
 
     @property
     def offloading_point_name(self) -> str | None:
@@ -58,6 +63,14 @@ class Shipment(Base):
     @property
     def shipping_line_name(self) -> str | None:
         return self.shipping_line.name if self.shipping_line else None
+
+    @property
+    def bayan_type_name(self) -> str | None:
+        return self.bayan_type.name if self.bayan_type else None
+
+    @property
+    def consignee_name(self) -> str | None:
+        return self.consignee.name if self.consignee else None
 
     @property
     def docs_approved(self) -> bool:
@@ -215,6 +228,8 @@ class Container(Base):
     arrived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     actual_pull_out_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     offloaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    outsourced_truck_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("outsourced_trucks.id"), nullable=True)
+    outsourced_expected_arrival_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revalidation_remark: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)

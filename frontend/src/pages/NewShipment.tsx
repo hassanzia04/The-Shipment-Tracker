@@ -19,6 +19,9 @@ export function NewShipment() {
     loading_port_id: '',
     shipping_line_id: '',
     offloading_point_id: '',
+    bayan_type_id: '',
+    eta_at_port: '',
+    consignee_id: '',
     remark: '',
   })
 
@@ -26,6 +29,8 @@ export function NewShipment() {
   const { data: loadingPorts = [] } = useQuery({ queryKey: ['loadingPorts'], queryFn: () => mastersApi.loadingPorts.list().then(r => r.data) })
   const { data: shippingLines = [] } = useQuery({ queryKey: ['shippingLines'], queryFn: () => mastersApi.shippingLines.list().then(r => r.data) })
   const { data: offloadingPoints = [] } = useQuery({ queryKey: ['offloadingPoints'], queryFn: () => mastersApi.offloadingPoints.list().then(r => r.data) })
+  const { data: bayanTypes = [] } = useQuery({ queryKey: ['bayanTypes'], queryFn: () => mastersApi.bayanTypes.list().then(r => r.data) })
+  const { data: consignees = [] } = useQuery({ queryKey: ['consignees'], queryFn: () => mastersApi.consignees.list().then(r => r.data) })
 
   function set(field: string, value: string) {
     setForm(p => ({ ...p, [field]: value }))
@@ -46,6 +51,14 @@ export function NewShipment() {
       toast.error('Product type, loading port, shipping line and offloading location are required')
       return
     }
+    if (!form.bayan_type_id) {
+      toast.error('Bayan type is required')
+      return
+    }
+    if (!form.consignee_id) {
+      toast.error('Consignee is required')
+      return
+    }
     setSubmitting(true)
     try {
       const { data } = await shipmentsApi.create({
@@ -56,6 +69,10 @@ export function NewShipment() {
         product_type_id: form.product_type_id || undefined,
         loading_port_id: form.loading_port_id || undefined,
         shipping_line_id: form.shipping_line_id || undefined,
+        offloading_point_id: form.offloading_point_id || undefined,
+        bayan_type_id: form.bayan_type_id || undefined,
+        eta_at_port: form.eta_at_port || undefined,
+        consignee_id: form.consignee_id || undefined,
         remark: form.remark.trim() || undefined,
       })
       toast.success('Shipment created — please upload your documents')
@@ -124,6 +141,16 @@ export function NewShipment() {
           <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Helps FFD team prioritise your shipment</p>
         </div>
 
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">ETA at Port</label>
+          <input
+            type="date"
+            value={form.eta_at_port}
+            onChange={e => set('eta_at_port', e.target.value)}
+            className="w-full border dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
+
         <CreatableSelect
           label="Product Type"
           value={form.product_type_id}
@@ -172,6 +199,32 @@ export function NewShipment() {
           onAdd={async name => {
             const { data } = await mastersApi.offloadingPoints.create(name)
             qc.invalidateQueries({ queryKey: ['offloadingPoints'] })
+            return data
+          }}
+        />
+
+        <CreatableSelect
+          label="Bayan Type"
+          value={form.bayan_type_id}
+          onChange={v => set('bayan_type_id', v)}
+          options={bayanTypes}
+          required
+          onAdd={async name => {
+            const { data } = await mastersApi.bayanTypes.create(name)
+            qc.invalidateQueries({ queryKey: ['bayanTypes'] })
+            return data
+          }}
+        />
+
+        <CreatableSelect
+          label="Consignee"
+          value={form.consignee_id}
+          onChange={v => set('consignee_id', v)}
+          options={consignees}
+          required
+          onAdd={async name => {
+            const { data } = await mastersApi.consignees.create(name)
+            qc.invalidateQueries({ queryKey: ['consignees'] })
             return data
           }}
         />

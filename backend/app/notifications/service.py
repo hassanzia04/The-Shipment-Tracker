@@ -73,6 +73,18 @@ TEMPLATES: dict[str, dict] = {
         "subject": "FFD Tracker — Container returned to FFD",
         "body": "Transport has returned a container from BL: {bl_number} to FFD (no truck available). Please log in to review and take action.",
     },
+    "documents_resubmitted": {
+        "subject": "FFD Tracker — Shipment re-submitted after send-back",
+        "body": "BL: {bl_number} has been re-submitted by the customer after your send-back. Please log in to resume processing.",
+    },
+    "documents_rejected": {
+        "subject": "FFD Tracker — Documents returned for correction",
+        "body": "Your documents for BL: {bl_number} have been reviewed and returned by the FFD team. Please log in to review the remarks and re-upload.",
+    },
+    "bayan_payment_confirmed": {
+        "subject": "FFD Tracker — Bayan payment confirmed by customer",
+        "body": "The customer has confirmed the Bayan payment for BL: {bl_number}. Please log in to continue processing.",
+    },
     "invitation": {
         "subject": "You have been invited to FFD Tracker",
         "body": "You have been invited to join FFD Tracker as {team}. Click the link below to set up your account:\n{link}",
@@ -120,11 +132,12 @@ async def notify_team(db: AsyncSession, shipment, team: Team, template_key: str,
         try:
             send_email_task.delay(
                 user.email,
-                template.get("subject", "FFD Tracker"),
+                f"{template.get('subject', 'FFD Tracker')} — BL: {shipment.bl_number}",
                 f"<p>{body}</p>",
                 cc_emails or None,
             )
         except Exception:
+            notif.queue_failed = True
             logger.exception("Failed to queue email to %s (broker unavailable?)", user.email)
 
     await db.commit()
@@ -154,11 +167,12 @@ async def notify_user(db: AsyncSession, shipment, user: User, template_key: str,
     try:
         send_email_task.delay(
             user.email,
-            template.get("subject", "FFD Tracker"),
+            f"{template.get('subject', 'FFD Tracker')} — BL: {shipment.bl_number}",
             f"<p>{body}</p>",
             cc_emails or None,
         )
     except Exception:
+        notif.queue_failed = True
         logger.exception("Failed to queue email to %s (broker unavailable?)", user.email)
     await db.commit()
 

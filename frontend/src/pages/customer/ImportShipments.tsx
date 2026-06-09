@@ -14,6 +14,7 @@ import clsx from 'clsx'
 
 interface ImportResult {
   inserted: number
+  inserted_bls: string[]
   skipped: number
   errors: string[]
 }
@@ -210,6 +211,18 @@ export function ImportShipments() {
                 <X size={14} />
               </button>
             </div>
+
+            {/* Inserted BL list */}
+            {importResult.inserted_bls.length > 0 && (
+              <div className="bg-green-50 dark:bg-green-900/10 border border-green-200 dark:border-green-800 rounded-lg p-3 space-y-1.5 max-h-48 overflow-y-auto">
+                <p className="text-xs font-semibold text-green-700 dark:text-green-400 mb-2">
+                  Imported BL numbers:
+                </p>
+                {importResult.inserted_bls.map((bl, i) => (
+                  <p key={i} className="text-xs text-green-700 dark:text-green-400">• {bl}</p>
+                ))}
+              </div>
+            )}
 
             {/* Error detail list */}
             {importResult.errors.length > 0 && (

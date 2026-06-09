@@ -1,11 +1,12 @@
 import { api } from '@/lib/api'
-import type { Truck, MasterItem } from '@/types'
+import type { Truck, MasterItem, OutsourcedTruck } from '@/types'
 
 export const mastersApi = {
   trucks: {
     list: () => api.get<Truck[]>('/masters/trucks'),
     create: (data: { plate_number: string; driver_name: string; contractor: string; nationality: string }) =>
       api.post<Truck>('/masters/trucks', data),
+    delete: (id: string) => api.delete(`/masters/trucks/${id}`),
     import: (file: File) => {
       const form = new FormData()
       form.append('file', file)
@@ -65,5 +66,28 @@ export const mastersApi = {
       return api.post('/masters/shipping-lines/import', form, { headers: { 'Content-Type': 'multipart/form-data' } })
     },
     template: () => api.get('/masters/shipping-lines/template', { responseType: 'blob' }),
+  },
+  bayanTypes: {
+    list: () => api.get<MasterItem[]>('/masters/bayan-types'),
+    create: (name: string) => api.post<MasterItem>('/masters/bayan-types', { name }),
+    delete: (id: string) => api.delete(`/masters/bayan-types/${id}`),
+  },
+  consignees: {
+    list: () => api.get<MasterItem[]>('/masters/consignees'),
+    create: (name: string) => api.post<MasterItem>('/masters/consignees', { name }),
+    delete: (id: string) => api.delete(`/masters/consignees/${id}`),
+  },
+  outsourcedTrucks: {
+    list: () => api.get<OutsourcedTruck[]>('/masters/outsourced-trucks'),
+    create: (data: { plate_number: string; driver_name: string; contractor: string; nationality: string }) =>
+      api.post<OutsourcedTruck>('/masters/outsourced-trucks', data),
+    delete: (id: string) => api.delete(`/masters/outsourced-trucks/${id}`),
+    deactivate: (id: string) => api.patch<OutsourcedTruck>(`/masters/outsourced-trucks/${id}/deactivate`),
+    import: (file: File) => {
+      const form = new FormData()
+      form.append('file', file)
+      return api.post('/masters/outsourced-trucks/import', form, { headers: { 'Content-Type': 'multipart/form-data' } })
+    },
+    template: () => api.get('/masters/outsourced-trucks/template', { responseType: 'blob' }),
   },
 }

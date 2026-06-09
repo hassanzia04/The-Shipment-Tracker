@@ -42,8 +42,9 @@ const CONTAINER_STATUS_CONFIG = [
   { key: 'ASSIGNED',        label: 'Trucks Assigned',     color: 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300' },
   { key: 'IN_TRANSIT',      label: 'In Transit',          color: 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400' },
   { key: 'BREAKDOWN',       label: 'Breakdown',           color: 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400' },
-  { key: 'CCRO_RETURNED',   label: 'With FFD',            color: 'bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400' },
-  { key: 'DO_REVALIDATION', label: 'Pending Revalidation', color: 'bg-rose-100 dark:bg-rose-900/30 text-rose-700 dark:text-rose-400' },
+  { key: 'CCRO_RETURNED',       label: 'With FFD',            color: 'bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400' },
+  { key: 'OUTSOURCED_TRANSPORT', label: 'Outsourced Transport', color: 'bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-400' },
+  { key: 'DO_REVALIDATION',     label: 'Pending Revalidation', color: 'bg-rose-100 dark:bg-rose-900/30 text-rose-700 dark:text-rose-400' },
   { key: 'AT_DC',           label: 'Reported to DC',      color: 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400' },
   { key: 'OFFLOADED',       label: 'Offloaded',           color: 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400' },
   { key: 'RETURNED',        label: 'Returned',            color: 'bg-teal-100 dark:bg-teal-900/30 text-teal-700 dark:text-teal-400' },
@@ -119,6 +120,7 @@ export function Dashboard() {
   const [docStatusOpen, setDocStatusOpen] = useState(false)
   const [holdsOpen, setHoldsOpen] = useState(true)
   const [volumeOpen, setVolumeOpen] = useState(true)
+  const [allShipmentsOpen, setAllShipmentsOpen] = useState(false)
   const [aiSummary, setAiSummary] = useState<string | null>(null)
   const [aiLoading, setAiLoading] = useState(false)
 
@@ -721,11 +723,17 @@ export function Dashboard() {
 
       {/* ── All active shipments table ── */}
       <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-xl overflow-hidden">
-        <div className="px-5 py-4 border-b dark:border-gray-700 flex items-center justify-between">
+        <button
+          onClick={() => setAllShipmentsOpen(o => !o)}
+          className="w-full px-5 py-4 flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-700/40 transition-colors"
+        >
           <h2 className="font-semibold text-gray-800 dark:text-gray-100">All Active Shipments</h2>
-          <span className="text-xs text-gray-400">{shipments.length} shipments</span>
-        </div>
-        <div className="overflow-x-auto">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-400">{shipments.length} shipments</span>
+            <ChevronDown size={16} className={clsx('text-gray-400 transition-transform duration-200', allShipmentsOpen && 'rotate-180')} />
+          </div>
+        </button>
+        {allShipmentsOpen && <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-gray-50 dark:bg-gray-700/50 border-b dark:border-gray-700">
               <tr>
@@ -794,7 +802,7 @@ export function Dashboard() {
               })}
             </tbody>
           </table>
-        </div>
+        </div>}
       </div>
     </div>
   )

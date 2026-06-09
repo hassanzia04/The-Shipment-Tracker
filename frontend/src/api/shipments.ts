@@ -22,6 +22,10 @@ export const shipmentsApi = {
     product_type_id?: string
     loading_port_id?: string
     shipping_line_id?: string
+    offloading_point_id?: string
+    bayan_type_id?: string
+    eta_at_port?: string
+    consignee_id?: string
     remark?: string
   }) => api.post<Shipment>('/shipments', data),
 
@@ -47,7 +51,7 @@ export const shipmentsApi = {
 
   openCcro: (id: string) => api.post<Shipment>(`/shipments/${id}/open-ccro`),
 
-  delegateCcroRop: (id: string, remark?: string) =>
+  delegateCcroRop: (id: string, remark: string) =>
     api.post<Shipment>(`/shipments/${id}/delegate-ccro-rop`, { remark }),
 
   requestBayanPayment: (id: string, remark?: string) =>
@@ -110,6 +114,9 @@ export const shipmentsApi = {
   closeContainer: (shipmentId: string, containerId: string, remark: string) =>
     api.post<Shipment>(`/shipments/${shipmentId}/containers/${containerId}/close-container`, { remark }),
 
+  assignOutsourcedTruck: (shipmentId: string, containerId: string, data: { outsourced_truck_id: string; expected_arrival_at: string }) =>
+    api.post<Shipment>(`/shipments/${shipmentId}/containers/${containerId}/assign-outsourced-truck`, data),
+
   markReturned: (id: string, container_id: string) =>
     api.post<Shipment>(`/shipments/${id}/mark-returned`, { container_id }),
 
@@ -157,7 +164,7 @@ export const shipmentsApi = {
   importExcel: (file: File) => {
     const form = new FormData()
     form.append('file', file)
-    return api.post<{ inserted: number; skipped: number; errors: string[] }>(
+    return api.post<{ inserted: number; inserted_bls: string[]; skipped: number; errors: string[] }>(
       '/shipments/import',
       form,
       { headers: { 'Content-Type': 'multipart/form-data' } },

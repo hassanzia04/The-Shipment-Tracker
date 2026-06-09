@@ -825,48 +825,17 @@ export function ShipmentDetail() {
                       </button>
                     )}
                     {team === 'FFD' && c.status === 'CCRO_RETURNED' && (
-                      <>
-                        <button
-                          onClick={() => action(() => shipmentsApi.resetContainerToTransport(id!, c.id), 'Container re-queued to Transport')}
-                          disabled={submitting}
-                          className="text-xs bg-blue-600 text-white px-2.5 py-1 rounded hover:bg-blue-700 disabled:opacity-50"
-                        >
-                          Resend to Transport
-                        </button>
-                        <button
-                          onClick={() => { setClosingContainerId(c.id); setCloseRemark('') }}
-                          disabled={submitting}
-                          className="text-xs border border-gray-400 text-gray-600 dark:text-gray-300 px-2.5 py-1 rounded hover:bg-gray-100 dark:hover:bg-gray-600 disabled:opacity-50"
-                        >
-                          Close
-                        </button>
-                      </>
+                      <button
+                        onClick={() => action(() => shipmentsApi.resetContainerToTransport(id!, c.id), 'Container re-queued to Transport')}
+                        disabled={submitting}
+                        className="text-xs bg-blue-600 text-white px-2.5 py-1 rounded hover:bg-blue-700 disabled:opacity-50"
+                      >
+                        Resend to Transport
+                      </button>
                     )}
                   </div>
                 </div>
 
-                {/* FFD: close form for CCRO_RETURNED containers */}
-                {team === 'FFD' && c.status === 'CCRO_RETURNED' && closingContainerId === c.id && (
-                  <div className="pt-2 border-t dark:border-gray-600 space-y-2">
-                    <p className="text-xs font-medium text-gray-700 dark:text-gray-300">Close container — enter a remark to record why</p>
-                    <textarea
-                      value={closeRemark}
-                      onChange={e => setCloseRemark(e.target.value)}
-                      placeholder="Reason for closing (required)…"
-                      className="w-full text-xs border dark:border-gray-600 rounded p-2 h-14 resize-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400"
-                    />
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => action(() => shipmentsApi.closeContainer(id!, c.id, closeRemark), 'Container closed').then(() => setClosingContainerId(null))}
-                        disabled={submitting || !closeRemark.trim()}
-                        className="text-xs bg-gray-700 text-white px-3 py-1.5 rounded hover:bg-gray-800 disabled:opacity-50"
-                      >
-                        {submitting ? 'Saving…' : 'Confirm Close'}
-                      </button>
-                      <button onClick={() => setClosingContainerId(null)} className="text-xs text-gray-500 dark:text-gray-400">Cancel</button>
-                    </div>
-                  </div>
-                )}
 
                 {/* CCRO upload slot — one per container, FFD when CCRO task is active */}
                 {team === 'FFD' && !!ccroTask && stage === 'IN_PROGRESS' && (
@@ -1689,6 +1658,24 @@ function TransportDcLayout({ shipment, trucks, team, stage, submitting, action, 
             <div>
               <p className="text-xs text-gray-500 dark:text-gray-400">Offloading Location</p>
               <p className="font-medium dark:text-gray-100">{shipment.offloading_point_name}</p>
+            </div>
+          )}
+          {shipment.eta_at_port && (
+            <div>
+              <p className="text-xs text-gray-500 dark:text-gray-400">ETA at Port</p>
+              <p className="font-medium dark:text-gray-100">{formatDate(shipment.eta_at_port)}</p>
+            </div>
+          )}
+          {shipment.bayan_type_name && (
+            <div>
+              <p className="text-xs text-gray-500 dark:text-gray-400">Bayan Type</p>
+              <p className="font-medium dark:text-gray-100">{shipment.bayan_type_name}</p>
+            </div>
+          )}
+          {shipment.consignee_name && (
+            <div>
+              <p className="text-xs text-gray-500 dark:text-gray-400">Consignee</p>
+              <p className="font-medium dark:text-gray-100">{shipment.consignee_name}</p>
             </div>
           )}
         </div>

@@ -266,6 +266,11 @@ async def close_container(shipment_id: uuid.UUID, container_id: uuid.UUID, body:
     return await service.close_container(db, shipment_id, container_id, actor, body.remark)
 
 
+@router.post("/{shipment_id}/containers/{container_id}/assign-outsourced-truck", response_model=schemas.ShipmentOut)
+async def assign_outsourced_truck(shipment_id: uuid.UUID, container_id: uuid.UUID, body: schemas.AssignOutsourcedTruckRequest, db: AsyncSession = Depends(get_db), actor: User = Depends(get_current_user)):
+    return await service.assign_outsourced_truck(db, shipment_id, actor, container_id, body.outsourced_truck_id, body.expected_arrival_at)
+
+
 @router.post("/{shipment_id}/mark-returned", response_model=schemas.ShipmentOut)
 async def mark_returned(shipment_id: uuid.UUID, body: schemas.MarkReturnedRequest, db: AsyncSession = Depends(get_db), actor: User = Depends(get_current_user)):
     return await service.mark_returned(db, shipment_id, actor, body.container_id)

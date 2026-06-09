@@ -16,6 +16,7 @@ class Notification(Base):
     template: Mapped[str] = mapped_column(String(100), nullable=False)
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     is_read: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    queue_failed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)

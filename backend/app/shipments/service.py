@@ -9,7 +9,7 @@ from openpyxl import load_workbook, Workbook
 
 from app.shipments.models import Shipment, ShipmentTask, ShipmentEvent, Container, ContainerEvent
 from app.auth.models import User
-from app.masters.models import ProductType, LoadingPort, ShippingLine, OffloadingPoint
+from app.masters.models import ProductType, LoadingPort, ShippingLine, OffloadingPoint, OutsourcedTruck, BayanType, Consignee
 from app.enums import (
     ShipmentStage, TaskType, TaskStatus, ExternalEntity,
     HoldReason, ContainerStatus, EventType, Team, DocumentType,
@@ -30,6 +30,8 @@ async def _get_shipment(db: AsyncSession, shipment_id: uuid.UUID) -> Shipment:
             selectinload(Shipment.product_type),
             selectinload(Shipment.loading_port),
             selectinload(Shipment.shipping_line),
+            selectinload(Shipment.bayan_type),
+            selectinload(Shipment.consignee),
         )
         .where(Shipment.id == shipment_id)
     )
@@ -98,6 +100,7 @@ async def create_shipment(
     container_count: int,
     pull_out_date=None, product_type_id=None, loading_port_id=None,
     shipping_line_id=None, offloading_point_id=None,
+    bayan_type_id=None, eta_at_port=None, consignee_id=None,
     remark: str | None = None,
 ) -> Shipment:
     existing_bl = await db.execute(select(Shipment).where(Shipment.bl_number == bl_number))
@@ -121,6 +124,9 @@ async def create_shipment(
         loading_port_id=loading_port_id,
         shipping_line_id=shipping_line_id,
         offloading_point_id=offloading_point_id,
+        bayan_type_id=bayan_type_id,
+        eta_at_port=eta_at_port,
+        consignee_id=consignee_id,
     )
     db.add(shipment)
     await db.flush()
@@ -128,9 +134,6 @@ async def create_shipment(
     event_remark = f"{containers_note} — {remark}" if remark else containers_note
     await _record_event(db, shipment, EventType.SHIPMENT_CREATED, actor, remark=event_remark)
     await db.commit()
-
-    from app.notifications.service import notify_team
-    await notify_team(db, shipment, Team.FFD, "shipment_created")
     return await _get_shipment(db, shipment.id)
 
 
@@ -401,6 +404,7 @@ async def list_shipments(
         selectinload(Shipment.tasks).selectinload(ShipmentTask.completed_by),
         selectinload(Shipment.containers),
         selectinload(Shipment.offloading_point),
+        selectinload(Shipment.consignee),
     )
     for clause in base_where:
         q = q.where(clause)
@@ -460,7 +464,8 @@ async def submit_documents(db: AsyncSession, shipment_id: uuid.UUID, actor: User
 
     # If tasks already exist the shipment was previously approved — skip FFD review,
     # go straight back to IN_PROGRESS so work resumes where it left off.
-    if shipment.tasks:
+    is_resubmission = bool(shipment.tasks)
+    if is_resubmission:
         shipment.current_stage = ShipmentStage.IN_PROGRESS
         base_remark = "Re-submitted after FFD send-back — resuming In Progress"
         event_remark = f"{base_remark} — {remark}" if remark else base_remark
@@ -474,6 +479,12 @@ async def submit_documents(db: AsyncSession, shipment_id: uuid.UUID, actor: User
                             remark=remark or None)
 
     await db.commit()
+
+    from app.notifications.service import notify_team
+    if is_resubmission:
+        await notify_team(db, shipment, Team.FFD, "documents_resubmitted")
+    else:
+        await notify_team(db, shipment, Team.FFD, "shipment_created")
     return await _get_shipment(db, shipment_id)
 
 
@@ -508,6 +519,9 @@ async def reject_documents(db: AsyncSession, shipment_id: uuid.UUID, actor: User
     await _record_event(db, shipment, EventType.DOCUMENTS_REJECTED, actor,
                         stage_from=ShipmentStage.FFD_REVIEW, stage_to=ShipmentStage.CUSTOMER, remark=remark)
     await db.commit()
+
+    from app.notifications.service import notify_team
+    await notify_team(db, shipment, Team.CUSTOMER, "documents_rejected")
     return await _get_shipment(db, shipment_id)
 
 
@@ -636,10 +650,15 @@ async def complete_task(
     task.status = TaskStatus.COMPLETED
     task.completed_at = datetime.now(timezone.utc)
     task.completed_by_id = actor.id
+    task_type = task.task_type
 
     shipment = await _get_shipment(db, shipment_id)
     await _record_event(db, shipment, EventType.TASK_COMPLETED, actor, task_id=task_id, remark=remark)
     await db.commit()
+
+    if task_type == TaskType.BAYAN_PAYMENT:
+        from app.notifications.service import notify_team
+        await notify_team(db, shipment, Team.PRO, "bayan_payment_confirmed")
     return await _get_shipment(db, shipment_id)
 
 
@@ -753,7 +772,17 @@ async def add_container(db: AsyncSession, shipment_id: uuid.UUID, actor: User, c
     _assert_team(actor, Team.FFD)
     _assert_stage(shipment, ShipmentStage.IN_PROGRESS)
 
+    container_number = container_number.strip().upper()
     await _assert_container_not_active(db, container_number, exclude_shipment_id=shipment_id)
+
+    dup = await db.execute(
+        select(Container.id).where(
+            Container.shipment_id == shipment_id,
+            func.upper(Container.container_number) == container_number,
+        )
+    )
+    if dup.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail=f"Container {container_number} is already on this shipment")
 
     container = Container(shipment_id=shipment.id, container_number=container_number)
     db.add(container)
@@ -877,9 +906,6 @@ async def assign_truck(
         shipment.current_stage = ShipmentStage.DC_TRANSPORT
         await _record_event(db, shipment, EventType.STAGE_CHANGED, actor,
                             stage_from=prev, stage_to=ShipmentStage.DC_TRANSPORT, remark="All containers assigned")
-        from app.notifications.service import notify_team
-        await notify_team(db, shipment, Team.DC, "containers_assigned")
-
     await db.commit()
     return await _get_shipment(db, shipment_id)
 
@@ -977,8 +1003,6 @@ async def return_container_to_ffd(
     await _record_event(db, shipment, EventType.CONTAINER_RETURNED_TO_FFD, actor, remark=remark)
     await db.commit()
 
-    from app.notifications.service import notify_team
-    await notify_team(db, shipment, Team.FFD, "container_returned_to_ffd")
     return await _get_shipment(db, shipment_id)
 
 
@@ -1061,25 +1085,43 @@ async def send_back_to_ffd(db: AsyncSession, shipment_id: uuid.UUID, actor: User
 
 async def mark_offloaded(db: AsyncSession, shipment_id: uuid.UUID, actor: User, container_id: uuid.UUID) -> Shipment:
     shipment = await _get_shipment(db, shipment_id)
-    _assert_team(actor, Team.DC)
 
     result = await db.execute(select(Container).where(Container.id == container_id, Container.shipment_id == shipment_id))
     container = result.scalar_one_or_none()
     if not container:
         raise HTTPException(status_code=404, detail="Container not found")
-    if container.status != ContainerStatus.AT_DC:
-        raise HTTPException(status_code=400, detail="Container must be marked as arrived at DC before it can be offloaded")
 
-    from app.documents.models import Document
-    dn_exists = await db.execute(
-        select(Document.id).where(
-            Document.shipment_id == shipment_id,
-            Document.container_id == container_id,
-            Document.doc_type == DocumentType.DN,
-        ).limit(1)
-    )
-    if not dn_exists.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="Upload the Delivery Note (DN) for this container before marking it offloaded")
+    is_outsourced = container.outsourced_truck_id is not None
+    is_amls = shipment.offloading_point and shipment.offloading_point.is_amls
+
+    if is_amls:
+        # AMLS offloading location — DC only, DN required (regardless of truck type)
+        _assert_team(actor, Team.DC)
+        if container.status != ContainerStatus.AT_DC:
+            raise HTTPException(status_code=400, detail="Container must be marked as arrived at DC before it can be offloaded")
+
+        from app.documents.models import Document
+        dn_exists = await db.execute(
+            select(Document.id).where(
+                Document.shipment_id == shipment_id,
+                Document.container_id == container_id,
+                Document.doc_type == DocumentType.DN,
+            ).limit(1)
+        )
+        if not dn_exists.scalar_one_or_none():
+            raise HTTPException(status_code=400, detail="Upload the Delivery Note (DN) for this container before marking it offloaded")
+    elif is_outsourced:
+        # Outsourced truck, non-AMLS location — FFD only, no DN required
+        _assert_team(actor, Team.FFD)
+        if container.status != ContainerStatus.OUTSOURCED_TRANSPORT:
+            raise HTTPException(status_code=400, detail="Container must be in outsourced transport before it can be offloaded")
+    else:
+        # Non-AMLS location, regular truck — FFD or Transport can mark offloaded
+        if actor.team not in [Team.FFD, Team.TRANSPORT]:
+            raise HTTPException(status_code=403, detail="Only FFD or Transport can mark this container as offloaded")
+        valid_statuses = [ContainerStatus.ASSIGNED, ContainerStatus.IN_TRANSIT, ContainerStatus.AT_DC, ContainerStatus.BREAKDOWN]
+        if container.status not in valid_statuses:
+            raise HTTPException(status_code=400, detail="Container must be assigned to a truck before it can be offloaded")
 
     container.status = ContainerStatus.OFFLOADED
     container.offloaded_at = datetime.now(timezone.utc)
@@ -1088,7 +1130,8 @@ async def mark_offloaded(db: AsyncSession, shipment_id: uuid.UUID, actor: User, 
     await db.commit()
 
     from app.notifications.service import notify_team
-    await notify_team(db, shipment, Team.TRANSPORT, "container_offloaded")
+    if not is_outsourced:
+        await notify_team(db, shipment, Team.TRANSPORT, "container_offloaded")
     return await _get_shipment(db, shipment_id)
 
 
@@ -1096,7 +1139,6 @@ async def mark_offloaded(db: AsyncSession, shipment_id: uuid.UUID, actor: User, 
 
 async def mark_returned(db: AsyncSession, shipment_id: uuid.UUID, actor: User, container_id: uuid.UUID) -> Shipment:
     shipment = await _get_shipment(db, shipment_id)
-    _assert_team(actor, Team.TRANSPORT)
 
     result = await db.execute(select(Container).where(Container.id == container_id, Container.shipment_id == shipment_id))
     container = result.scalar_one_or_none()
@@ -1105,10 +1147,51 @@ async def mark_returned(db: AsyncSession, shipment_id: uuid.UUID, actor: User, c
     if container.status != ContainerStatus.OFFLOADED:
         raise HTTPException(status_code=400, detail="Only offloaded containers can be returned to the shipping line")
 
+    is_outsourced = container.outsourced_truck_id is not None
+    if is_outsourced:
+        _assert_team(actor, Team.FFD)
+    else:
+        _assert_team(actor, Team.TRANSPORT)
+
     container.status = ContainerStatus.RETURNED
     db.add(ContainerEvent(container_id=container_id, event_type="RETURNED", actor_id=actor.id))
     await _record_event(db, shipment, EventType.CONTAINER_RETURNED, actor, remark=f"Container {container.container_number}")
     await _complete_shipment_if_done(db, shipment, actor, shipment.current_stage)
+    await db.commit()
+    return await _get_shipment(db, shipment_id)
+
+
+# ── FFD: Assign outsourced truck to CCRO-returned container ───────────────────
+
+async def assign_outsourced_truck(
+    db: AsyncSession, shipment_id: uuid.UUID, actor: User,
+    container_id: uuid.UUID, outsourced_truck_id: uuid.UUID,
+    expected_arrival_at: datetime,
+) -> Shipment:
+    shipment = await _get_shipment(db, shipment_id)
+    _assert_team(actor, Team.FFD)
+
+    result = await db.execute(select(Container).where(Container.id == container_id, Container.shipment_id == shipment_id))
+    container = result.scalar_one_or_none()
+    if not container:
+        raise HTTPException(status_code=404, detail="Container not found")
+    if container.status != ContainerStatus.CCRO_RETURNED:
+        raise HTTPException(status_code=400, detail="Can only assign outsourced truck to containers in CCRO_RETURNED state")
+
+    truck_result = await db.execute(
+        select(OutsourcedTruck).where(OutsourcedTruck.id == outsourced_truck_id, OutsourcedTruck.is_active == True)
+    )
+    truck = truck_result.scalar_one_or_none()
+    if not truck:
+        raise HTTPException(status_code=404, detail="Outsourced truck not found or inactive")
+
+    container.outsourced_truck_id = outsourced_truck_id
+    container.outsourced_expected_arrival_at = expected_arrival_at
+    container.status = ContainerStatus.OUTSOURCED_TRANSPORT
+
+    db.add(ContainerEvent(container_id=container_id, event_type="OUTSOURCED_TRUCK_ASSIGNED", actor_id=actor.id))
+    await _record_event(db, shipment, EventType.OUTSOURCED_TRUCK_ASSIGNED, actor,
+                        remark=f"Container {container.container_number} — {truck.plate_number}")
     await db.commit()
     return await _get_shipment(db, shipment_id)
 
@@ -1136,10 +1219,19 @@ def build_shipment_import_template() -> bytes:
     wb = Workbook()
     ws = wb.active
     ws.title = "Shipments"
-    ws.append(["BL Number *", "Invoice Number *", "Container Count *", "Pull-out Date (DD/MM/YYYY)", "Product Type", "Loading Port", "Shipping Line", "Offloading Location *"])
-    ws.append(["MAEU123456789", "INV-2024-001", 2, "15/07/2024", "Frozen Food", "Port of Salalah", "Maersk", "DC Warehouse A"])
+    ws.append([
+        "BL Number *", "Invoice Number *", "Container Count *",
+        "Pull-out Date (DD/MM/YYYY)", "ETA at Port (DD/MM/YYYY)",
+        "Product Type *", "Loading Port *", "Shipping Line *", "Offloading Location *",
+        "Bayan Type *", "Consignee *",
+    ])
+    ws.append([
+        "MAEU123456789", "INV-2024-001", 2, "15/07/2024", "20/07/2024",
+        "Frozen Food", "Port of Salalah", "Maersk", "AMLS",
+        "Transfer", "Acme Trading LLC",
+    ])
     for col in ws.columns:
-        ws.column_dimensions[col[0].column_letter].width = 28
+        ws.column_dimensions[col[0].column_letter].width = 26
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
@@ -1182,24 +1274,47 @@ async def import_shipments_from_excel(
     rows = list(ws.iter_rows(min_row=2, values_only=True))
 
     inserted, skipped, errors = 0, 0, []
+    inserted_bls: list[str] = []
     master_cache: dict = {}
+
+    def _parse_date(raw):
+        if not raw:
+            return None
+        if hasattr(raw, "date"):
+            return raw.date() if hasattr(raw, "hour") else raw
+        for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%m/%d/%Y", "%d-%m-%Y"):
+            try:
+                from datetime import datetime as dt
+                return dt.strptime(str(raw).strip(), fmt).date()
+            except ValueError:
+                pass
+        return None
 
     for i, row in enumerate(rows, start=2):
         if not any(c for c in row if c is not None):
             continue
         try:
-            cells = list(row[:8]) + [""] * 8
-            bl_num   = str(cells[0]).strip() if cells[0] else ""
-            inv_num  = str(cells[1]).strip() if cells[1] else ""
-            cnt_raw  = cells[2]
-            pod_raw  = cells[3]
-            prod_raw = str(cells[4]).strip() if cells[4] else ""
-            port_raw = str(cells[5]).strip() if cells[5] else ""
-            sl_raw   = str(cells[6]).strip() if cells[6] else ""
-            op_raw   = str(cells[7]).strip() if cells[7] else ""
+            cells = list(row[:11]) + [""] * 11
+            bl_num      = str(cells[0]).strip() if cells[0] else ""
+            inv_num     = str(cells[1]).strip() if cells[1] else ""
+            cnt_raw     = cells[2]
+            pod_raw     = cells[3]
+            eta_raw     = cells[4]
+            prod_raw    = str(cells[5]).strip() if cells[5] else ""
+            port_raw    = str(cells[6]).strip() if cells[6] else ""
+            sl_raw      = str(cells[7]).strip() if cells[7] else ""
+            op_raw      = str(cells[8]).strip() if cells[8] else ""
+            bayan_raw   = str(cells[9]).strip() if cells[9] else ""
+            consign_raw = str(cells[10]).strip() if cells[10] else ""
 
             if not bl_num or not inv_num:
                 errors.append(f"Row {i}: BL Number and Invoice Number are required")
+                continue
+            if not bayan_raw or not consign_raw:
+                missing_fields = []
+                if not bayan_raw: missing_fields.append("Bayan Type")
+                if not consign_raw: missing_fields.append("Consignee")
+                errors.append(f"Row {i} (BL: {bl_num}): {' and '.join(missing_fields)} {'are' if len(missing_fields) > 1 else 'is'} required")
                 continue
 
             try:
@@ -1210,27 +1325,20 @@ async def import_shipments_from_excel(
                 errors.append(f"Row {i}: Container Count must be a whole number between 1 and 99")
                 continue
 
-            # Skip duplicate BL or invoice numbers silently
-            dup = await db.execute(select(Shipment).where(
-                (Shipment.bl_number == bl_num) | (Shipment.invoice_number == inv_num)
-            ))
-            if dup.scalar_one_or_none():
+            # Check duplicates with specific messages
+            dup_bl = await db.execute(select(Shipment).where(Shipment.bl_number == bl_num))
+            if dup_bl.scalar_one_or_none():
+                errors.append(f"Row {i}: BL number '{bl_num}' already exists — skipped")
+                skipped += 1
+                continue
+            dup_inv = await db.execute(select(Shipment).where(Shipment.invoice_number == inv_num))
+            if dup_inv.scalar_one_or_none():
+                errors.append(f"Row {i}: Invoice number '{inv_num}' already exists — skipped")
                 skipped += 1
                 continue
 
-            # Parse pull-out date — openpyxl may return a date/datetime directly
-            pull_out_date = None
-            if pod_raw:
-                if hasattr(pod_raw, "date"):
-                    pull_out_date = pod_raw.date() if hasattr(pod_raw, "hour") else pod_raw
-                else:
-                    for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%m/%d/%Y", "%d-%m-%Y"):
-                        try:
-                            from datetime import datetime as dt
-                            pull_out_date = dt.strptime(str(pod_raw).strip(), fmt).date()
-                            break
-                        except ValueError:
-                            pass
+            pull_out_date = _parse_date(pod_raw)
+            eta_at_port   = _parse_date(eta_raw)
 
             field_errors: list[str] = []
             product_type_id, err = await _lookup_master(db, ProductType, prod_raw, "Product Types", master_cache)
@@ -1240,6 +1348,10 @@ async def import_shipments_from_excel(
             shipping_line_id, err = await _lookup_master(db, ShippingLine, sl_raw, "Shipping Lines", master_cache)
             if err: field_errors.append(err)
             offloading_point_id, err = await _lookup_master(db, OffloadingPoint, op_raw, "Offloading Locations", master_cache)
+            if err: field_errors.append(err)
+            bayan_type_id, err = await _lookup_master(db, BayanType, bayan_raw, "Bayan Types", master_cache)
+            if err: field_errors.append(err)
+            consignee_id, err = await _lookup_master(db, Consignee, consign_raw, "Consignees", master_cache)
             if err: field_errors.append(err)
 
             if field_errors:
@@ -1254,10 +1366,13 @@ async def import_shipments_from_excel(
                         container_count=container_count,
                         customer_id=actor.id,
                         pull_out_date=pull_out_date,
+                        eta_at_port=eta_at_port,
                         product_type_id=product_type_id,
                         loading_port_id=loading_port_id,
                         shipping_line_id=shipping_line_id,
                         offloading_point_id=offloading_point_id,
+                        bayan_type_id=bayan_type_id,
+                        consignee_id=consignee_id,
                     )
                     db.add(shipment)
                     await db.flush()
@@ -1266,12 +1381,14 @@ async def import_shipments_from_excel(
                 inserted += 1
             except Exception as e:
                 errors.append(f"Row {i} (BL: {bl_num}): {e}")
+            else:
+                inserted_bls.append(bl_num)
 
         except Exception as e:
             errors.append(f"Row {i}: {e}")
 
     await db.commit()
-    return {"inserted": inserted, "skipped": skipped, "errors": errors}
+    return {"inserted": inserted, "inserted_bls": inserted_bls, "skipped": skipped, "errors": errors}
 
 
 # ── FFD: Bulk CCRO upload ─────────────────────────────────────────────────────
@@ -1551,7 +1668,7 @@ async def export_container_view(
 ) -> bytes:
     from datetime import date as date_type
 
-    rows = await get_container_view(db, actor, historical=historical, skip=0, limit=10000)
+    rows = await get_container_view(db, actor, historical=historical, skip=0, limit=None)
 
     # Apply extra filters client-side (data already team-scoped by get_container_view)
     from_dt = None
@@ -1709,7 +1826,21 @@ async def rename_container(
     container = result.scalar_one_or_none()
     if not container:
         raise HTTPException(status_code=404, detail="Container not found")
-    container.container_number = container_number.strip().upper()
+
+    container_number = container_number.strip().upper()
+    await _assert_container_not_active(db, container_number, exclude_shipment_id=shipment_id)
+
+    dup = await db.execute(
+        select(Container.id).where(
+            Container.shipment_id == shipment_id,
+            Container.id != container_id,
+            func.upper(Container.container_number) == container_number,
+        )
+    )
+    if dup.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail=f"Container {container_number} is already on this shipment")
+
+    container.container_number = container_number
     await db.commit()
     return await _get_shipment(db, shipment_id)
 
@@ -1742,13 +1873,14 @@ async def mark_container_arrived(
 
 # ── Transport / DC: Container list view ──────────────────────────────────────
 
-async def get_container_view(db: AsyncSession, actor: User, historical: bool = False, skip: int = 0, limit: int = 200) -> list[dict]:
+async def get_container_view(db: AsyncSession, actor: User, historical: bool = False, skip: int = 0, limit: int | None = 200) -> list[dict]:
     from app.masters.models import Truck, OffloadingPoint as OffloadingPointModel
     from sqlalchemy import exists as sa_exists
     from sqlalchemy.orm import aliased
 
     ContainerOP = aliased(OffloadingPointModel, name="container_op")
     ShipmentOP  = aliased(OffloadingPointModel, name="shipment_op")
+    OTruck      = aliased(OutsourcedTruck, name="outsourced_truck")
 
     if actor.team == Team.PRO:
         raise HTTPException(status_code=403, detail="PRO team cannot access container view")
@@ -1770,12 +1902,21 @@ async def get_container_view(db: AsyncSession, actor: User, historical: bool = F
             filters.append(Shipment.current_stage.in_([ShipmentStage.TRANSPORT, ShipmentStage.DC_TRANSPORT]))
         elif actor.team == Team.DC:
             filters.append(Shipment.current_stage.in_([ShipmentStage.TRANSPORT, ShipmentStage.DC_TRANSPORT]))
-            # DC's scope ends at offloading — post-offload statuses are not DC's concern
+            # OFFLOADED and DO_REVALIDATION are never DC's concern
             filters.append(Container.status.notin_([
                 ContainerStatus.OFFLOADED,
                 ContainerStatus.DO_REVALIDATION,
-                ContainerStatus.CCRO_RETURNED,
             ]))
+            # CCRO_RETURNED and OUTSOURCED_TRANSPORT: visible to DC only when the
+            # offloading location is AMLS — DC must track these to mark arrival and offload
+            from sqlalchemy import or_ as _or
+            amls_expr = func.coalesce(ContainerOP.is_amls, ShipmentOP.is_amls, False)
+            filters.append(
+                _or(
+                    amls_expr == True,
+                    Container.status.notin_([ContainerStatus.CCRO_RETURNED, ContainerStatus.OUTSOURCED_TRANSPORT]),
+                )
+            )
         else:
             filters.append(Shipment.current_stage != ShipmentStage.COMPLETED)
 
@@ -1819,7 +1960,7 @@ async def get_container_view(db: AsyncSession, actor: User, historical: bool = F
         .exists()
     )
 
-    rows = await db.execute(
+    q = (
         select(
             Container,
             Shipment.id.label("shipment_id"),
@@ -1836,16 +1977,22 @@ async def get_container_view(db: AsyncSession, actor: User, historical: bool = F
             has_dc_health_cert_sq.label("dc_health_cert_uploaded"),
             func.coalesce(Container.offloading_point_id, Shipment.offloading_point_id).label("resolved_offloading_point_id"),
             Shipment.pull_out_date.label("pull_out_date"),
+            func.coalesce(ContainerOP.is_amls, ShipmentOP.is_amls, False).label("offloading_is_amls"),
+            OTruck.plate_number.label("outsourced_plate_number"),
+            OTruck.driver_name.label("outsourced_driver_name"),
         )
         .join(Shipment, Shipment.id == Container.shipment_id)
         .outerjoin(Truck, Truck.id == Container.truck_id)
         .outerjoin(ContainerOP, ContainerOP.id == Container.offloading_point_id)
         .outerjoin(ShipmentOP, ShipmentOP.id == Shipment.offloading_point_id)
+        .outerjoin(OTruck, OTruck.id == Container.outsourced_truck_id)
         .where(*filters)
         .order_by(Container.expected_arrival_at.asc().nullslast(), Container.created_at.asc())
         .offset(skip)
-        .limit(limit)
     )
+    if limit is not None:
+        q = q.limit(limit)
+    rows = await db.execute(q)
 
     return [
         {
@@ -1873,6 +2020,11 @@ async def get_container_view(db: AsyncSession, actor: User, historical: bool = F
             "actual_pull_out_date": row[0].actual_pull_out_date,
             "offloaded_at": row[0].offloaded_at,
             "pull_out_date": row[14],
+            "offloading_is_amls": bool(row[15]),
+            "outsourced_truck_id": row[0].outsourced_truck_id,
+            "outsourced_expected_arrival_at": row[0].outsourced_expected_arrival_at,
+            "outsourced_plate_number": row[16],
+            "outsourced_driver_name": row[17],
         }
         for row in rows.all()
     ]

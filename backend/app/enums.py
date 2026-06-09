@@ -138,6 +138,7 @@ class ContainerStatus(str, Enum):
     CCRO_RETURNED = "CCRO_RETURNED"    # Transport sent container back — awaiting FFD action
     CLOSED = "CLOSED"                  # FFD permanently closed this container
     DO_REVALIDATION = "DO_REVALIDATION"  # Transport sent offloaded container to FFD for DO revalidation
+    OUTSOURCED_TRANSPORT = "OUTSOURCED_TRANSPORT"  # FFD assigned non-AMLS outsourced truck after CCRO return
 
 
 class EventType(str, Enum):
@@ -166,3 +167,4 @@ class EventType(str, Enum):
     SENT_BACK_TO_CUSTOMER = "SENT_BACK_TO_CUSTOMER"
     DO_REVALIDATION_REQUESTED = "DO_REVALIDATION_REQUESTED"
     DO_REVALIDATED = "DO_REVALIDATED"
+    OUTSOURCED_TRUCK_ASSIGNED = "OUTSOURCED_TRUCK_ASSIGNED"

@@ -8,7 +8,7 @@ import { useSortable } from '@/lib/sort'
 import { SortableHeader } from '@/components/SortableHeader'
 
 import { formatDate, formatDateTime } from '@/lib/dates'
-import type { ContainerViewItem, Truck } from '@/types'
+import type { ContainerViewItem, Truck, OutsourcedTruck } from '@/types'
 import {
   AlertTriangle, CheckCircle, Clock, Download, Truck as TruckIcon,
   Package, MapPin, Upload, Trash2, Eye, Search, FileSpreadsheet, X,
@@ -34,28 +34,30 @@ function doUrgency(dateStr: string | null) {
 }
 
 const STATUS_BADGE: Record<string, string> = {
-  PENDING:          'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300',
-  ASSIGNED:         'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300',
-  IN_TRANSIT:       'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300',
-  BREAKDOWN:        'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300',
-  AT_DC:            'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300',
-  OFFLOADED:        'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300',
-  RETURNED:         'bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300',
-  CCRO_RETURNED:    'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300',
-  CLOSED:           'bg-gray-200 text-gray-500 dark:bg-gray-700 dark:text-gray-400',
-  DO_REVALIDATION:  'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300',
+  PENDING:               'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300',
+  ASSIGNED:              'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300',
+  IN_TRANSIT:            'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300',
+  BREAKDOWN:             'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300',
+  AT_DC:                 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300',
+  OFFLOADED:             'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300',
+  RETURNED:              'bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300',
+  CCRO_RETURNED:         'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300',
+  CLOSED:                'bg-gray-200 text-gray-500 dark:bg-gray-700 dark:text-gray-400',
+  DO_REVALIDATION:       'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300',
+  OUTSOURCED_TRANSPORT:  'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300',
 }
 const STATUS_LABEL: Record<string, string> = {
-  PENDING:          'Transport Allocating Trucks',
-  ASSIGNED:         'Trucks Assigned',
-  IN_TRANSIT:       'In Transit',
-  BREAKDOWN:        'Breakdown',
-  AT_DC:            'Reported to DC',
-  OFFLOADED:        'Offloaded',
-  RETURNED:         'Returned',
-  CCRO_RETURNED:    'CCRO Returned to FFD',
-  CLOSED:           'Closed',
-  DO_REVALIDATION:  'Pending DO Revalidation',
+  PENDING:               'Transport Allocating Trucks',
+  ASSIGNED:              'Trucks Assigned',
+  IN_TRANSIT:            'In Transit',
+  BREAKDOWN:             'Breakdown',
+  AT_DC:                 'Reported to DC',
+  OFFLOADED:             'Offloaded',
+  RETURNED:              'Returned',
+  CCRO_RETURNED:         'CCRO Returned to FFD',
+  CLOSED:                'Closed',
+  DO_REVALIDATION:       'Pending DO Revalidation',
+  OUTSOURCED_TRANSPORT:  'Outsourced Transport',
 }
 
 function tomorrowDateStr() {
@@ -66,15 +68,16 @@ function tomorrowDateStr() {
 
 // ── Individual row ────────────────────────────────────────────────────────────
 
-function ContainerRow({ c, team, trucks, onUpdated, historical = false }: {
+function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical = false }: {
   c: ContainerViewItem
   team: string
   trucks: Truck[]
+  outsourcedTrucks: OutsourcedTruck[]
   onUpdated: () => void
   historical?: boolean
 }) {
   const qc = useQueryClient()
-  const [expanded, setExpanded] = useState<'assign' | 'issue' | 'arrived' | 'return' | 'revalidation' | null>(null)
+  const [expanded, setExpanded] = useState<'assign' | 'issue' | 'arrived' | 'return' | 'revalidation' | 'assign_outsourced' | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
   // Assign truck form state
@@ -98,10 +101,18 @@ function ContainerRow({ c, team, trucks, onUpdated, historical = false }: {
   // DO revalidation request form state
   const [revalidationRemark, setRevalidationRemark] = useState('')
 
+  // Outsourced truck assignment form state
+  const [outsourcedTruckId, setOutsourcedTruckId] = useState('')
+  const [outsourcedEtaDate, setOutsourcedEtaDate] = useState(() => tomorrowDateStr())
+  const [outsourcedEtaTime, setOutsourcedEtaTime] = useState('09:00')
+
   // DN upload / delete
   const [dnUploading, setDnUploading] = useState(false)
   const [dnDeleting, setDnDeleting] = useState(false)
   const dnInputRef = useRef<HTMLInputElement>(null)
+
+  const isOutsourced = !!c.outsourced_truck_id
+  const isAmls = c.offloading_is_amls
 
   async function handleDnDelete() {
     if (!c.dn_document_id) return
@@ -118,12 +129,20 @@ function ContainerRow({ c, team, trucks, onUpdated, historical = false }: {
     ['ASSIGNED', 'IN_TRANSIT', 'BREAKDOWN'].includes(c.status)
   const canAssign       = !historical && team === 'TRANSPORT' && c.status === 'PENDING' && !c.truck_id
   const canReturnToFfd  = !historical && team === 'TRANSPORT' && c.status === 'PENDING' && !c.truck_id
-  const canMarkArrived  = !historical && team === 'DC' && !c.arrived_at && !!c.truck_id
-  const canEditArrived  = !historical && team === 'DC' && !!c.arrived_at
-  const canMarkOffloaded = !historical && team === 'DC' && c.status !== 'OFFLOADED' && c.status !== 'RETURNED' && !!c.arrived_at
-  const canMarkReturned           = !historical && team === 'TRANSPORT' && c.status === 'OFFLOADED'
-  const canRequestDoRevalidation  = !historical && team === 'TRANSPORT' && c.status === 'OFFLOADED'
+  const canMarkArrived  = !historical && team === 'DC' && !c.arrived_at && (!!c.truck_id || isOutsourced) && isAmls
+  const canEditArrived  = !historical && team === 'DC' && !!c.arrived_at && isAmls
+
+  // 3-way offloading logic — AMLS checked first (overrides truck type)
+  const canMarkOffloaded = !historical && (() => {
+    if (isAmls) return team === 'DC' && c.status === 'AT_DC'
+    if (isOutsourced) return team === 'FFD' && c.status === 'OUTSOURCED_TRANSPORT'
+    return (team === 'FFD' || team === 'TRANSPORT') && ['ASSIGNED', 'IN_TRANSIT', 'AT_DC', 'BREAKDOWN'].includes(c.status)
+  })()
+
+  const canMarkReturned           = !historical && c.status === 'OFFLOADED' && (isOutsourced ? team === 'FFD' : team === 'TRANSPORT')
+  const canRequestDoRevalidation  = !historical && team === 'TRANSPORT' && c.status === 'OFFLOADED' && !isOutsourced
   const canMarkDoRevalidated      = !historical && team === 'FFD' && c.status === 'DO_REVALIDATION'
+  const canAssignOutsourcedTruck  = !historical && team === 'FFD' && c.status === 'CCRO_RETURNED'
 
   function openArrivedForm() {
     const d = c.arrived_at ? new Date(c.arrived_at) : new Date()
@@ -259,6 +278,23 @@ function ContainerRow({ c, team, trucks, onUpdated, historical = false }: {
     finally { setSubmitting(false) }
   }
 
+  async function assignOutsourcedTruck() {
+    if (!outsourcedTruckId || !outsourcedEtaDate || !outsourcedEtaTime) { toast.error('Select a truck and set the ETA'); return }
+    setSubmitting(true)
+    try {
+      const etaIso = new Date(`${outsourcedEtaDate}T${outsourcedEtaTime}`).toISOString()
+      await shipmentsApi.assignOutsourcedTruck(c.shipment_id, c.container_id, {
+        outsourced_truck_id: outsourcedTruckId,
+        expected_arrival_at: etaIso,
+      })
+      toast.success('Outsourced truck assigned')
+      qc.invalidateQueries({ queryKey: ['container-view'] })
+      onUpdated()
+      setExpanded(null)
+    } catch (e: any) { toast.error(e.response?.data?.detail || 'Failed') }
+    finally { setSubmitting(false) }
+  }
+
   async function handleDnUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file) return
@@ -310,7 +346,13 @@ function ContainerRow({ c, team, trucks, onUpdated, historical = false }: {
         <td className={clsx('px-3 py-3 text-sm', validity.color)}>{validity.label}</td>
         {/* Truck / Driver */}
         <td className="px-3 py-3 text-sm">
-          {c.plate_number ? (
+          {isOutsourced && c.outsourced_plate_number ? (
+            <>
+              <p className="font-medium text-cyan-700 dark:text-cyan-300">{c.outsourced_plate_number}</p>
+              <p className="text-xs text-gray-500 dark:text-gray-400">{c.outsourced_driver_name}</p>
+              <span className="text-xs text-cyan-600 dark:text-cyan-500">Outsourced</span>
+            </>
+          ) : c.plate_number ? (
             <>
               <p className="font-medium text-gray-800 dark:text-gray-100">{c.plate_number}</p>
               <p className="text-xs text-gray-500 dark:text-gray-400">{c.driver_name}</p>
@@ -330,8 +372,8 @@ function ContainerRow({ c, team, trucks, onUpdated, historical = false }: {
               <span className="flex items-center gap-1"><CheckCircle size={12} /> Arrived</span>
               <span className="text-gray-500 dark:text-gray-400 font-normal">{formatDateTime(c.arrived_at)}</span>
             </div>
-          ) : c.expected_arrival_at ? (
-            <span className="text-gray-600 dark:text-gray-300 text-xs">{formatDateTime(c.expected_arrival_at)}</span>
+          ) : (c.expected_arrival_at ?? c.outsourced_expected_arrival_at) ? (
+            <span className="text-gray-600 dark:text-gray-300 text-xs">{formatDateTime((c.expected_arrival_at ?? c.outsourced_expected_arrival_at)!)}</span>
           ) : (
             <span className="text-gray-400 text-xs italic">Not set</span>
           )}
@@ -395,6 +437,14 @@ function ContainerRow({ c, team, trucks, onUpdated, historical = false }: {
                 Mark Revalidated
               </button>
             )}
+            {canAssignOutsourcedTruck && (
+              <button
+                onClick={() => setExpanded(expanded === 'assign_outsourced' ? null : 'assign_outsourced')}
+                className={clsx('flex items-center gap-1 text-xs px-2 py-1 rounded border font-medium', expanded === 'assign_outsourced' ? 'bg-cyan-600 text-white border-cyan-600' : 'text-cyan-700 dark:text-cyan-400 border-cyan-300 dark:border-cyan-700 hover:bg-cyan-50 dark:hover:bg-cyan-900/20')}
+              >
+                <TruckIcon size={11} /> Assign Outsourced Truck
+              </button>
+            )}
             {/* DC actions */}
             {canMarkArrived && (
               <button
@@ -416,7 +466,8 @@ function ContainerRow({ c, team, trucks, onUpdated, historical = false }: {
                 Edit time
               </button>
             )}
-            {canMarkOffloaded && !c.dn_document_id && (
+            {/* AMLS offload: DN required (regardless of truck type — DC only) */}
+            {canMarkOffloaded && isAmls && !c.dn_document_id && (
               <>
                 <input ref={dnInputRef} type="file" accept=".pdf,image/*" className="hidden" onChange={handleDnUpload} />
                 <button
@@ -431,7 +482,7 @@ function ContainerRow({ c, team, trucks, onUpdated, historical = false }: {
                 </button>
               </>
             )}
-            {canMarkOffloaded && c.dn_document_id && (
+            {canMarkOffloaded && isAmls && c.dn_document_id && (
               <>
                 <button
                   onClick={async () => { const { data } = await documentsApi.getUrl(c.dn_document_id!); window.open(data.url, '_blank') }}
@@ -452,6 +503,12 @@ function ContainerRow({ c, team, trucks, onUpdated, historical = false }: {
                   Offloaded
                 </button>
               </>
+            )}
+            {/* Non-AMLS: offload directly, no DN required */}
+            {canMarkOffloaded && !isAmls && (
+              <button onClick={markOffloaded} disabled={submitting} className="text-xs bg-green-600 text-white px-2 py-1 rounded hover:bg-green-700 disabled:opacity-50">
+                Offloaded
+              </button>
             )}
           </div>
         </td>
@@ -592,6 +649,34 @@ function ContainerRow({ c, team, trucks, onUpdated, historical = false }: {
           </td>
         </tr>
       )}
+
+      {/* ── Assign outsourced truck form ── */}
+      {expanded === 'assign_outsourced' && (
+        <tr>
+          <td colSpan={8} className="p-0">
+            <div className="px-5 py-3 bg-cyan-50 dark:bg-cyan-900/10 border-t border-b dark:border-gray-700 space-y-3">
+              <p className="text-xs font-semibold text-cyan-700 dark:text-cyan-400">Assign Outsourced Truck (Non-AMLS)</p>
+              <div className="flex flex-wrap gap-3">
+                <select value={outsourcedTruckId} onChange={e => setOutsourcedTruckId(e.target.value)} className="text-xs border dark:border-gray-600 rounded px-2 py-1.5 bg-white dark:bg-gray-700 text-gray-900 dark:text-white min-w-[220px]">
+                  <option value="">Select outsourced truck…</option>
+                  {outsourcedTrucks.filter(t => t.is_active).map(t => (
+                    <option key={t.id} value={t.id}>{t.plate_number} — {t.driver_name} ({t.contractor})</option>
+                  ))}
+                </select>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs text-gray-500">ETA:</span>
+                  <input type="date" value={outsourcedEtaDate} onChange={e => setOutsourcedEtaDate(e.target.value)} className="text-xs border dark:border-gray-600 rounded px-2 py-1.5 bg-white dark:bg-gray-700 dark:text-white" />
+                  <input type="time" value={outsourcedEtaTime} onChange={e => setOutsourcedEtaTime(e.target.value)} className="text-xs border dark:border-gray-600 rounded px-2 py-1.5 bg-white dark:bg-gray-700 dark:text-white" />
+                </div>
+                <button onClick={assignOutsourcedTruck} disabled={submitting || !outsourcedTruckId} className="text-xs bg-cyan-600 text-white px-3 py-1.5 rounded hover:bg-cyan-700 disabled:opacity-50">
+                  {submitting ? 'Saving…' : 'Assign'}
+                </button>
+                <button onClick={() => setExpanded(null)} className="text-xs text-gray-500 dark:text-gray-400">Cancel</button>
+              </div>
+            </div>
+          </td>
+        </tr>
+      )}
     </>
   )
 }
@@ -602,6 +687,7 @@ export function ContainerView({ team }: Props) {
   const qc = useQueryClient()
   const [downloadingCcros, setDownloadingCcros] = useState(false)
   const [historical, setHistorical] = useState(false)
+  const [amlsOnly, setAmlsOnly] = useState(team === 'DC')
   const [search, setSearch] = useState('')
   const [filterFrom, setFilterFrom] = useState('')
   const [filterTo, setFilterTo] = useState('')
@@ -620,6 +706,12 @@ export function ContainerView({ team }: Props) {
     enabled: team === 'TRANSPORT',
   })
 
+  const { data: outsourcedTrucks = [] } = useQuery<OutsourcedTruck[]>({
+    queryKey: ['outsourcedTrucks'],
+    queryFn: () => mastersApi.outsourcedTrucks.list().then(r => r.data),
+    enabled: team === 'FFD',
+  })
+
   const { sorted: sortedContainers, sort: contSort, toggle: contToggle } = useSortable(containers, (c, col) => {
     switch (col) {
       case 'bl':        return c.bl_number
@@ -627,15 +719,15 @@ export function ContainerView({ team }: Props) {
       case 'do':        return c.do_validity_date
       case 'truck':     return c.plate_number
       case 'location':  return c.offloading_point_name
-      case 'eta':       return c.arrived_at ?? c.expected_arrival_at
+      case 'eta':       return c.arrived_at ?? c.expected_arrival_at ?? c.outsourced_expected_arrival_at
       default:          return null
     }
   })
 
   // Pending counts — exclude CCRO_RETURNED containers from assignment queue
   const pendingAssign      = containers.filter(c => c.status === 'PENDING' && !c.truck_id).length
-  const pendingOffload     = containers.filter(c => c.arrived_at && c.status !== 'OFFLOADED' && c.status !== 'RETURNED').length
-  const pendingArrival     = containers.filter(c => !c.arrived_at && c.truck_id).length
+  const pendingOffload     = containers.filter(c => c.arrived_at && c.status !== 'OFFLOADED' && c.status !== 'RETURNED' && (team !== 'DC' || c.offloading_is_amls)).length
+  const pendingArrival     = containers.filter(c => !c.arrived_at && c.truck_id && (team !== 'DC' || c.offloading_is_amls)).length
   const pendingCcrosCount     = containers.filter(c => c.status === 'PENDING' && !c.truck_id && c.ccro_document_id).length
   const ccroReturnedCount     = containers.filter(c => c.status === 'CCRO_RETURNED').length
   const doRevalidationCount   = containers.filter(c => c.status === 'DO_REVALIDATION').length
@@ -681,6 +773,7 @@ export function ContainerView({ team }: Props) {
   }
 
   const filteredContainers = sortedContainers.filter(c => {
+    if (amlsOnly && team === 'DC' && !c.offloading_is_amls) return false
     if (search) {
       const term = search.toLowerCase()
       if (!c.container_number.toLowerCase().includes(term) && !c.bl_number.toLowerCase().includes(term)) return false
@@ -765,20 +858,39 @@ export function ContainerView({ team }: Props) {
           )}
         </div>
 
-        {/* Active / History toggle */}
-        <div className="flex border dark:border-gray-600 rounded-lg overflow-hidden shrink-0">
-          <button
-            onClick={() => setHistorical(false)}
-            className={clsx('px-3 py-2 text-sm transition-colors', !historical ? 'bg-blue-600 text-white' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700')}
-          >
-            Active
-          </button>
-          <button
-            onClick={() => setHistorical(true)}
-            className={clsx('px-3 py-2 text-sm transition-colors', historical ? 'bg-blue-600 text-white' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700')}
-          >
-            History
-          </button>
+        <div className="flex items-center gap-2 shrink-0 flex-wrap">
+          {/* AMLS-only toggle — visible to DC */}
+          {team === 'DC' && (
+            <div className="flex border dark:border-gray-600 rounded-lg overflow-hidden">
+              <button
+                onClick={() => setAmlsOnly(true)}
+                className={clsx('px-3 py-2 text-sm transition-colors', amlsOnly ? 'bg-indigo-600 text-white' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700')}
+              >
+                AMLS Only
+              </button>
+              <button
+                onClick={() => setAmlsOnly(false)}
+                className={clsx('px-3 py-2 text-sm transition-colors', !amlsOnly ? 'bg-indigo-600 text-white' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700')}
+              >
+                All
+              </button>
+            </div>
+          )}
+          {/* Active / History toggle */}
+          <div className="flex border dark:border-gray-600 rounded-lg overflow-hidden">
+            <button
+              onClick={() => setHistorical(false)}
+              className={clsx('px-3 py-2 text-sm transition-colors', !historical ? 'bg-blue-600 text-white' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700')}
+            >
+              Active
+            </button>
+            <button
+              onClick={() => setHistorical(true)}
+              className={clsx('px-3 py-2 text-sm transition-colors', historical ? 'bg-blue-600 text-white' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700')}
+            >
+              History
+            </button>
+          </div>
         </div>
       </div>
 
@@ -848,6 +960,7 @@ export function ContainerView({ team }: Props) {
                     c={c}
                     team={team}
                     trucks={trucks as Truck[]}
+                    outsourcedTrucks={outsourcedTrucks as OutsourcedTruck[]}
                     onUpdated={refetch}
                     historical={historical}
                   />

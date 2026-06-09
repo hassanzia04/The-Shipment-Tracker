@@ -4,11 +4,12 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, exists
 
 from app.shipments.models import Shipment, ShipmentTask, Container
 from app.masters.models import Truck, OffloadingPoint
 from app.enums import ShipmentStage, TaskStatus, ContainerStatus
+from sqlalchemy import and_
 from app.notifications.models import DailyReportConfig, DailyReportRecipient, DAILY_REPORT_CONFIG_ID
 from app.config import settings
 
@@ -188,6 +189,83 @@ async def _get_report_data(db: AsyncSession) -> dict:
         for row in expiring_result.all()
     ]
 
+    # ① CCROs not sent: pull_out_date due/overdue, still in pre-transport stage
+    _pre_transport_stages = [ShipmentStage.CUSTOMER, ShipmentStage.FFD_REVIEW, ShipmentStage.IN_PROGRESS]
+    _transport_stages = [ShipmentStage.TRANSPORT, ShipmentStage.DC_TRANSPORT]
+    _uncollected_statuses = [ContainerStatus.PENDING, ContainerStatus.ASSIGNED]
+
+    ccro_result = await db.execute(
+        select(
+            Shipment.bl_number,
+            Shipment.current_stage,
+            Shipment.pull_out_date,
+            ShipmentTask.hold_entity,
+            ShipmentTask.hold_remark,
+        )
+        .outerjoin(
+            ShipmentTask,
+            and_(ShipmentTask.shipment_id == Shipment.id, ShipmentTask.status == TaskStatus.ON_HOLD),
+        )
+        .where(
+            Shipment.pull_out_date <= today,
+            Shipment.pull_out_date != None,
+            Shipment.current_stage.in_(_pre_transport_stages),
+        )
+        .order_by(Shipment.pull_out_date.asc(), Shipment.bl_number)
+    )
+
+    # ② Not collected: CCROs sent (in TRANSPORT/DC_TRANSPORT) but containers still unassigned/pending
+    not_collected_result = await db.execute(
+        select(
+            Shipment.bl_number,
+            Shipment.current_stage,
+            Shipment.pull_out_date,
+            ShipmentTask.hold_entity,
+            ShipmentTask.hold_remark,
+        )
+        .outerjoin(
+            ShipmentTask,
+            and_(ShipmentTask.shipment_id == Shipment.id, ShipmentTask.status == TaskStatus.ON_HOLD),
+        )
+        .where(
+            Shipment.pull_out_date <= today,
+            Shipment.pull_out_date != None,
+            Shipment.current_stage.in_(_transport_stages),
+            exists(
+                select(Container.id).where(
+                    Container.shipment_id == Shipment.id,
+                    Container.status.in_(_uncollected_statuses),
+                )
+            ),
+        )
+        .order_by(Shipment.pull_out_date.asc(), Shipment.bl_number)
+    )
+
+    pullouts_by_bl: dict[str, dict] = {}
+    for row in ccro_result.all():
+        if row.bl_number not in pullouts_by_bl:
+            pullouts_by_bl[row.bl_number] = {
+                "bl_number": row.bl_number,
+                "stage": row.current_stage.value if row.current_stage else "—",
+                "pull_out_date": row.pull_out_date,
+                "overdue": row.pull_out_date < today if row.pull_out_date else False,
+                "reason": "ccro_not_sent",
+                "hold_entity": _ENTITY_LABELS.get(row.hold_entity.value, row.hold_entity.value) if row.hold_entity else None,
+                "hold_remark": row.hold_remark or None,
+            }
+    for row in not_collected_result.all():
+        if row.bl_number not in pullouts_by_bl:
+            pullouts_by_bl[row.bl_number] = {
+                "bl_number": row.bl_number,
+                "stage": row.current_stage.value if row.current_stage else "—",
+                "pull_out_date": row.pull_out_date,
+                "overdue": row.pull_out_date < today if row.pull_out_date else False,
+                "reason": "not_collected",
+                "hold_entity": _ENTITY_LABELS.get(row.hold_entity.value, row.hold_entity.value) if row.hold_entity else None,
+                "hold_remark": row.hold_remark or None,
+            }
+    pullouts_today = sorted(pullouts_by_bl.values(), key=lambda x: (x["pull_out_date"], x["bl_number"]))
+
     return {
         "report_date": now.strftime("%d %B %Y"),
         "report_time": now.strftime("%H:%M"),
@@ -197,6 +275,7 @@ async def _get_report_data(db: AsyncSession) -> dict:
         "completed_today": completed_today,
         "containers": containers,
         "container_status_counts": container_status_counts,
+        "pullouts_today": pullouts_today,
         "holds_by_entity": holds_by_entity,
         "total_on_hold": total_on_hold,
         "expiring_dos": expiring_dos,
@@ -289,6 +368,7 @@ def _render_html(data: dict, ai_bullets: list[str]) -> str:
     new_today = data["new_today"]
     completed_today = data["completed_today"]
     total_active = data["total_active"]
+    pullouts_today = data.get("pullouts_today", [])
 
     # ── AI Summary section ──
     if ai_bullets:
@@ -439,6 +519,71 @@ def _render_html(data: dict, ai_bullets: list[str]) -> str:
         f'<tr><td style="padding:0 32px 8px;">{holds_inner}</td></tr>'
     )
 
+    # ── Pull-outs not actioned ──
+    if pullouts_today:
+        pullout_rows = ""
+        for i, s in enumerate(pullouts_today):
+            is_overdue = s["overdue"]
+            bg = "#fff7ed" if is_overdue else ("#f8fafc" if i % 2 == 0 else "#ffffff")
+            stage_label = _STAGE_LABELS.get(s["stage"], s["stage"])
+            date_str = s["pull_out_date"].strftime("%d %b") if s["pull_out_date"] else "—"
+            if is_overdue:
+                date_cell = (
+                    f'<span style="font-weight:600;color:#c2410c;">{date_str}</span>'
+                    f'<span style="display:inline-block;margin-left:6px;padding:1px 6px;border-radius:4px;'
+                    f'font-size:10px;font-weight:700;background-color:#fee2e2;color:#dc2626;">OVERDUE</span>'
+                )
+            else:
+                date_cell = f'<span style="font-weight:600;">{date_str}</span>'
+            if s["reason"] == "not_collected":
+                reason_badge = (
+                    '<span style="display:inline-block;padding:2px 8px;border-radius:4px;'
+                    'font-size:11px;font-weight:600;background-color:#ffedd5;color:#c2410c;">'
+                    'Not Collected</span>'
+                )
+            else:
+                reason_badge = (
+                    '<span style="display:inline-block;padding:2px 8px;border-radius:4px;'
+                    'font-size:11px;font-weight:600;background-color:#ede9fe;color:#6d28d9;">'
+                    'CCRO Not Sent</span>'
+                )
+            if s["hold_entity"]:
+                hold_cell = (
+                    f'<span style="display:inline-block;padding:2px 8px;border-radius:4px;'
+                    f'font-size:11px;font-weight:600;background-color:#fee2e2;color:#dc2626;">'
+                    f'ON HOLD — {s["hold_entity"]}</span>'
+                    + (f'<br><span style="font-size:11px;color:#6b7280;">{s["hold_remark"]}</span>' if s["hold_remark"] else "")
+                )
+            else:
+                hold_cell = '<span style="color:#9ca3af;font-size:12px;">—</span>'
+            pullout_rows += (
+                f'<tr style="background-color:{bg};">'
+                f'{_td(s["bl_number"], "font-weight:600;white-space:nowrap;")}'
+                f'<td style="padding:8px 12px;font-family:Arial,sans-serif;font-size:13px;">{date_cell}</td>'
+                f'{_td(stage_label)}'
+                f'<td style="padding:8px 12px;">{reason_badge}</td>'
+                f'<td style="padding:8px 12px;">{hold_cell}</td>'
+                f'</tr>'
+            )
+        pullout_inner = (
+            '<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:1px solid #e2e8f0;">'
+            f'<tr>{_th("BL Number")}{_th("Pull-out Date")}{_th("Stage")}{_th("Reason")}{_th("Hold")}</tr>'
+            f'{pullout_rows}'
+            '</table>'
+        )
+        pullout_section = (
+            _section_header(f"Pull-outs Not Actioned ({len(pullouts_today)})") +
+            f'<tr><td style="padding:0 32px 8px;">{pullout_inner}</td></tr>'
+        )
+    else:
+        pullout_section = (
+            _section_header("Pull-outs Not Actioned") +
+            '<tr><td style="padding:0 32px 8px;">'
+            '<p style="margin:0;font-family:Arial,sans-serif;font-size:13px;color:#9ca3af;'
+            'text-align:center;padding:12px 0;">All pull-outs actioned — nothing pending.</p>'
+            '</td></tr>'
+        )
+
     # ── Expiring DOs ──
     if expiring_dos:
         do_rows = "".join(
@@ -495,6 +640,10 @@ def _render_html(data: dict, ai_bullets: list[str]) -> str:
 
   <!-- KPIs -->
   {kpi_section}
+  <tr><td style="height:8px;"></td></tr>
+
+  <!-- Today's Pull-outs -->
+  {pullout_section}
   <tr><td style="height:8px;"></td></tr>
 
   <!-- Holds -->

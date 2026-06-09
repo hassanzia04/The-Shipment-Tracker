@@ -21,6 +21,24 @@ class TruckOut(BaseModel):
     created_at: datetime
 
 
+class OutsourcedTruckIn(BaseModel):
+    plate_number: str
+    driver_name: str
+    contractor: str
+    nationality: str
+
+
+class OutsourcedTruckOut(BaseModel):
+    model_config = {"from_attributes": True}
+    id: UUID
+    plate_number: str
+    driver_name: str
+    contractor: str
+    nationality: str
+    is_active: bool
+    created_at: datetime
+
+
 class SimpleMasterIn(BaseModel):
     name: str
 

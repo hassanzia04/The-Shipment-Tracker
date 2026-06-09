@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, case, cast, String
+from sqlalchemy import select, func, case, cast, String, or_, and_
 from datetime import datetime, timedelta, timezone
 
 from app.database import get_db
@@ -596,6 +596,7 @@ async def reports(
         .join(Shipment, Shipment.id == Container.shipment_id)
         .where(
             Container.status == ContainerStatus.RETURNED,
+            Container.outsourced_truck_id.is_(None),
             *period_filter,
         )
     )).scalar() or 0
@@ -605,7 +606,13 @@ async def reports(
         .select_from(Container)
         .join(Shipment, Shipment.id == Container.shipment_id)
         .where(
-            Container.status == ContainerStatus.CLOSED,
+            or_(
+                Container.status == ContainerStatus.CLOSED,
+                and_(
+                    Container.outsourced_truck_id.isnot(None),
+                    Container.status == ContainerStatus.RETURNED,
+                ),
+            ),
             *period_filter,
         )
     )).scalar() or 0
@@ -646,7 +653,7 @@ async def reports(
         .group_by(ShipmentEvent.stage_from)
     )
     stage_durations = [
-        {"stage": r[0].value, "avg_days": round(r[1] / 86400, 1), "count": r[2]}
+        {"stage": r[0].value, "avg_hours": round(r[1] / 3600, 1), "count": r[2]}
         for r in (await db.execute(stage_dur_q)).all()
         if r[0] is not None and r[1] is not None
     ]
@@ -688,7 +695,7 @@ async def reports(
         {
             "entity": r[0].value,
             "count": r[1],
-            "avg_hold_days": round(r[2] / 86400, 1) if r[2] else None,
+            "avg_hold_hours": round(r[2] / 3600, 1) if r[2] else None,
         }
         for r in (await db.execute(hold_entity_q)).all()
         if r[0]
@@ -744,7 +751,7 @@ async def reports(
         .group_by(ShippingLine.name)
     )
     sl_hold_data = {
-        row[0]: {"hold_count": row[1], "avg_hold_days": round(row[2] / 86400, 1) if row[2] else None}
+        row[0]: {"hold_count": row[1], "avg_hold_hours": round(row[2] / 3600, 1) if row[2] else None}
         for row in (await db.execute(sl_hold_q)).all()
     }
 
@@ -778,7 +785,7 @@ async def reports(
                 "shipping_line": name,
                 "shipment_count": sl_shipment_counts.get(name, 0),
                 "hold_count": sl_hold_data.get(name, {}).get("hold_count", 0),
-                "avg_hold_days": sl_hold_data.get(name, {}).get("avg_hold_days"),
+                "avg_hold_hours": sl_hold_data.get(name, {}).get("avg_hold_hours"),
                 "top_reason": top_reason_by_sl[name][0].value if name in top_reason_by_sl else None,
             }
             for name in all_sl_names
@@ -824,7 +831,7 @@ async def reports(
         .group_by(ShipmentTask.task_type)
     )
     task_durations = [
-        {"task": r[0].value, "avg_days": round(r[1] / 86400, 1), "count": r[2]}
+        {"task": r[0].value, "avg_hours": round(r[1] / 3600, 1), "count": r[2]}
         for r in (await db.execute(task_dur_q)).all()
         if r[0] is not None and r[1] is not None
     ]
@@ -842,6 +849,60 @@ async def reports(
     })
 
     return result
+
+
+@router.get("/pro-tasks")
+async def pro_tasks(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Active PRO-team tasks with shipment context. Visible to FFD, MANAGEMENT, and admins."""
+    if current_user.team not in {Team.FFD, Team.MANAGEMENT} and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    from app.shipments.models import Shipment as _Shipment, ShipmentTask as _Task
+    from app.auth.models import User as _User
+
+    result = await db.execute(
+        select(
+            _Task.id.label("task_id"),
+            _Task.task_type,
+            _Task.status,
+            _Task.hold_entity,
+            _Task.hold_remark,
+            _Task.created_at,
+            _Shipment.bl_number,
+            _Shipment.current_stage,
+            _Shipment.pull_out_date,
+            _User.id.label("pro_user_id"),
+            _User.full_name.label("pro_user_name"),
+        )
+        .join(_Shipment, _Shipment.id == _Task.shipment_id)
+        .outerjoin(_User, _User.id == _Task.assigned_to_id)
+        .where(
+            _Task.assigned_team == Team.PRO.value,
+            _Task.status != TaskStatus.COMPLETED,
+        )
+        .order_by(_User.full_name.asc().nulls_last(), _Task.created_at.asc())
+    )
+
+    rows = result.all()
+    return [
+        {
+            "task_id": str(row.task_id),
+            "task_type": row.task_type.value,
+            "status": row.status.value,
+            "hold_entity": row.hold_entity.value if row.hold_entity else None,
+            "hold_remark": row.hold_remark,
+            "created_at": row.created_at.isoformat(),
+            "bl_number": row.bl_number,
+            "shipment_stage": row.current_stage.value,
+            "pull_out_date": row.pull_out_date.isoformat() if row.pull_out_date else None,
+            "pro_user_id": str(row.pro_user_id) if row.pro_user_id else None,
+            "pro_user_name": row.pro_user_name,
+        }
+        for row in rows
+    ]
 
 
 @router.post("/ai-summary")

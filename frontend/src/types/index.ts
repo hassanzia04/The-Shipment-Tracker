@@ -52,6 +52,7 @@ export type ContainerStatus =
   | 'CCRO_RETURNED'
   | 'CLOSED'
   | 'DO_REVALIDATION'
+  | 'OUTSOURCED_TRANSPORT'
 
 export interface User {
   id: string
@@ -102,6 +103,8 @@ export interface Container {
   revalidation_remark: string | null
   actual_pull_out_date: string | null
   offloaded_at: string | null
+  outsourced_truck_id: string | null
+  outsourced_expected_arrival_at: string | null
   created_at: string
   updated_at: string
 }
@@ -127,6 +130,11 @@ export interface Shipment {
   product_type_name: string | null
   loading_port_name: string | null
   shipping_line_name: string | null
+  bayan_type_id: string | null
+  bayan_type_name: string | null
+  eta_at_port: string | null
+  consignee_id: string | null
+  consignee_name: string | null
   tasks: Task[]
   containers: Container[]
   events: ShipmentEvent[]
@@ -155,6 +163,9 @@ export interface ShipmentListItem {
   ccro_returned_count: number
   dc_health_cert_missing: boolean
   amls_job_number: string | null
+  do_validity_date: string | null
+  eta_at_port: string | null
+  consignee_name: string | null
 }
 
 export interface ContainerViewItem {
@@ -182,6 +193,21 @@ export interface ContainerViewItem {
   actual_pull_out_date: string | null
   offloaded_at: string | null
   pull_out_date: string | null
+  offloading_is_amls: boolean
+  outsourced_truck_id: string | null
+  outsourced_expected_arrival_at: string | null
+  outsourced_plate_number: string | null
+  outsourced_driver_name: string | null
+}
+
+export interface OutsourcedTruck {
+  id: string
+  plate_number: string
+  driver_name: string
+  contractor: string
+  nationality: string
+  is_active: boolean
+  created_at: string
 }
 
 export interface Document {
