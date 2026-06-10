@@ -148,13 +148,10 @@ export function DocumentUploadPanel({ shipmentId, documents, onUploaded, readonl
 
   async function downloadDocument(doc: Document) {
     try {
-      const response = await documentsApi.getContent(doc.id)
-      const url = window.URL.createObjectURL(response.data)
+      const { data } = await documentsApi.getUrl(doc.id)
       const a = document.createElement('a')
-      a.href = url
-      a.download = doc.original_filename || `${doc.id}`
+      a.href = data.url
       a.click()
-      window.URL.revokeObjectURL(url)
     } catch {
       toast.error('Failed to download')
     }

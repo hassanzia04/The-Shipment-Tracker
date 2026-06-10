@@ -8,7 +8,7 @@ import toast from 'react-hot-toast'
 import { Eye, EyeOff } from 'lucide-react'
 import type { Team } from '@/types'
 
-const TEAMS: Team[] = ['CUSTOMER', 'FFD', 'PRO', 'TRANSPORT', 'DC', 'MANAGEMENT']
+const TEAMS: Team[] = ['CUSTOMER', 'FFD', 'PRO', 'TRANSPORT', 'DC', 'MANAGEMENT', 'CUSTOMER_MANAGEMENT']
 
 type Mode = 'invite' | 'create'
 

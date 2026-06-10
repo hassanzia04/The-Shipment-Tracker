@@ -1,3 +1,4 @@
+import datetime
 import io
 import uuid
 import zipfile as zf_module
@@ -102,6 +103,7 @@ async def upload_document(
             object_name=oci_key,
             put_object_body=compressed,
             content_type=file.content_type or "application/octet-stream",
+            content_disposition=f'attachment; filename="{file.filename}"',
         )
 
     if doc_type in CUSTOMER_REQUIRED_DOCS:
@@ -187,6 +189,24 @@ async def get_document_url(document_id: uuid.UUID, db: AsyncSession, actor: User
 
     if not settings.OCI_NAMESPACE:
         return f"/dev-placeholder/{doc.oci_path}"
+
+    client = _get_oci_client()
+    if client:
+        try:
+            details = _oci.object_storage.models.CreatePreauthenticatedRequestDetails(
+                name=f"par-{uuid.uuid4()}",
+                object_name=doc.oci_path,
+                access_type="ObjectRead",
+                time_expires=datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1),
+            )
+            par = client.create_preauthenticated_request(
+                namespace_name=settings.OCI_NAMESPACE,
+                bucket_name=settings.OCI_BUCKET_NAME,
+                create_preauthenticated_request_details=details,
+            )
+            return f"https://objectstorage.{settings.OCI_REGION}.oraclecloud.com{par.data.full_path}"
+        except Exception:
+            pass
 
     suffix = "?download=true" if as_download else ""
     return f"/api/documents/{document_id}/content{suffix}"

@@ -135,6 +135,7 @@ class ShipmentOut(BaseModel):
     eta_at_port: Optional[date] = None
     consignee_id: Optional[UUID] = None
     consignee_name: Optional[str] = None
+    offloading_is_amls: bool = False
     tasks: list[TaskOut] = []
     containers: list[ContainerOut] = []
     events: list[EventOut] = []
@@ -169,6 +170,7 @@ class ShipmentListOut(BaseModel):
     do_revalidation_count: int = 0
     ccro_returned_count: int = 0
     dc_health_cert_missing: bool = False
+    dn_missing: bool = False
     amls_job_number: Optional[str] = None
     do_validity_date: Optional[date] = None
     eta_at_port: Optional[date] = None

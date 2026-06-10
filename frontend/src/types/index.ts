@@ -1,4 +1,4 @@
-export type Team = 'CUSTOMER' | 'FFD' | 'PRO' | 'TRANSPORT' | 'DC' | 'MANAGEMENT'
+export type Team = 'CUSTOMER' | 'FFD' | 'PRO' | 'TRANSPORT' | 'DC' | 'MANAGEMENT' | 'CUSTOMER_MANAGEMENT'
 
 export type ShipmentStage =
   | 'CUSTOMER'
@@ -127,6 +127,7 @@ export interface Shipment {
   container_count: number | null
   amls_job_number: string | null
   offloading_point_name: string | null
+  offloading_is_amls: boolean
   product_type_name: string | null
   loading_port_name: string | null
   shipping_line_name: string | null
@@ -162,6 +163,7 @@ export interface ShipmentListItem {
   do_revalidation_count: number
   ccro_returned_count: number
   dc_health_cert_missing: boolean
+  dn_missing: boolean
   amls_job_number: string | null
   do_validity_date: string | null
   eta_at_port: string | null

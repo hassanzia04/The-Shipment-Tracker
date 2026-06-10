@@ -185,13 +185,10 @@ function DocChecklist({ documents, shipment }: { documents: ShipmentDoc[], shipm
 
 async function handleDownloadDoc(doc: ShipmentDoc) {
   try {
-    const response = await documentsApi.getContent(doc.id)
-    const url = window.URL.createObjectURL(response.data)
+    const { data } = await documentsApi.getUrl(doc.id)
     const a = document.createElement('a')
-    a.href = url
-    a.download = doc.original_filename || `${doc.id}`
+    a.href = data.url
     a.click()
-    window.URL.revokeObjectURL(url)
   } catch {
     toast.error('Failed to download')
   }
@@ -901,9 +898,7 @@ export function ShipmentDetail() {
       {/* Process documents — shown always, directly after tasks */}
       <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-xl p-4">
         <h2 className="font-semibold text-gray-800 dark:text-gray-100 mb-3">Process Documents</h2>
-        {processDocs.length === 0 ? (
-          <p className="text-sm text-gray-400">No process documents uploaded yet</p>
-        ) : (
+        {processDocs.length > 0 ? (
           <div className="space-y-2">
             {processDocs.map(doc => (
               <div key={doc.id} className="flex items-center justify-between text-sm p-2.5 bg-gray-50 dark:bg-gray-700 rounded-lg">
@@ -942,6 +937,13 @@ export function ShipmentDetail() {
                 </div>
               </div>
             ))}
+          </div>
+        ) : (
+          team !== 'FFD' && <p className="text-sm text-gray-400">No process documents uploaded yet</p>
+        )}
+        {team === 'FFD' && (
+          <div className={clsx(processDocs.length > 0 && 'mt-3 pt-3 border-t dark:border-gray-700')}>
+            <FfdMiscUpload shipmentId={id!} onUploaded={refresh} />
           </div>
         )}
       </div>
@@ -1251,6 +1253,42 @@ function TaskRow({ task, shipmentId, userTeam, userId, proUsers, doValidityDate,
         </div>
       )}
     </div>
+  )
+}
+
+function FfdMiscUpload({ shipmentId, onUploaded }: { shipmentId: string; onUploaded: () => void }) {
+  const [uploading, setUploading] = useState(false)
+
+  async function handleFile(file: File) {
+    setUploading(true)
+    try {
+      await documentsApi.upload({ shipment_id: shipmentId, doc_type: 'MISCELLANEOUS', file })
+      toast.success('Misc document uploaded')
+      onUploaded()
+    } catch (e: any) {
+      toast.error(e.response?.data?.detail || 'Upload failed')
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  return (
+    <label className={clsx(
+      'flex items-center gap-2 border border-dashed rounded-lg px-3 py-2 cursor-pointer text-xs transition-colors',
+      uploading
+        ? 'opacity-50 pointer-events-none border-gray-300 dark:border-gray-600 text-gray-400 dark:text-gray-500'
+        : 'border-gray-300 dark:border-gray-600 hover:border-blue-400 dark:hover:border-blue-500 text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400'
+    )}>
+      <Upload size={13} className="shrink-0" />
+      {uploading ? 'Uploading…' : 'Upload Misc Document'}
+      <input
+        type="file"
+        className="hidden"
+        accept=".pdf,image/*"
+        disabled={uploading}
+        onChange={e => { if (e.target.files?.[0]) { handleFile(e.target.files[0]); e.target.value = '' } }}
+      />
+    </label>
   )
 }
 
@@ -1776,6 +1814,65 @@ function TransportDcLayout({ shipment, trucks, team, stage, submitting, action, 
           </div>
         )}
 
+        {/* Delivery Note (per BL, AMLS only) */}
+        {team === 'DC' && shipment.offloading_is_amls && (() => {
+          const dnDoc = documents.find(d => d.doc_type === 'DN')
+          return (
+            <div className={clsx(
+              'rounded-xl border p-4 space-y-2',
+              dnDoc
+                ? 'bg-green-50 dark:bg-green-900/10 border-green-200 dark:border-green-800'
+                : 'bg-amber-50 dark:bg-amber-900/10 border-amber-200 dark:border-amber-800'
+            )}>
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-semibold uppercase tracking-wide text-gray-600 dark:text-gray-400">Delivery Note (DN)</p>
+                {dnDoc
+                  ? <span className="text-xs font-medium text-green-700 dark:text-green-400">✓ Uploaded</span>
+                  : <span className="text-xs font-medium text-amber-700 dark:text-amber-400">Missing</span>}
+              </div>
+              {dnDoc ? (
+                <div className="flex items-center gap-2">
+                  <p className="text-xs text-gray-600 dark:text-gray-400 truncate flex-1">{dnDoc.original_filename}</p>
+                  <button
+                    onClick={() => openDocument(dnDoc.id)}
+                    className="p-1 text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 shrink-0"
+                    title="View delivery note"
+                  >
+                    <Eye size={13} />
+                  </button>
+                  <button
+                    onClick={async () => { await documentsApi.delete(dnDoc.id); onUpdated() }}
+                    className="p-1 text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 shrink-0"
+                    title="Delete delivery note"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              ) : (
+                <label className="flex items-center gap-1.5 cursor-pointer text-xs text-amber-700 dark:text-amber-400 hover:text-amber-900 dark:hover:text-amber-300">
+                  <Upload size={12} />
+                  Upload Delivery Note
+                  <input
+                    type="file"
+                    className="hidden"
+                    accept=".pdf,.jpg,.jpeg,.png"
+                    onChange={async e => {
+                      const file = e.target.files?.[0]
+                      if (!file) return
+                      try {
+                        await documentsApi.upload({ shipment_id: shipmentId, doc_type: 'DN', file })
+                        toast.success('Delivery Note uploaded')
+                        onUpdated()
+                      } catch { toast.error('Upload failed') }
+                      e.target.value = ''
+                    }}
+                  />
+                </label>
+              )}
+            </div>
+          )
+        })()}
+
         {/* Audit trail */}
         <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-xl p-4">
           <button
@@ -1878,7 +1975,7 @@ function ContainerTableRow({ container, truck, shipmentId, team, trucks, submitt
   const canIssue = isTransport && !!truck && (container.status === 'ASSIGNED' || container.status === 'IN_TRANSIT')
   const DC_ACTION_STATUSES = ['AT_DC']
   const canOffload = isDC && DC_ACTION_STATUSES.includes(container.status)
-  const dnDoc = documents.find(d => d.doc_type === 'DN' && d.container_id === container.id)
+  const dnDoc = documents.find(d => d.doc_type === 'DN')
 
   function openExpand(mode: 'assign' | 'issue') {
     setExpandMode(mode)
@@ -1940,34 +2037,13 @@ function ContainerTableRow({ container, truck, shipmentId, team, trucks, submitt
               Mark Returned
             </button>
           )}
-          {canOffload && !dnDoc && (
-            <label className="flex items-center gap-1 cursor-pointer text-xs border border-blue-400 dark:border-blue-600 text-blue-700 dark:text-blue-400 px-2.5 py-1 rounded hover:bg-blue-50 dark:hover:bg-blue-900/20">
-              <Upload size={11} /> Upload DN
-              <input
-                type="file"
-                className="hidden"
-                accept=".pdf,.jpg,.jpeg,.png"
-                onChange={async e => {
-                  const file = e.target.files?.[0]
-                  if (!file) return
-                  try {
-                    await documentsApi.upload({ shipment_id: shipmentId, doc_type: 'DN', file, container_id: container.id })
-                    toast.success('Delivery Note uploaded')
-                    onUpdated()
-                  } catch { toast.error('Upload failed') }
-                  e.target.value = ''
-                }}
-              />
-            </label>
-          )}
           {canOffload && (
             <button
               onClick={() => action(() => shipmentsApi.markOffloaded(shipmentId, container.id), 'Container marked offloaded')}
-              disabled={submitting || !dnDoc}
-              title={!dnDoc ? 'Upload Delivery Note (DN) first' : undefined}
-              className="text-xs bg-green-600 text-white px-2.5 py-1 rounded hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={submitting}
+              className="text-xs bg-green-600 text-white px-2.5 py-1 rounded hover:bg-green-700 disabled:opacity-50"
             >
-              {dnDoc ? 'Mark Offloaded' : 'DN Required'}
+              Mark Offloaded
             </button>
           )}
           {container.status === 'OFFLOADED' && isDC && (

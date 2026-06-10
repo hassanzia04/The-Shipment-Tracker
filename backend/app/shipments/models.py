@@ -146,6 +146,15 @@ class Shipment(Base):
         # Set by list_shipments service after a targeted doc query — defaults to False
         return getattr(self, '_dc_health_cert_missing', False)
 
+    @property
+    def dn_missing(self) -> bool:
+        # Set by list_shipments service for AMLS shipments lacking a DN doc — defaults to False
+        return getattr(self, '_dn_missing', False)
+
+    @property
+    def offloading_is_amls(self) -> bool:
+        return bool(self.offloading_point and self.offloading_point.is_amls)
+
 
 class ShipmentTask(Base):
     __tablename__ = "shipment_tasks"

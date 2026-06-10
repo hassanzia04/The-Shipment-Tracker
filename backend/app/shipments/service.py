@@ -298,7 +298,8 @@ TEAM_QUEUE_STAGES: dict[Team, list[ShipmentStage]] = {
     Team.PRO:        [ShipmentStage.IN_PROGRESS],
     Team.TRANSPORT:  [ShipmentStage.TRANSPORT, ShipmentStage.DC_TRANSPORT],
     Team.DC:         [ShipmentStage.DC_TRANSPORT],
-    Team.MANAGEMENT: [],  # management sees all
+    Team.MANAGEMENT:          [],  # sees all
+    Team.CUSTOMER_MANAGEMENT: [],  # sees all
 }
 
 
@@ -367,6 +368,24 @@ async def list_shipments(
                 .correlate(Shipment)
                 .exists()
             )
+            dn_missing_cond = ~(
+                select(Doc.id)
+                .where(
+                    Doc.shipment_id == Shipment.id,
+                    Doc.doc_type == DocumentType.DN,
+                )
+                .correlate(Shipment)
+                .exists()
+            )
+            amls_cond = (
+                select(OffloadingPoint.id)
+                .where(
+                    OffloadingPoint.id == Shipment.offloading_point_id,
+                    OffloadingPoint.is_amls == True,
+                )
+                .correlate(Shipment)
+                .exists()
+            )
             # DC was involved if any container has arrived_at set (DC marked it arrived)
             dc_involved_cond = (
                 select(Container.id)
@@ -379,7 +398,8 @@ async def list_shipments(
             )
             base_where.append(or_(
                 Shipment.current_stage.in_(TEAM_QUEUE_STAGES[Team.DC]),
-                dc_involved_cond & health_cert_missing_cond,
+                dc_involved_cond & health_cert_missing_cond & amls_cond,
+                dc_involved_cond & dn_missing_cond & amls_cond,
             ))
         else:
             queue_stages = TEAM_QUEUE_STAGES.get(actor.team, [])
@@ -413,7 +433,7 @@ async def list_shipments(
     result = await db.execute(q)
     shipments = list(result.scalars().unique().all())
 
-    # Annotate DC shipments with health cert status (single extra query)
+    # Annotate DC shipments with health cert and DN status (two extra queries)
     if actor.team == Team.DC and shipments:
         from app.documents.models import Document as Doc
         from app.enums import DocumentType
@@ -426,7 +446,21 @@ async def list_shipments(
         )
         has_cert = {row[0] for row in cert_res.all()}
         for s in shipments:
-            s._dc_health_cert_missing = s.id not in has_cert
+            s._dc_health_cert_missing = (s.id not in has_cert) and bool(s.offloading_point and s.offloading_point.is_amls)
+
+        # DN missing — only relevant for AMLS shipments
+        amls_sids = [s.id for s in shipments if s.offloading_point and s.offloading_point.is_amls]
+        if amls_sids:
+            dn_res = await db.execute(
+                select(Doc.shipment_id).where(
+                    Doc.shipment_id.in_(amls_sids),
+                    Doc.doc_type == DocumentType.DN,
+                )
+            )
+            has_dn = {row[0] for row in dn_res.all()}
+            for s in shipments:
+                if s.offloading_point and s.offloading_point.is_amls:
+                    s._dn_missing = s.id not in has_dn
 
     return shipments, total
 
@@ -1100,16 +1134,7 @@ async def mark_offloaded(db: AsyncSession, shipment_id: uuid.UUID, actor: User, 
         if container.status != ContainerStatus.AT_DC:
             raise HTTPException(status_code=400, detail="Container must be marked as arrived at DC before it can be offloaded")
 
-        from app.documents.models import Document
-        dn_exists = await db.execute(
-            select(Document.id).where(
-                Document.shipment_id == shipment_id,
-                Document.container_id == container_id,
-                Document.doc_type == DocumentType.DN,
-            ).limit(1)
-        )
-        if not dn_exists.scalar_one_or_none():
-            raise HTTPException(status_code=400, detail="Upload the Delivery Note (DN) for this container before marking it offloaded")
+
     elif is_outsourced:
         # Outsourced truck, non-AMLS location — FFD only, no DN required
         _assert_team(actor, Team.FFD)
@@ -1975,14 +2000,14 @@ async def get_container_view(db: AsyncSession, actor: User, historical: bool = F
         .exists()
     )
 
-    # Subquery: return DN document id for this container (None if not uploaded)
+    # Subquery: return DN document id for this shipment/BL (None if not uploaded); AMLS only
     dn_document_id_sq = (
         select(Doc.id)
         .where(
-            Doc.container_id == Container.id,
+            Doc.shipment_id == Shipment.id,
             Doc.doc_type == DocumentType.DN,
         )
-        .correlate(Container)
+        .correlate(Shipment)
         .limit(1)
         .scalar_subquery()
     )

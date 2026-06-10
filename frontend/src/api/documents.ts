@@ -48,13 +48,6 @@ export const documentsApi = {
 
 export const openDocument = async (documentOrId: string | { id: string }) => {
   const documentId = typeof documentOrId === 'string' ? documentOrId : documentOrId.id
-  const response = await documentsApi.getContent(documentId)
-
-  const blobUrl = window.URL.createObjectURL(response.data)
-
-  window.open(blobUrl, '_blank', 'noopener,noreferrer')
-
-  setTimeout(() => {
-    window.URL.revokeObjectURL(blobUrl)
-  }, 60_000)
+  const { data } = await documentsApi.getUrl(documentId)
+  window.open(data.url, '_blank', 'noopener,noreferrer')
 }

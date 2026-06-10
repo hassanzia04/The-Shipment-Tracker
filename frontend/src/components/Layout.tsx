@@ -17,7 +17,8 @@ function getBottomNavItems(user: { team: string; is_admin: boolean } | null): Na
   const Y = { label: 'Productivity',href: '/productivity',icon: BarChart2 }
 
   switch (user?.team) {
-    case 'CUSTOMER':   return [D, S, R]
+    case 'CUSTOMER':            return [D, S, R]
+    case 'CUSTOMER_MANAGEMENT': return [D, S, R]
     case 'FFD':        return [D, S, R, P]
     case 'MANAGEMENT': return [D, S, R, P]
     case 'PRO':        return [D, S, R, Y]
@@ -84,7 +85,7 @@ export function Layout({ children }: Props) {
       <nav className="flex-1 px-2 py-4 space-y-1 overflow-y-auto">
         {NAV.map(({ label, href, icon }) => navLink(href, label, icon))}
         {(user?.team === 'MANAGEMENT' || user?.team === 'PRO' || user?.is_admin) && navLink('/productivity', 'Productivity', BarChart2)}
-        {(user?.team === 'FFD' || user?.team === 'MANAGEMENT' || user?.team === 'CUSTOMER' || user?.team === 'TRANSPORT' || user?.is_admin) && navLink('/reports', 'Reports', TrendingUp)}
+        {(user?.team === 'FFD' || user?.team === 'MANAGEMENT' || user?.team === 'CUSTOMER' || user?.team === 'CUSTOMER_MANAGEMENT' || user?.team === 'TRANSPORT' || user?.is_admin) && navLink('/reports', 'Reports', TrendingUp)}
         {(user?.team === 'FFD' || user?.team === 'MANAGEMENT' || user?.is_admin) && navLink('/pro-tasks', 'PRO Tasks', ClipboardList)}
         {(user?.team === 'FFD' || user?.team === 'CUSTOMER' || user?.is_admin) && navLink('/masters', 'Masters', Database)}
         {user?.team === 'CUSTOMER' && navLink('/import', 'Create Shipment', FolderOpen)}
@@ -112,7 +113,7 @@ export function Layout({ children }: Props) {
           <LogOut size={16} /> Sign out
         </button>
         <p
-          title="Developed by Hassan Zia"
+          title="Developed by Bayanat Tech"
           className="text-center text-[10px] text-gray-400 dark:text-gray-600 mt-2 cursor-default select-none"
         >
           v1.0.0-beta

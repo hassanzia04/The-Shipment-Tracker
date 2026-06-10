@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { differenceInCalendarDays, parseISO, isValid } from 'date-fns'
 import { shipmentsApi } from '@/api/shipments'
@@ -11,7 +11,7 @@ import { formatDate, formatDateTime } from '@/lib/dates'
 import type { ContainerViewItem, Truck, OutsourcedTruck } from '@/types'
 import {
   AlertTriangle, CheckCircle, Clock, Download, Truck as TruckIcon,
-  Package, MapPin, Upload, Trash2, Eye, Search, FileSpreadsheet, X,
+  Package, MapPin, Search, FileSpreadsheet, X,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
@@ -106,24 +106,9 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
   const [outsourcedEtaDate, setOutsourcedEtaDate] = useState(() => tomorrowDateStr())
   const [outsourcedEtaTime, setOutsourcedEtaTime] = useState('09:00')
 
-  // DN upload / delete
-  const [dnUploading, setDnUploading] = useState(false)
-  const [dnDeleting, setDnDeleting] = useState(false)
-  const dnInputRef = useRef<HTMLInputElement>(null)
 
   const isOutsourced = !!c.outsourced_truck_id
   const isAmls = c.offloading_is_amls
-
-  async function handleDnDelete() {
-    if (!c.dn_document_id) return
-    setDnDeleting(true)
-    try {
-      await documentsApi.delete(c.dn_document_id)
-      qc.invalidateQueries({ queryKey: ['container-view'] })
-      onUpdated()
-    } catch { toast.error('Delete failed') }
-    finally { setDnDeleting(false) }
-  }
 
   const canBreakdownOrDelay = !historical && team === 'TRANSPORT' && !c.arrived_at &&
     ['ASSIGNED', 'IN_TRANSIT', 'BREAKDOWN'].includes(c.status)
@@ -156,9 +141,8 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
   async function downloadCcro() {
     if (!c.ccro_document_id) { toast.error('No CCRO uploaded for this container'); return }
     try {
-      const response = await documentsApi.getContent(c.ccro_document_id)
-      const url = URL.createObjectURL(response.data)
-      const a = document.createElement('a'); a.href = url; a.download = `${c.container_number}_CCRO`; a.click(); URL.revokeObjectURL(url)
+      const { data } = await documentsApi.getUrl(c.ccro_document_id)
+      const a = document.createElement('a'); a.href = data.url; a.click()
     } catch { toast.error('Failed to download CCRO') }
   }
 
@@ -295,19 +279,6 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
       setExpanded(null)
     } catch (e: any) { toast.error(e.response?.data?.detail || 'Failed') }
     finally { setSubmitting(false) }
-  }
-
-  async function handleDnUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (!file) return
-    setDnUploading(true)
-    try {
-      await documentsApi.upload({ shipment_id: c.shipment_id, container_id: c.container_id, doc_type: 'DN', file })
-      toast.success('Delivery Note uploaded')
-      qc.invalidateQueries({ queryKey: ['container-view'] })
-      onUpdated()
-    } catch (err: any) { toast.error(err.response?.data?.detail || 'Upload failed') }
-    finally { setDnUploading(false); if (dnInputRef.current) dnInputRef.current.value = '' }
   }
 
   const validity = doUrgency(c.do_validity_date)
@@ -476,46 +447,7 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
                 Edit time
               </button>
             )}
-            {/* AMLS offload: DN required (regardless of truck type — DC only) */}
-            {canMarkOffloaded && isAmls && !c.dn_document_id && (
-              <>
-                <input ref={dnInputRef} type="file" accept=".pdf,image/*" className="hidden" onChange={handleDnUpload} />
-                <button
-                  onClick={() => dnInputRef.current?.click()}
-                  disabled={dnUploading}
-                  className="flex items-center gap-1 text-xs px-2 py-1 rounded border font-medium text-blue-700 dark:text-blue-400 border-blue-300 dark:border-blue-700 hover:bg-blue-50 dark:hover:bg-blue-900/20 disabled:opacity-50"
-                >
-                  <Upload size={11} /> {dnUploading ? 'Uploading…' : 'Upload DN'}
-                </button>
-                <button disabled className="text-xs bg-green-600 text-white px-2 py-1 rounded opacity-40 cursor-not-allowed" title="Upload Delivery Note first">
-                  Offloaded
-                </button>
-              </>
-            )}
-            {canMarkOffloaded && isAmls && c.dn_document_id && (
-              <>
-                <button
-                  onClick={() => openDocument(c.dn_document_id!)}
-                  className="flex items-center gap-1 text-xs px-2 py-1 rounded border font-medium text-blue-600 dark:text-blue-400 border-blue-200 dark:border-blue-700 hover:bg-blue-50 dark:hover:bg-blue-900/20"
-                  title="View Delivery Note"
-                >
-                  <Eye size={11} /> DN
-                </button>
-                <button
-                  onClick={handleDnDelete}
-                  disabled={dnDeleting}
-                  className="flex items-center gap-1 text-xs px-2 py-1 rounded border font-medium text-red-600 dark:text-red-400 border-red-200 dark:border-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50"
-                  title="Delete Delivery Note"
-                >
-                  <Trash2 size={11} />
-                </button>
-                <button onClick={markOffloaded} disabled={submitting} className="text-xs bg-green-600 text-white px-2 py-1 rounded hover:bg-green-700 disabled:opacity-50">
-                  Offloaded
-                </button>
-              </>
-            )}
-            {/* Non-AMLS: offload directly, no DN required */}
-            {canMarkOffloaded && !isAmls && (
+            {canMarkOffloaded && (
               <button onClick={markOffloaded} disabled={submitting} className="text-xs bg-green-600 text-white px-2 py-1 rounded hover:bg-green-700 disabled:opacity-50">
                 Offloaded
               </button>

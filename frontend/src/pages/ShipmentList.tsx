@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { differenceInCalendarDays, parseISO, isValid } from 'date-fns'
 import { shipmentsApi } from '@/api/shipments'
 import { authApi } from '@/api/auth'
@@ -478,14 +478,21 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                             </span>
                           )}
                         </div>
-                      ) : isDC && s.dc_health_cert_missing ? (
+                      ) : isDC && (s.dc_health_cert_missing || s.dn_missing) ? (
                         <div className="flex flex-col gap-1">
                           <span className={clsx('text-xs font-medium px-2 py-0.5 rounded-full', STAGE_COLORS[s.current_stage])}>
                             {STAGE_LABELS[s.current_stage as ShipmentStage]}
                           </span>
-                          <span className="text-xs font-medium px-2 py-0.5 rounded-full inline-flex items-center gap-1 bg-amber-100 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400">
-                            <AlertTriangle size={10} /> Health Cert Missing
-                          </span>
+                          {s.dc_health_cert_missing && (
+                            <span className="text-xs font-medium px-2 py-0.5 rounded-full inline-flex items-center gap-1 bg-amber-100 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400">
+                              <AlertTriangle size={10} /> Health Cert Missing
+                            </span>
+                          )}
+                          {s.dn_missing && (
+                            <span className="text-xs font-medium px-2 py-0.5 rounded-full inline-flex items-center gap-1 bg-amber-100 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400">
+                              <AlertTriangle size={10} /> DN Missing
+                            </span>
+                          )}
                         </div>
                       ) : (
                         <span className={clsx('text-xs font-medium px-2 py-0.5 rounded-full', STAGE_COLORS[s.current_stage])}>
@@ -677,13 +684,14 @@ export function ShipmentList() {
 
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
-  const [stageFilter, setStageFilter] = useState<ShipmentStage | '' | 'my_queue'>(() =>
-    user?.team === 'MANAGEMENT' || user?.is_admin ? '' : 'my_queue'
-  )
-  const [page, setPage] = useState(1)
-  const [view, setView] = useState<'priority' | 'containers'>(() =>
-    isTransport || isDC ? 'containers' : 'priority'
-  )
+  const [searchParams, setSearchParams] = useSearchParams()
+  const view = (searchParams.get('view') as 'priority' | 'containers') ?? (isTransport || isDC ? 'containers' : 'priority')
+  const setView = (v: 'priority' | 'containers') => setSearchParams(p => { p.set('view', v); return p })
+  const page = parseInt(searchParams.get('page') ?? '1', 10)
+  const setPage = (p: number) => setSearchParams(params => { params.set('page', String(p)); return params })
+  const defaultStage: ShipmentStage | '' | 'my_queue' = (user?.team === 'MANAGEMENT' || user?.is_admin) ? '' : 'my_queue'
+  const stageFilter = (searchParams.get('stage') as ShipmentStage | '' | 'my_queue' | null) ?? defaultStage
+  const setStageFilter = (s: ShipmentStage | '' | 'my_queue') => setSearchParams(p => { p.set('stage', s); return p })
   const [missingDate, setMissingDate] = useState(false)
   const [amlsSearch, setAmlsSearch] = useState('')
   const [debouncedAmlsSearch, setDebouncedAmlsSearch] = useState('')
@@ -760,7 +768,11 @@ export function ShipmentList() {
     return () => clearTimeout(t)
   }, [amlsSearch])
 
-  useEffect(() => { setPage(1) }, [debouncedSearch, stageFilter, missingDate, debouncedAmlsSearch, missingAmls])
+  const isFirstRender = useRef(true)
+  useEffect(() => {
+    if (isFirstRender.current) { isFirstRender.current = false; return }
+    setPage(1)
+  }, [debouncedSearch, stageFilter, missingDate, debouncedAmlsSearch, missingAmls])
 
   const skip = (page - 1) * PAGE_SIZE
   const isMyQueue = stageFilter === 'my_queue'

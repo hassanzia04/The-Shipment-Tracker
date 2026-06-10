@@ -8,6 +8,7 @@ class Team(str, Enum):
     TRANSPORT = "TRANSPORT"
     DC = "DC"
     MANAGEMENT = "MANAGEMENT"
+    CUSTOMER_MANAGEMENT = "CUSTOMER_MANAGEMENT"
 
 
 class ShipmentStage(str, Enum):
@@ -113,7 +114,7 @@ class DocumentType(str, Enum):
     DO = "DO"
     CCRO = "CCRO"
     # DC documents
-    DN = "DN"                          # Delivery Note — per container, mandatory before offloading
+    DN = "DN"                          # Delivery Note — per BL, AMLS only, mandatory before any container can be offloaded
     DC_HEALTH_CERT = "DC_HEALTH_CERT"  # Health certificate — per BL, DC internal requirement
 
 
