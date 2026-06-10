@@ -30,6 +30,10 @@ export const documentsApi = {
 
   getUrl: (documentId: string) => api.get<{ url: string }>(`/documents/${documentId}/url`),
 
+  getContent: (documentId: string) =>
+    api.get(`/documents/${documentId}/content`, {
+      responseType: 'blob',
+    }),
   getDownloadUrl: (documentId: string) =>
     api.get<{ url: string }>(`/documents/${documentId}/url?download=true`),
 
@@ -40,4 +44,17 @@ export const documentsApi = {
     api.get('/documents/ccros/pending-zip', { responseType: 'blob' }),
 
   delete: (documentId: string) => api.delete(`/documents/${documentId}`),
+}
+
+export const openDocument = async (documentOrId: string | { id: string }) => {
+  const documentId = typeof documentOrId === 'string' ? documentOrId : documentOrId.id
+  const response = await documentsApi.getContent(documentId)
+
+  const blobUrl = window.URL.createObjectURL(response.data)
+
+  window.open(blobUrl, '_blank', 'noopener,noreferrer')
+
+  setTimeout(() => {
+    window.URL.revokeObjectURL(blobUrl)
+  }, 60_000)
 }
