@@ -33,6 +33,9 @@ export const authApi = {
   toggleActive: (userId: string, active: boolean) =>
     api.patch(`/auth/users/${userId}/toggle-active`, null, { params: { active } }),
 
+  updateTeam: (userId: string, team: string) =>
+    api.patch(`/auth/users/${userId}/team`, { team }),
+
   changePassword: (current_password: string, new_password: string) =>
     api.post('/auth/change-password', { current_password, new_password }),
 }

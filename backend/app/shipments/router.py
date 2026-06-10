@@ -192,6 +192,11 @@ async def rename_container(shipment_id: uuid.UUID, container_id: uuid.UUID, body
     return await service.rename_container(db, shipment_id, container_id, actor, body.container_number)
 
 
+@router.delete("/{shipment_id}/containers/{container_id}", response_model=schemas.ShipmentOut)
+async def delete_container(shipment_id: uuid.UUID, container_id: uuid.UUID, db: AsyncSession = Depends(get_db), actor: User = Depends(get_current_user)):
+    return await service.delete_container(db, shipment_id, container_id, actor)
+
+
 @router.post("/{shipment_id}/confirm-ccro", response_model=schemas.ShipmentOut)
 async def confirm_ccro(shipment_id: uuid.UUID, db: AsyncSession = Depends(get_db), actor: User = Depends(get_current_user)):
     return await service.confirm_ccro_and_send_to_transport(db, shipment_id, actor)

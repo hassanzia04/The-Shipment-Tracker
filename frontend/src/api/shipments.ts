@@ -117,6 +117,9 @@ export const shipmentsApi = {
   assignOutsourcedTruck: (shipmentId: string, containerId: string, data: { outsourced_truck_id: string; expected_arrival_at: string }) =>
     api.post<Shipment>(`/shipments/${shipmentId}/containers/${containerId}/assign-outsourced-truck`, data),
 
+  deleteContainer: (shipmentId: string, containerId: string) =>
+    api.delete<Shipment>(`/shipments/${shipmentId}/containers/${containerId}`),
+
   markReturned: (id: string, container_id: string) =>
     api.post<Shipment>(`/shipments/${id}/mark-returned`, { container_id }),
 

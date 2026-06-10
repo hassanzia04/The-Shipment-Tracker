@@ -7,11 +7,12 @@ from app.config import settings
 
 
 class SmtpProvider(EmailProvider):
-    async def send(self, to: str, subject: str, html_body: str, cc: list[str] | None = None) -> None:
+    async def send(self, to: str | list[str], subject: str, html_body: str, cc: list[str] | None = None) -> None:
+        to_list = to if isinstance(to, list) else [to]
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
         msg["From"] = settings.SMTP_SENDER_EMAIL
-        msg["To"] = to
+        msg["To"] = ", ".join(to_list)
         if cc:
             msg["Cc"] = ", ".join(cc)
         msg.attach(MIMEText(html_body, "html"))
@@ -20,5 +21,5 @@ class SmtpProvider(EmailProvider):
             if settings.SMTP_USE_TLS:
                 server.starttls()
             server.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
-            recipients = [to] + (cc or [])
+            recipients = to_list + (cc or [])
             server.sendmail(settings.SMTP_SENDER_EMAIL, recipients, msg.as_string())

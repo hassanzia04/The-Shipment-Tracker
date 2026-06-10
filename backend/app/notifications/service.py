@@ -115,12 +115,14 @@ async def notify_team(db: AsyncSession, shipment, team: Team, template_key: str,
     cc_emails = await _get_cc_emails_for_team(db, team)
     escaped_extra = {k: _html.escape(str(v)) for k, v in extra.items()}
 
+    body = template.get("body", "").format(
+        bl_number=_html.escape(shipment.bl_number),
+        team=_html.escape(team.value),
+        **escaped_extra,
+    )
+    subject = f"{template.get('subject', 'FFD Tracker')} — BL: {shipment.bl_number}"
+
     for user in users:
-        body = template.get("body", "").format(
-            bl_number=_html.escape(shipment.bl_number),
-            team=_html.escape(team.value),
-            **escaped_extra,
-        )
         notif = Notification(
             shipment_id=shipment.id,
             recipient_id=user.id,
@@ -129,16 +131,13 @@ async def notify_team(db: AsyncSession, shipment, team: Team, template_key: str,
             payload={"subject": template.get("subject", ""), "body": body},
         )
         db.add(notif)
+
+    if users:
+        team_emails = [u.email for u in users]
         try:
-            send_email_task.delay(
-                user.email,
-                f"{template.get('subject', 'FFD Tracker')} — BL: {shipment.bl_number}",
-                f"<p>{body}</p>",
-                cc_emails or None,
-            )
+            send_email_task.delay(team_emails, subject, f"<p>{body}</p>", cc_emails or None)
         except Exception:
-            notif.queue_failed = True
-            logger.exception("Failed to queue email to %s (broker unavailable?)", user.email)
+            logger.exception("Failed to queue team email for %s (broker unavailable?)", team.value)
 
     await db.commit()
 

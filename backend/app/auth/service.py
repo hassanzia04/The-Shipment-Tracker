@@ -203,6 +203,16 @@ async def list_users_by_team_with_task_counts(db: AsyncSession, team: Team) -> l
     ]
 
 
+async def update_user_team(db: AsyncSession, user_id: uuid.UUID, team) -> User:
+    user = await get_user_by_id(db, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.team = team
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
 async def toggle_user_active(db: AsyncSession, user_id: uuid.UUID, active: bool) -> User:
     user = await get_user_by_id(db, user_id)
     if not user:

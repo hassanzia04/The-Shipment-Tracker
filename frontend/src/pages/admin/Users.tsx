@@ -88,6 +88,16 @@ export function AdminUsers() {
     }
   }
 
+  async function changeTeam(userId: string, team: Team) {
+    try {
+      await authApi.updateTeam(userId, team)
+      qc.invalidateQueries({ queryKey: ['users'] })
+      toast.success('Team updated')
+    } catch {
+      toast.error('Failed to update team')
+    }
+  }
+
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold text-gray-900 dark:text-white">User Management</h1>
@@ -230,7 +240,13 @@ export function AdminUsers() {
                 <td className="px-4 py-3 font-medium dark:text-gray-100">{u.full_name}</td>
                 <td className="px-4 py-3 text-gray-500 dark:text-gray-400">{u.email}</td>
                 <td className="px-4 py-3">
-                  <span className="px-2 py-0.5 bg-gray-100 dark:bg-gray-600 dark:text-gray-300 rounded text-xs">{u.team}</span>
+                  <select
+                    value={u.team}
+                    onChange={e => changeTeam(u.id, e.target.value as Team)}
+                    className="text-xs border dark:border-gray-600 rounded px-2 py-0.5 bg-gray-100 dark:bg-gray-700 dark:text-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  >
+                    {TEAMS.map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
                 </td>
                 <td className="px-4 py-3">
                   <span className={`px-2 py-0.5 rounded text-xs ${u.is_active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>

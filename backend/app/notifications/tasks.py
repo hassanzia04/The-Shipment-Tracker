@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
     max_retries=3,
     default_retry_delay=60,
 )
-def send_email_task(self, to: str, subject: str, html_body: str, cc: list[str] | None = None) -> None:
+def send_email_task(self, to: str | list[str], subject: str, html_body: str, cc: list[str] | None = None) -> None:
     """Send a single email via the configured provider. Retries up to 3 times on failure."""
     try:
         from app.notifications.providers.gmail import get_email_provider
@@ -143,11 +143,13 @@ async def _send_do_expiry_alerts() -> None:
                 users_result = await db.execute(
                     select(User).where(User.team == team, User.is_active == True)
                 )
-                for user in users_result.scalars().all():
-                    try:
-                        send_email_task.delay(user.email, subject, html)
-                    except Exception:
-                        logger.error("Failed to queue DO expiry alert to %s", user.email)
+                team_emails = [u.email for u in users_result.scalars().all()]
+                if not team_emails:
+                    continue
+                try:
+                    send_email_task.delay(team_emails, subject, html)
+                except Exception:
+                    logger.error("Failed to queue DO expiry alert for team %s", team.value)
     finally:
         await engine.dispose()
 

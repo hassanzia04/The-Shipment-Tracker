@@ -689,7 +689,7 @@ async def send_daily_report(db: AsyncSession) -> None:
     subject = f"Shipment Tracker — Daily Operations Report · {data['report_date']}"
 
     from app.notifications.tasks import send_email_task
-    for r in recipients:
-        send_email_task.delay(r.email, subject, html)
+    emails = [r.email for r in recipients]
+    send_email_task.delay(emails, subject, html)
 
     logger.info("Daily report dispatched to %d recipient(s).", len(recipients))

@@ -153,6 +153,16 @@ async def change_password(
     await service.change_password(db, actor, body.current_password, body.new_password)
 
 
+@router.patch("/users/{user_id}/team", response_model=schemas.UserListOut)
+async def update_user_team(
+    user_id: str,
+    body: schemas.UpdateUserTeamRequest,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    return await service.update_user_team(db, _uuid.UUID(user_id), body.team)
+
+
 @router.patch("/users/{user_id}/toggle-active", response_model=schemas.UserListOut)
 async def toggle_active(
     user_id: str,

@@ -128,6 +128,7 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
   const canBreakdownOrDelay = !historical && team === 'TRANSPORT' && !c.arrived_at &&
     ['ASSIGNED', 'IN_TRANSIT', 'BREAKDOWN'].includes(c.status)
   const canAssign       = !historical && team === 'TRANSPORT' && c.status === 'PENDING' && !c.truck_id
+  const canReassign     = !historical && team === 'TRANSPORT' && !c.arrived_at && !!c.truck_id && ['ASSIGNED', 'IN_TRANSIT', 'BREAKDOWN'].includes(c.status)
   const canReturnToFfd  = !historical && team === 'TRANSPORT' && c.status === 'PENDING' && !c.truck_id
   const canMarkArrived  = !historical && team === 'DC' && !c.arrived_at && (!!c.truck_id || isOutsourced) && isAmls
   const canEditArrived  = !historical && team === 'DC' && !!c.arrived_at && isAmls
@@ -142,7 +143,7 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
   const canMarkReturned           = !historical && c.status === 'OFFLOADED' && (isOutsourced ? team === 'FFD' : team === 'TRANSPORT')
   const canRequestDoRevalidation  = !historical && team === 'TRANSPORT' && c.status === 'OFFLOADED' && !isOutsourced
   const canMarkDoRevalidated      = !historical && team === 'FFD' && c.status === 'DO_REVALIDATION'
-  const canAssignOutsourcedTruck  = !historical && team === 'FFD' && c.status === 'CCRO_RETURNED'
+  const canAssignOutsourcedTruck  = !historical && team === 'FFD' && ['CCRO_RETURNED', 'OUTSOURCED_TRANSPORT'].includes(c.status)
 
   function openArrivedForm() {
     const d = c.arrived_at ? new Date(c.arrived_at) : new Date()
@@ -403,6 +404,14 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
                 <TruckIcon size={11} /> Assign
               </button>
             )}
+            {canReassign && (
+              <button
+                onClick={() => setExpanded(expanded === 'assign' ? null : 'assign')}
+                className={clsx('flex items-center gap-1 text-xs px-2 py-1 rounded border font-medium', expanded === 'assign' ? 'bg-blue-600 text-white border-blue-600' : 'text-blue-700 dark:text-blue-400 border-blue-200 dark:border-blue-700 hover:bg-blue-50 dark:hover:bg-blue-900/20')}
+              >
+                <TruckIcon size={11} /> Change Truck
+              </button>
+            )}
             {canReturnToFfd && (
               <button
                 onClick={() => setExpanded(expanded === 'return' ? null : 'return')}
@@ -442,7 +451,7 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
                 onClick={() => setExpanded(expanded === 'assign_outsourced' ? null : 'assign_outsourced')}
                 className={clsx('flex items-center gap-1 text-xs px-2 py-1 rounded border font-medium', expanded === 'assign_outsourced' ? 'bg-cyan-600 text-white border-cyan-600' : 'text-cyan-700 dark:text-cyan-400 border-cyan-300 dark:border-cyan-700 hover:bg-cyan-50 dark:hover:bg-cyan-900/20')}
               >
-                <TruckIcon size={11} /> Assign Outsourced Truck
+                <TruckIcon size={11} /> {c.status === 'OUTSOURCED_TRANSPORT' ? 'Change Outsourced Truck' : 'Assign Outsourced Truck'}
               </button>
             )}
             {/* DC actions */}

@@ -51,11 +51,11 @@ class GmailProvider(EmailProvider):
 
         return build("gmail", "v1", credentials=creds)
 
-    async def send(self, to: str, subject: str, html_body: str, cc: list[str] | None = None) -> None:
+    async def send(self, to: str | list[str], subject: str, html_body: str, cc: list[str] | None = None) -> None:
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
         msg["From"] = settings.GMAIL_SENDER_EMAIL
-        msg["To"] = to
+        msg["To"] = ", ".join(to) if isinstance(to, list) else to
         if cc:
             msg["Cc"] = ", ".join(cc)
         msg.attach(MIMEText(html_body, "html"))

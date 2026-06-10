@@ -1175,8 +1175,8 @@ async def assign_outsourced_truck(
     container = result.scalar_one_or_none()
     if not container:
         raise HTTPException(status_code=404, detail="Container not found")
-    if container.status != ContainerStatus.CCRO_RETURNED:
-        raise HTTPException(status_code=400, detail="Can only assign outsourced truck to containers in CCRO_RETURNED state")
+    if container.status not in (ContainerStatus.CCRO_RETURNED, ContainerStatus.OUTSOURCED_TRANSPORT):
+        raise HTTPException(status_code=400, detail="Can only assign outsourced truck to containers in CCRO_RETURNED or OUTSOURCED_TRANSPORT state")
 
     truck_result = await db.execute(
         select(OutsourcedTruck).where(OutsourcedTruck.id == outsourced_truck_id, OutsourcedTruck.is_active == True)
@@ -1192,6 +1192,44 @@ async def assign_outsourced_truck(
     db.add(ContainerEvent(container_id=container_id, event_type="OUTSOURCED_TRUCK_ASSIGNED", actor_id=actor.id))
     await _record_event(db, shipment, EventType.OUTSOURCED_TRUCK_ASSIGNED, actor,
                         remark=f"Container {container.container_number} — {truck.plate_number}")
+    await db.commit()
+    return await _get_shipment(db, shipment_id)
+
+
+# ── FFD: Delete container ─────────────────────────────────────────────────────
+
+async def delete_container(
+    db: AsyncSession, shipment_id: uuid.UUID, container_id: uuid.UUID, actor: User
+) -> Shipment:
+    shipment = await _get_shipment(db, shipment_id)
+    if not actor.is_admin:
+        _assert_team(actor, Team.FFD)
+        _assert_stage(shipment, ShipmentStage.IN_PROGRESS)
+
+    result = await db.execute(select(Container).where(Container.id == container_id, Container.shipment_id == shipment_id))
+    container = result.scalar_one_or_none()
+    if not container:
+        raise HTTPException(status_code=404, detail="Container not found")
+
+    if not actor.is_admin and container.status != ContainerStatus.PENDING:
+        raise HTTPException(status_code=400, detail="Only pending containers can be deleted")
+
+    # Delete CCRO document (nulls FK, removes OCI file, deletes DB record)
+    if container.ccro_document_id:
+        from app.documents.service import delete_document
+        try:
+            await delete_document(db, actor, container.ccro_document_id)
+        except Exception:
+            container.ccro_document_id = None
+            await db.flush()
+
+    # Delete container events
+    events = await db.execute(select(ContainerEvent).where(ContainerEvent.container_id == container_id))
+    for ev in events.scalars().all():
+        await db.delete(ev)
+    await db.flush()
+
+    await db.delete(container)
     await db.commit()
     return await _get_shipment(db, shipment_id)
 

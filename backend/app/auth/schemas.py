@@ -72,3 +72,7 @@ class UserWorkloadOut(BaseModel):
 class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str
+
+
+class UpdateUserTeamRequest(BaseModel):
+    team: Team

@@ -815,6 +815,22 @@ export function ShipmentDetail() {
                     )}
                   </div>
                   <div className="flex gap-2 shrink-0 flex-wrap">
+                    {team === 'FFD' && stage === 'IN_PROGRESS' && c.status === 'PENDING' && (
+                      <button
+                        onClick={async () => {
+                          if (!confirm(`Delete container ${c.container_number}? This cannot be undone.`)) return
+                          try {
+                            await shipmentsApi.deleteContainer(id!, c.id)
+                            refresh()
+                            toast.success(`${c.container_number} deleted`)
+                          } catch (e: any) { toast.error(e.response?.data?.detail || 'Failed to delete') }
+                        }}
+                        className="text-xs text-red-500 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 border border-red-200 dark:border-red-700 px-2 py-1 rounded hover:bg-red-50 dark:hover:bg-red-900/20"
+                        title="Delete container"
+                      >
+                        <Trash2 size={11} />
+                      </button>
+                    )}
                     {team === 'FFD' && c.status === 'DO_REVALIDATION' && (
                       <button
                         onClick={() => action(() => shipmentsApi.markDoRevalidated(id!, c.id), 'DO marked as revalidated')}
