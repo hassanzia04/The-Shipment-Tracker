@@ -2,7 +2,7 @@ import { useState, useCallback } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { Upload, X, CheckCircle, FileText, AlertCircle, Loader } from 'lucide-react'
 import toast from 'react-hot-toast'
-import { documentsApi } from '@/api/documents'
+import { documentsApi, openDocument } from '@/api/documents'
 import { CUSTOMER_REQUIRED_DOCS, DOC_TYPE_LABELS, DOC_TYPE_OPTIONAL_DOCS } from '@/types'
 import type { Document, DocumentType } from '@/types'
 import { formatFileSize } from '@/lib/dates'
@@ -144,20 +144,17 @@ export function DocumentUploadPanel({ shipmentId, documents, onUploaded, readonl
     }
   }
 
-  async function openDocument(doc: Document) {
-    try {
-      const { data } = await documentsApi.getUrl(doc.id)
-      window.open(data.url, '_blank')
-    } catch {
-      toast.error('Could not open document')
-    }
-  }
+  // Use shared `openDocument` helper from the API module to fetch and open blobs
 
   async function downloadDocument(doc: Document) {
     try {
-      const { data } = await documentsApi.getDownloadUrl(doc.id)
+      const response = await documentsApi.getContent(doc.id)
+      const url = window.URL.createObjectURL(response.data)
       const a = document.createElement('a')
-      a.href = data.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.click()
+      a.href = url
+      a.download = doc.original_filename || `${doc.id}`
+      a.click()
+      window.URL.revokeObjectURL(url)
     } catch {
       toast.error('Failed to download')
     }
@@ -195,7 +192,7 @@ export function DocumentUploadPanel({ shipmentId, documents, onUploaded, readonl
               </div>
               {doc ? (
                 <div className="flex items-center gap-2">
-                  <button onClick={() => openDocument(doc)} className="text-xs text-blue-600 hover:underline">View</button>
+                  <button onClick={() => openDocument(doc.id)} className="text-xs text-blue-600 hover:underline">View</button>
                   <button onClick={() => downloadDocument(doc)} className="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">Download</button>
                   {!readonly && <button onClick={() => deleteDocument(doc)} className="text-xs text-red-500 hover:text-red-700"><X size={14} /></button>}
                 </div>
@@ -223,7 +220,7 @@ export function DocumentUploadPanel({ shipmentId, documents, onUploaded, readonl
               </div>
               {doc ? (
                 <div className="flex items-center gap-2">
-                  <button onClick={() => openDocument(doc)} className="text-xs text-blue-600 hover:underline">View</button>
+                  <button onClick={() => openDocument(doc.id)} className="text-xs text-blue-600 hover:underline">View</button>
                   <button onClick={() => downloadDocument(doc)} className="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">Download</button>
                   {!readonly && <button onClick={() => deleteDocument(doc)} className="text-xs text-red-500 hover:text-red-700"><X size={14} /></button>}
                 </div>

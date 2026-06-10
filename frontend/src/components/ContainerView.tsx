@@ -2,7 +2,7 @@ import { useState, useRef } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { differenceInCalendarDays, parseISO, isValid } from 'date-fns'
 import { shipmentsApi } from '@/api/shipments'
-import { documentsApi } from '@/api/documents'
+import { documentsApi, openDocument } from '@/api/documents'
 import { mastersApi } from '@/api/masters'
 import { useSortable } from '@/lib/sort'
 import { SortableHeader } from '@/components/SortableHeader'
@@ -156,8 +156,9 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
   async function downloadCcro() {
     if (!c.ccro_document_id) { toast.error('No CCRO uploaded for this container'); return }
     try {
-      const { data } = await documentsApi.getDownloadUrl(c.ccro_document_id)
-      const a = document.createElement('a'); a.href = data.url; a.target = '_blank'; a.click()
+      const response = await documentsApi.getContent(c.ccro_document_id)
+      const url = URL.createObjectURL(response.data)
+      const a = document.createElement('a'); a.href = url; a.download = `${c.container_number}_CCRO`; a.click(); URL.revokeObjectURL(url)
     } catch { toast.error('Failed to download CCRO') }
   }
 
@@ -494,7 +495,7 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
             {canMarkOffloaded && isAmls && c.dn_document_id && (
               <>
                 <button
-                  onClick={async () => { const { data } = await documentsApi.getUrl(c.dn_document_id!); window.open(data.url, '_blank') }}
+                  onClick={() => openDocument(c.dn_document_id!)}
                   className="flex items-center gap-1 text-xs px-2 py-1 rounded border font-medium text-blue-600 dark:text-blue-400 border-blue-200 dark:border-blue-700 hover:bg-blue-50 dark:hover:bg-blue-900/20"
                   title="View Delivery Note"
                 >

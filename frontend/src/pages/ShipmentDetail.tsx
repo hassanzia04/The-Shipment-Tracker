@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import toast from 'react-hot-toast'
 import { shipmentsApi } from '@/api/shipments'
-import { documentsApi } from '@/api/documents'
+import { documentsApi, openDocument } from '@/api/documents'
 import { authApi } from '@/api/auth'
 import { mastersApi } from '@/api/masters'
 import { DocumentUploadPanel } from '@/components/DocumentUploadPanel'
@@ -183,6 +183,20 @@ function DocChecklist({ documents, shipment }: { documents: ShipmentDoc[], shipm
   )
 }
 
+async function handleDownloadDoc(doc: ShipmentDoc) {
+  try {
+    const response = await documentsApi.getContent(doc.id)
+    const url = window.URL.createObjectURL(response.data)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = doc.original_filename || `${doc.id}`
+    a.click()
+    window.URL.revokeObjectURL(url)
+  } catch {
+    toast.error('Failed to download')
+  }
+}
+
 export function ShipmentDetail() {
   const { id } = useParams<{ id: string }>()
   const { user } = useAuth()
@@ -259,18 +273,7 @@ export function ShipmentDetail() {
     }
   }
 
-  async function handleDownloadDoc(doc: ShipmentDoc) {
-    try {
-      const { data } = await documentsApi.getDownloadUrl(doc.id)
-      const a = document.createElement('a')
-      a.href = data.url
-      a.target = '_blank'
-      a.rel = 'noopener noreferrer'
-      a.click()
-    } catch {
-      toast.error('Failed to download')
-    }
-  }
+  
 
   function refresh() {
     qc.invalidateQueries({ queryKey: ['shipment', id] })
@@ -911,7 +914,7 @@ export function ShipmentDetail() {
                 </div>
                 <div className="flex items-center gap-3 shrink-0">
                   <button
-                    onClick={async () => { const { data } = await documentsApi.getUrl(doc.id); window.open(data.url, '_blank') }}
+                    onClick={() => openDocument(doc.id)}
                     className="text-xs text-blue-600 hover:underline"
                   >
                     View
@@ -1156,13 +1159,13 @@ function TaskRow({ task, shipmentId, userTeam, userId, proUsers, doValidityDate,
               <span className="font-medium">{DOC_TYPE_LABELS[uploadedDoc.doc_type]} uploaded</span>
               <div className="ml-auto flex items-center gap-2">
                 <button
-                  onClick={async () => { const { data } = await documentsApi.getUrl(uploadedDoc.id); window.open(data.url, '_blank') }}
+                  onClick={() => openDocument(uploadedDoc.id)}
                   className="text-blue-600 hover:underline"
                 >
                   View
                 </button>
                 <button
-                  onClick={async () => { const { data } = await documentsApi.getDownloadUrl(uploadedDoc.id); const a = document.createElement('a'); a.href = data.url; a.target = '_blank'; a.click() }}
+                  onClick={() => handleDownloadDoc(uploadedDoc)}
                   className="text-gray-500 dark:text-gray-400 hover:underline"
                 >
                   Download
@@ -1468,7 +1471,7 @@ function ContainerCcroSlot({ shipmentId, container, taskId, ccroDoc, onUpdated }
         <CheckCircle size={12} className="text-green-600 dark:text-green-400 shrink-0" />
         <span className="text-green-700 dark:text-green-300 font-medium flex-1 truncate">CCRO: {ccroDoc.original_filename}</span>
         <div className="flex items-center gap-2 shrink-0">
-          <button onClick={async () => { const { data } = await documentsApi.getUrl(ccroDoc.id); window.open(data.url, '_blank') }} className="text-blue-600 hover:underline">View</button>
+          <button onClick={() => openDocument(ccroDoc.id)} className="text-blue-600 hover:underline">View</button>
           <button
             onClick={async () => { try { await documentsApi.delete(ccroDoc.id); onUpdated(); toast.success('Removed') } catch { toast.error('Failed') } }}
             className="text-red-400 hover:text-red-600"
@@ -1735,7 +1738,7 @@ function TransportDcLayout({ shipment, trucks, team, stage, submitting, action, 
               <div className="flex items-center gap-2">
                 <p className="text-xs text-gray-600 dark:text-gray-400 truncate flex-1">{dcHealthCertDoc.original_filename}</p>
                 <button
-                  onClick={async () => { const { data } = await documentsApi.getUrl(dcHealthCertDoc.id); window.open(data.url, '_blank') }}
+                  onClick={() => openDocument(dcHealthCertDoc.id)}
                   className="p-1 text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 shrink-0"
                   title="View health certificate"
                 >
