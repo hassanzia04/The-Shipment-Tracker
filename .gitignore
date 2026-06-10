@@ -46,6 +46,11 @@ desktop.ini
 *.swp
 *.swo
 
+# Docker — managed by the deployment team, not committed
+docker-compose*.yml
+frontend/Dockerfile
+backend/Dockerfile
+frontend/nginx.conf
 
 # Logs
 *.log
