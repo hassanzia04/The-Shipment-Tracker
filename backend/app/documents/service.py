@@ -204,7 +204,10 @@ async def get_document_url(document_id: uuid.UUID, db: AsyncSession, actor: User
                 bucket_name=settings.OCI_BUCKET_NAME,
                 create_preauthenticated_request_details=details,
             )
-            return f"https://objectstorage.{settings.OCI_REGION}.oraclecloud.com{par.data.full_path}"
+            full_path = par.data.full_path
+            if full_path.startswith('http'):
+                return full_path
+            return f"https://objectstorage.{settings.OCI_REGION}.oraclecloud.com{full_path}"
         except Exception:
             pass
 

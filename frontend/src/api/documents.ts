@@ -49,5 +49,11 @@ export const documentsApi = {
 export const openDocument = async (documentOrId: string | { id: string }) => {
   const documentId = typeof documentOrId === 'string' ? documentOrId : documentOrId.id
   const { data } = await documentsApi.getUrl(documentId)
-  window.open(data.url, '_blank', 'noopener,noreferrer')
+  const a = document.createElement('a')
+  a.href = data.url
+  a.target = '_blank'
+  a.rel = 'noopener noreferrer'
+  document.body.appendChild(a)
+  a.click()
+  setTimeout(() => document.body.removeChild(a), 100)
 }
