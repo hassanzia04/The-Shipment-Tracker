@@ -7,6 +7,7 @@ import { SortableHeader } from '@/components/SortableHeader'
 import toast from 'react-hot-toast'
 import { Eye, EyeOff } from 'lucide-react'
 import type { Team } from '@/types'
+import { TEAM_LABELS } from '@/types'
 
 const TEAMS: Team[] = ['CUSTOMER', 'FFD', 'PRO', 'TRANSPORT', 'DC', 'MANAGEMENT', 'CUSTOMER_MANAGEMENT']
 
@@ -146,7 +147,7 @@ export function AdminUsers() {
                     onChange={e => setField('team', e.target.value)}
                     className="w-full border dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
-                    {TEAMS.map(t => <option key={t} value={t}>{t}</option>)}
+                    {TEAMS.map(t => <option key={t} value={t}>{TEAM_LABELS[t]}</option>)}
                   </select>
                 </div>
               </div>
@@ -206,7 +207,7 @@ export function AdminUsers() {
                   onChange={e => setInviteTeam(e.target.value as Team)}
                   className="border dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                 >
-                  {TEAMS.map(t => <option key={t} value={t}>{t}</option>)}
+                  {TEAMS.map(t => <option key={t} value={t}>{TEAM_LABELS[t]}</option>)}
                 </select>
                 <button
                   onClick={invite}
@@ -245,7 +246,7 @@ export function AdminUsers() {
                     onChange={e => changeTeam(u.id, e.target.value as Team)}
                     className="text-xs border dark:border-gray-600 rounded px-2 py-0.5 bg-gray-100 dark:bg-gray-700 dark:text-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-500"
                   >
-                    {TEAMS.map(t => <option key={t} value={t}>{t}</option>)}
+                    {TEAMS.map(t => <option key={t} value={t}>{TEAM_LABELS[t]}</option>)}
                   </select>
                 </td>
                 <td className="px-4 py-3">

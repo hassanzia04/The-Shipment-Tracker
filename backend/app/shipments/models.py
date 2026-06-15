@@ -20,7 +20,7 @@ class Shipment(Base):
     invoice_number: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
     customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     current_stage: Mapped[ShipmentStage] = mapped_column(
-        SAEnum(ShipmentStage, name="shipment_stage_enum"), default=ShipmentStage.CUSTOMER, nullable=False
+        SAEnum(ShipmentStage, name="shipment_stage_enum"), default=ShipmentStage.CUSTOMER, nullable=False, index=True
     )
     pull_out_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     product_type_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("product_types.id"), nullable=True)
@@ -160,11 +160,11 @@ class ShipmentTask(Base):
     __tablename__ = "shipment_tasks"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    shipment_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("shipments.id"), nullable=False)
+    shipment_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("shipments.id"), nullable=False, index=True)
     task_type: Mapped[TaskType] = mapped_column(SAEnum(TaskType, name="task_type_enum"), nullable=False)
     assigned_team: Mapped[str] = mapped_column(String(50), nullable=False)
     status: Mapped[TaskStatus] = mapped_column(
-        SAEnum(TaskStatus, name="task_status_enum"), default=TaskStatus.IN_PROGRESS, nullable=False
+        SAEnum(TaskStatus, name="task_status_enum"), default=TaskStatus.IN_PROGRESS, nullable=False, index=True
     )
     hold_entity: Mapped[ExternalEntity | None] = mapped_column(
         SAEnum(ExternalEntity, name="external_entity_enum"), nullable=True
@@ -197,9 +197,9 @@ class ShipmentEvent(Base):
     __tablename__ = "shipment_events"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    shipment_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("shipments.id"), nullable=False)
+    shipment_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("shipments.id"), nullable=False, index=True)
     task_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("shipment_tasks.id"), nullable=True)
-    event_type: Mapped[EventType] = mapped_column(SAEnum(EventType, name="event_type_enum"), nullable=False)
+    event_type: Mapped[EventType] = mapped_column(SAEnum(EventType, name="event_type_enum"), nullable=False, index=True)
     stage_from: Mapped[ShipmentStage | None] = mapped_column(
         SAEnum(ShipmentStage, name="shipment_stage_enum"), nullable=True
     )

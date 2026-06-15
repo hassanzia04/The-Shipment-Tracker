@@ -5,6 +5,8 @@ import { useAuth } from '@/hooks/useAuth'
 import { useTheme } from '@/hooks/useTheme'
 import { Ship, LayoutDashboard, Settings, LogOut, Users, Moon, Sun, BarChart2, Truck, FolderOpen, Menu, X, TrendingUp, Database, ClipboardList } from 'lucide-react'
 import clsx from 'clsx'
+import { NotificationBell } from '@/components/NotificationBell'
+import { TEAM_LABELS } from '@/types'
 
 type NavItem = { label: string; href: string; icon: React.ElementType }
 
@@ -71,15 +73,19 @@ export function Layout({ children }: Props) {
     <>
       <div className="px-4 py-5 border-b dark:border-gray-700 flex items-center justify-between">
         <div>
-          <h1 className="text-lg font-bold text-gray-900 dark:text-white">Shipment Tracker</h1>
-          <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{user?.team}</p>
+          <p className="text-[10px] font-semibold tracking-widest text-blue-500 dark:text-blue-400 uppercase">AMLS</p>
+          <h1 className="text-lg font-bold text-gray-900 dark:text-white leading-tight">Shipment Tracker</h1>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{user ? TEAM_LABELS[user.team] : ''}</p>
         </div>
-        <button
-          onClick={() => setOpen(false)}
-          className="lg:hidden p-1.5 rounded text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
-        >
-          <X size={18} />
-        </button>
+        <div className="flex items-center gap-1">
+          <span className="hidden lg:block"><NotificationBell align="left" /></span>
+          <button
+            onClick={() => setOpen(false)}
+            className="lg:hidden p-1.5 rounded text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+          >
+            <X size={18} />
+          </button>
+        </div>
       </div>
 
       <nav className="flex-1 px-2 py-4 space-y-1 overflow-y-auto">
@@ -112,11 +118,11 @@ export function Layout({ children }: Props) {
         >
           <LogOut size={16} /> Sign out
         </button>
-        <p
-          title="Developed by Bayanat Tech"
-          className="text-center text-[10px] text-gray-400 dark:text-gray-600 mt-2 cursor-default select-none"
-        >
-          v1.0.0-beta
+        <p className="text-center text-[10px] text-gray-400 dark:text-gray-600 mt-2 cursor-default select-none">
+          v1.1.0-beta
+        </p>
+        <p className="text-center text-[10px] text-gray-400 dark:text-gray-600 cursor-default select-none">
+          Developed by Bayanat Technology
         </p>
       </div>
     </>
@@ -154,7 +160,10 @@ export function Layout({ children }: Props) {
             <Menu size={20} />
           </button>
           <span className="font-semibold text-gray-900 dark:text-white text-sm">Shipment Tracker</span>
-          <span className="ml-auto text-xs text-gray-500 dark:text-gray-400">{user?.team}</span>
+          <div className="ml-auto flex items-center gap-2">
+            <NotificationBell />
+            <span className="text-xs text-gray-500 dark:text-gray-400">{user ? TEAM_LABELS[user.team] : ''}</span>
+          </div>
         </header>
 
         <main className="flex-1 overflow-auto">

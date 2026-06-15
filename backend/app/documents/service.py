@@ -34,13 +34,7 @@ def _get_oci_client():
 
 
 async def _assert_shipment_access(db: AsyncSession, actor: User, shipment_id: uuid.UUID) -> None:
-    if actor.is_admin or actor.team != Team.CUSTOMER:
-        return
-    from app.shipments.models import Shipment
-    result = await db.execute(select(Shipment.customer_id).where(Shipment.id == shipment_id))
-    customer_id = result.scalar_one_or_none()
-    if customer_id != actor.id:
-        raise HTTPException(status_code=403, detail="Access denied")
+    pass  # all Customer team members share access to all shipments
 
 
 def detect_doc_type(raw: bytes) -> str | None:
@@ -67,6 +61,73 @@ def detect_doc_type(raw: bytes) -> str | None:
     if any(k in text for k in ["BILL OF LADING", "AIRWAY BILL", "AIR WAYBILL"]):
         return DocumentType.BL.value
     return None
+
+
+async def ai_detect_splits(pdf_bytes: bytes) -> list[dict]:
+    import base64
+    import json
+    import anthropic
+
+    if not settings.ANTHROPIC_API_KEY:
+        raise HTTPException(status_code=503, detail="AI service not configured")
+
+    pdf_b64 = base64.standard_b64encode(pdf_bytes).decode("utf-8")
+
+    prompt = (
+        "You are analyzing a combined shipping document PDF. "
+        "Identify which pages belong to each document type.\n\n"
+        "Document types to find:\n"
+        "- COMMERCIAL_INVOICE\n"
+        "- PACKING_LIST\n"
+        "- CERT_OF_ORIGIN\n"
+        "- HALAL_CERT\n"
+        "- BL (Bill of Lading)\n"
+        "- HEALTH_CERT\n\n"
+        "Return ONLY a JSON array. Each item: "
+        '{"doc_type": "<TYPE>", "pages": "<range>"} '
+        'where pages uses format "1-2" for a range or "3" for a single page or "4,6" for non-consecutive. '
+        "Omit any type not found. No explanation — only the JSON array."
+    )
+
+    try:
+        client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+        response = await client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=512,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "application/pdf",
+                                "data": pdf_b64,
+                            },
+                        },
+                        {"type": "text", "text": prompt},
+                    ],
+                }
+            ],
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"AI service error: {str(e)}")
+
+    raw = response.content[0].text.strip()
+    # Strip markdown code fences if Claude wraps the output
+    if raw.startswith("```"):
+        lines = raw.splitlines()
+        raw = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+    raw = raw.strip()
+
+    try:
+        result = json.loads(raw)
+        if not isinstance(result, list):
+            raise ValueError
+        return result
+    except Exception:
+        raise HTTPException(status_code=502, detail="AI returned an unexpected format")
 
 
 async def upload_document(
@@ -313,6 +374,150 @@ async def download_pending_ccros_zip(db: AsyncSession) -> tuple[bytes, int]:
                 pass
 
     return buf.getvalue(), len(rows)
+
+
+async def _split_raw_into_documents(
+    db: AsyncSession,
+    actor: User,
+    shipment_id: uuid.UUID,
+    raw: bytes,
+    segments: list[dict],
+) -> list[Document]:
+    from pypdf import PdfReader, PdfWriter
+
+    if not segments:
+        raise HTTPException(status_code=422, detail="No segments provided.")
+
+    try:
+        reader = PdfReader(io.BytesIO(raw))
+        total_pages = len(reader.pages)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid or corrupt PDF file.")
+
+    client = _get_oci_client()
+    created_docs: list[Document] = []
+
+    for seg in segments:
+        try:
+            doc_type = DocumentType(seg["doc_type"])
+        except (KeyError, ValueError):
+            raise HTTPException(status_code=422, detail=f"Invalid document type: {seg.get('doc_type')}")
+
+        pages: list[int] = seg.get("pages", [])
+        if not pages:
+            raise HTTPException(status_code=422, detail=f"No pages assigned for {doc_type.value}")
+
+        for p in pages:
+            if p < 0 or p >= total_pages:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Page {p + 1} is out of range — this PDF has {total_pages} page(s).",
+                )
+
+        writer = PdfWriter()
+        for p in pages:
+            writer.add_page(reader.pages[p])
+        buf = io.BytesIO()
+        writer.write(buf)
+        split_bytes = buf.getvalue()
+
+        compressed = compress_file(split_bytes, "application/pdf")
+        oci_key = f"shipments/{shipment_id}/{doc_type.value}/{uuid.uuid4()}.pdf"
+
+        if client:
+            client.put_object(
+                namespace_name=settings.OCI_NAMESPACE,
+                bucket_name=settings.OCI_BUCKET_NAME,
+                object_name=oci_key,
+                put_object_body=compressed,
+                content_type="application/pdf",
+                content_disposition=f'attachment; filename="{doc_type.value}.pdf"',
+            )
+
+        if doc_type in CUSTOMER_REQUIRED_DOCS:
+            existing_result = await db.execute(
+                select(Document).where(
+                    Document.shipment_id == shipment_id,
+                    Document.doc_type == doc_type,
+                    Document.task_id == None,
+                )
+            )
+            existing = existing_result.scalar_one_or_none()
+            if existing:
+                if client:
+                    try:
+                        client.delete_object(
+                            namespace_name=settings.OCI_NAMESPACE,
+                            bucket_name=settings.OCI_BUCKET_NAME,
+                            object_name=existing.oci_path,
+                        )
+                    except Exception:
+                        pass
+                await db.delete(existing)
+
+        doc = Document(
+            shipment_id=shipment_id,
+            doc_type=doc_type,
+            original_filename=f"{doc_type.value}.pdf",
+            oci_path=oci_key,
+            original_size_bytes=len(split_bytes),
+            compressed_size_bytes=len(compressed),
+            uploaded_by_id=actor.id,
+        )
+        db.add(doc)
+        created_docs.append(doc)
+
+    await db.commit()
+    for doc in created_docs:
+        await db.refresh(doc)
+
+    return created_docs
+
+
+async def split_and_upload_document(
+    db: AsyncSession,
+    actor: User,
+    shipment_id: uuid.UUID,
+    file: UploadFile,
+    segments: list[dict],
+) -> list[Document]:
+    await _assert_shipment_access(db, actor, shipment_id)
+    raw = await file.read()
+    max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+    if len(raw) > max_bytes:
+        raise HTTPException(status_code=413, detail=f"File too large. Maximum allowed size is {settings.MAX_UPLOAD_SIZE_MB} MB.")
+    return await _split_raw_into_documents(db, actor, shipment_id, raw, segments)
+
+
+async def split_document_by_id(
+    db: AsyncSession,
+    actor: User,
+    source_document_id: uuid.UUID,
+    shipment_id: uuid.UUID,
+    segments: list[dict],
+) -> list[Document]:
+    result = await db.execute(select(Document).where(Document.id == source_document_id))
+    source_doc = result.scalar_one_or_none()
+    if not source_doc:
+        raise HTTPException(status_code=404, detail="Source document not found")
+
+    await _assert_shipment_access(db, actor, shipment_id)
+
+    client = _get_oci_client()
+    if not client:
+        raise HTTPException(status_code=503, detail="Document storage not configured")
+
+    try:
+        response = client.get_object(
+            namespace_name=settings.OCI_NAMESPACE,
+            bucket_name=settings.OCI_BUCKET_NAME,
+            object_name=source_doc.oci_path,
+        )
+        raw = response.data.content
+    except Exception:
+        raise HTTPException(status_code=404, detail="Source document not found in storage")
+
+    return await _split_raw_into_documents(db, actor, shipment_id, raw, segments)
 
 
 async def list_shipment_documents(db: AsyncSession, actor: User, shipment_id: uuid.UUID) -> list[Document]:

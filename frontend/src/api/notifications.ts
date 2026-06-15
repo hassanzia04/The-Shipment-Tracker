@@ -23,6 +23,15 @@ export interface DailyReportRecipient {
   email: string
 }
 
+export interface AppNotification {
+  id: string
+  shipment_id: string | null
+  template: string
+  payload: { subject: string; body: string }
+  is_read: boolean
+  created_at: string
+}
+
 export const notificationsApi = {
   // Alert CC configs
   listCCConfigs: () => api.get<CCConfig[]>('/notifications/cc-configs'),
@@ -44,4 +53,9 @@ export const notificationsApi = {
 
   // Manual trigger
   sendDailyReportNow: () => api.post('/notifications/daily-report/send'),
+
+  // In-app notifications
+  getMyNotifications: () => api.get<AppNotification[]>('/notifications/my'),
+  markRead: (ids: string[]) => api.post('/notifications/mark-read', { ids }),
+  markAllRead: () => api.post('/notifications/mark-read', { all: true }),
 }

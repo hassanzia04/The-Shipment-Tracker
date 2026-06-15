@@ -5,6 +5,8 @@ import { useSortable } from '@/lib/sort'
 import { SortableHeader } from '@/components/SortableHeader'
 import { Clock, CheckCircle, AlertTriangle, Users } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
+import { TEAM_LABELS } from '@/types'
+import type { Team } from '@/types'
 import clsx from 'clsx'
 
 const PERIODS = [
@@ -153,7 +155,7 @@ function TeamSection({ team }: { team: TeamData }) {
             <Users size={16} className="text-blue-600 dark:text-blue-400" />
           </div>
           <div>
-            <h2 className="font-semibold text-gray-900 dark:text-white">{team.team} Team</h2>
+            <h2 className="font-semibold text-gray-900 dark:text-white">{TEAM_LABELS[team.team as Team] ?? team.team} Team</h2>
             <p className="text-xs text-gray-500 dark:text-gray-400">{team.users.length} member{team.users.length !== 1 ? 's' : ''}</p>
           </div>
         </div>

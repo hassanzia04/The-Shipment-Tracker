@@ -63,7 +63,7 @@ def decode_token(token: str) -> dict:
 
 
 async def get_user_by_email(db: AsyncSession, email: str) -> User | None:
-    result = await db.execute(select(User).where(User.email == email))
+    result = await db.execute(select(User).where(func.lower(User.email) == email.lower()))
     return result.scalar_one_or_none()
 
 
@@ -81,7 +81,7 @@ async def create_invitation(db: AsyncSession, email: str, team: Team, invited_by
     expires_at = datetime.now(timezone.utc) + timedelta(hours=settings.INVITATION_EXPIRE_HOURS)
 
     invitation = Invitation(
-        email=email,
+        email=email.lower(),
         team=team,
         token=token,
         invited_by_id=invited_by.id,
@@ -134,7 +134,7 @@ async def create_user_directly(
     if existing:
         raise HTTPException(status_code=400, detail="A user with this email already exists")
     user = User(
-        email=email,
+        email=email.lower(),
         full_name=full_name,
         hashed_password=hash_password(password),
         team=team,

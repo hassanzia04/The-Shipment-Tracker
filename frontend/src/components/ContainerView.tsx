@@ -77,7 +77,7 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
   historical?: boolean
 }) {
   const qc = useQueryClient()
-  const [expanded, setExpanded] = useState<'assign' | 'issue' | 'arrived' | 'return' | 'revalidation' | 'assign_outsourced' | null>(null)
+  const [expanded, setExpanded] = useState<'assign' | 'issue' | 'arrived' | 'return' | 'revalidation' | 'assign_outsourced' | 'unassign' | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
   // Assign truck form state
@@ -98,6 +98,9 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
   // Return-to-FFD form state
   const [returnRemark, setReturnRemark] = useState('')
 
+  // Unassign truck form state
+  const [unassignRemark, setUnassignRemark] = useState('')
+
   // DO revalidation request form state
   const [revalidationRemark, setRevalidationRemark] = useState('')
 
@@ -115,6 +118,8 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
   const canAssign       = !historical && team === 'TRANSPORT' && c.status === 'PENDING' && !c.truck_id
   const canReassign     = !historical && team === 'TRANSPORT' && !c.arrived_at && !!c.truck_id && ['ASSIGNED', 'IN_TRANSIT', 'BREAKDOWN'].includes(c.status)
   const canReturnToFfd  = !historical && team === 'TRANSPORT' && c.status === 'PENDING' && !c.truck_id
+  const canUnassignTruck = !historical && team === 'TRANSPORT' && !c.arrived_at &&
+    ['ASSIGNED', 'IN_TRANSIT', 'BREAKDOWN'].includes(c.status)
   const canMarkArrived  = !historical && team === 'DC' && !c.arrived_at && (!!c.truck_id || isOutsourced) && isAmls
   const canEditArrived  = !historical && team === 'DC' && !!c.arrived_at && isAmls
 
@@ -199,6 +204,20 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
       onUpdated()
       setExpanded(null)
       setReturnRemark('')
+    } catch (e: any) { toast.error(e.response?.data?.detail || 'Failed') }
+    finally { setSubmitting(false) }
+  }
+
+  async function unassignTruck() {
+    if (!unassignRemark.trim()) { toast.error('Remark is required'); return }
+    setSubmitting(true)
+    try {
+      await shipmentsApi.unassignTruck(c.shipment_id, c.container_id, unassignRemark)
+      toast.success(`Truck unassigned — ${c.container_number} returned to queue`)
+      qc.invalidateQueries({ queryKey: ['container-view'] })
+      onUpdated()
+      setExpanded(null)
+      setUnassignRemark('')
     } catch (e: any) { toast.error(e.response?.data?.detail || 'Failed') }
     finally { setSubmitting(false) }
   }
@@ -392,6 +411,14 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
                 <AlertTriangle size={11} /> Return to FFD
               </button>
             )}
+            {canUnassignTruck && (
+              <button
+                onClick={() => setExpanded(expanded === 'unassign' ? null : 'unassign')}
+                className={clsx('flex items-center gap-1 text-xs px-2 py-1 rounded border font-medium', expanded === 'unassign' ? 'bg-rose-600 text-white border-rose-600' : 'text-rose-700 dark:text-rose-400 border-rose-300 dark:border-rose-700 hover:bg-rose-50 dark:hover:bg-rose-900/20')}
+              >
+                <AlertTriangle size={11} /> Unassign Truck
+              </button>
+            )}
             {canBreakdownOrDelay && (
               <button
                 onClick={() => setExpanded(expanded === 'issue' ? null : 'issue')}
@@ -502,6 +529,32 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
               <div className="flex gap-2">
                 <button onClick={returnToFfd} disabled={submitting || !returnRemark.trim()} className="text-xs bg-orange-600 text-white px-3 py-1.5 rounded hover:bg-orange-700 disabled:opacity-50">
                   {submitting ? 'Sending…' : 'Return to FFD'}
+                </button>
+                <button onClick={() => setExpanded(null)} className="text-xs text-gray-500 dark:text-gray-400">Cancel</button>
+              </div>
+            </div>
+          </td>
+        </tr>
+      )}
+
+      {/* ── Unassign truck form ── */}
+      {expanded === 'unassign' && (
+        <tr>
+          <td colSpan={8} className="p-0">
+            <div className="px-5 py-3 bg-rose-50 dark:bg-rose-900/10 border-t border-b dark:border-gray-700 space-y-2">
+              <p className="text-xs font-semibold text-rose-700 dark:text-rose-400">Unassign Truck</p>
+              <p className="text-xs text-rose-600 dark:text-rose-500">Container will return to Pending. You can then reassign a truck or return the CCRO to FFD.</p>
+              <div className="flex gap-2 items-start">
+                <textarea
+                  value={unassignRemark}
+                  onChange={e => setUnassignRemark(e.target.value)}
+                  placeholder="e.g. Truck could not report for loading — went for another trip…"
+                  className="text-xs border dark:border-gray-600 rounded px-2 py-1.5 bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 resize-none h-14 flex-1"
+                />
+              </div>
+              <div className="flex gap-2">
+                <button onClick={unassignTruck} disabled={submitting || !unassignRemark.trim()} className="text-xs bg-rose-600 text-white px-3 py-1.5 rounded hover:bg-rose-700 disabled:opacity-50">
+                  {submitting ? 'Saving…' : 'Unassign Truck'}
                 </button>
                 <button onClick={() => setExpanded(null)} className="text-xs text-gray-500 dark:text-gray-400">Cancel</button>
               </div>

@@ -125,7 +125,7 @@ export function Dashboard() {
   const [aiLoading, setAiLoading] = useState(false)
 
   const { user } = useAuth()
-  const canUseAi = user?.team === 'MANAGEMENT' || user?.team === 'CUSTOMER' || user?.is_admin
+  const canUseAi = user?.team === 'MANAGEMENT' || user?.team === 'CUSTOMER' || user?.team === 'CUSTOMER_MANAGEMENT' || user?.is_admin
 
   async function fetchAiSummary() {
     if (aiLoading) return

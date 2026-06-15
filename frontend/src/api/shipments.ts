@@ -65,6 +65,9 @@ export const shipmentsApi = {
 
   confirmCcro: (id: string) => api.post<Shipment>(`/shipments/${id}/confirm-ccro`),
 
+  recallFromTransport: (id: string, remark: string) =>
+    api.post<Shipment>(`/shipments/${id}/recall-from-transport`, { remark }),
+
   setDoValidity: (id: string, do_validity_date: string) =>
     api.post<Shipment>(`/shipments/${id}/do-validity`, { do_validity_date }),
 
@@ -104,6 +107,9 @@ export const shipmentsApi = {
 
   markDoRevalidated: (shipmentId: string, containerId: string) =>
     api.post<Shipment>(`/shipments/${shipmentId}/containers/${containerId}/mark-do-revalidated`),
+
+  unassignTruck: (shipmentId: string, containerId: string, remark: string) =>
+    api.post<Shipment>(`/shipments/${shipmentId}/containers/${containerId}/unassign-truck`, { remark }),
 
   returnContainerToFfd: (shipmentId: string, containerId: string, remark: string) =>
     api.post<Shipment>(`/shipments/${shipmentId}/containers/${containerId}/return-to-ffd`, { remark }),

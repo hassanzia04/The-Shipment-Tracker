@@ -366,6 +366,17 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
     }
   })
 
+  const pendingPayments = isCustomer
+    ? sorted.filter(s => s.bayan_payment_pending && s.bayan_payment_task_id)
+    : []
+  const displaySorted = isCustomer && pendingPayments.length > 0
+    ? [...sorted].sort((a, b) => {
+        if (a.bayan_payment_pending && !b.bayan_payment_pending) return -1
+        if (!a.bayan_payment_pending && b.bayan_payment_pending) return 1
+        return 0
+      })
+    : sorted
+
   async function confirmPayment(shipmentId: string, taskId: string) {
     try {
       await shipmentsApi.completeTask(shipmentId, taskId)
@@ -379,6 +390,33 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
 
   return (
     <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-xl overflow-hidden">
+
+      {/* Payment callout — visible above the table so mobile customers never need to scroll right */}
+      {isCustomer && pendingPayments.length > 0 && (
+        <div className="border-b dark:border-gray-700 bg-amber-50 dark:bg-amber-900/20 px-4 py-3 space-y-2">
+          <div className="flex items-center gap-2">
+            <DollarSign size={15} className="text-amber-600 dark:text-amber-400 shrink-0" />
+            <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">
+              Bayan Payment Required — {pendingPayments.length} BL{pendingPayments.length !== 1 ? 's' : ''} awaiting your confirmation
+            </p>
+          </div>
+          {pendingPayments.map(s => (
+            <div key={s.id} className="flex items-center justify-between gap-3 bg-white dark:bg-gray-800 rounded-lg px-3 py-2.5 border border-amber-200 dark:border-amber-700">
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-gray-900 dark:text-white">{s.bl_number}</p>
+                {s.invoice_number && <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{s.invoice_number}</p>}
+              </div>
+              <button
+                onClick={() => confirmPayment(s.id, s.bayan_payment_task_id!)}
+                className="flex items-center gap-1.5 text-xs bg-amber-500 text-white px-3 py-2 rounded-lg hover:bg-amber-600 font-medium whitespace-nowrap shrink-0"
+              >
+                <DollarSign size={12} /> Confirm Payment
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-gray-50 dark:bg-gray-700 border-b dark:border-gray-600">
@@ -399,10 +437,10 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
             </tr>
           </thead>
           <tbody className="divide-y dark:divide-gray-700">
-            {sorted.length === 0 && (
+            {displaySorted.length === 0 && (
               <tr><td colSpan={colSpan} className="text-center text-gray-400 py-10 text-sm">No shipments found</td></tr>
             )}
-            {sorted.map((s, idx) => {
+            {displaySorted.map((s, idx) => {
               const u = urgency(s.pull_out_date)
               const isUrgent = u.days !== null && u.days <= 3
               const isOverdue = u.days !== null && u.days < 0

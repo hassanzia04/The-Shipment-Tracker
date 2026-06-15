@@ -207,6 +207,11 @@ async def send_back_to_transport(shipment_id: uuid.UUID, body: schemas.SendBackT
     return await service.send_back_to_transport(db, shipment_id, actor, body.remark)
 
 
+@router.post("/{shipment_id}/recall-from-transport", response_model=schemas.ShipmentOut)
+async def recall_from_transport(shipment_id: uuid.UUID, body: schemas.RecallFromTransportRequest, db: AsyncSession = Depends(get_db), actor: User = Depends(get_current_user)):
+    return await service.recall_from_transport(db, shipment_id, actor, body.remark)
+
+
 # ── Task actions (PRO / FFD) ──────────────────────────────────────────────────
 
 @router.post("/{shipment_id}/do-validity", response_model=schemas.ShipmentOut)
@@ -254,6 +259,11 @@ async def request_do_revalidation(shipment_id: uuid.UUID, container_id: uuid.UUI
 @router.post("/{shipment_id}/containers/{container_id}/mark-do-revalidated", response_model=schemas.ShipmentOut)
 async def mark_do_revalidated(shipment_id: uuid.UUID, container_id: uuid.UUID, db: AsyncSession = Depends(get_db), actor: User = Depends(get_current_user)):
     return await service.mark_do_revalidated(db, shipment_id, container_id, actor)
+
+
+@router.post("/{shipment_id}/containers/{container_id}/unassign-truck", response_model=schemas.ShipmentOut)
+async def unassign_truck(shipment_id: uuid.UUID, container_id: uuid.UUID, body: schemas.ReturnContainerRequest, db: AsyncSession = Depends(get_db), actor: User = Depends(get_current_user)):
+    return await service.unassign_truck(db, shipment_id, container_id, actor, body.remark)
 
 
 @router.post("/{shipment_id}/containers/{container_id}/return-to-ffd", response_model=schemas.ShipmentOut)

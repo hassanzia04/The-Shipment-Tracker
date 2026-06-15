@@ -8,7 +8,7 @@ import { DocumentUploadPanel } from '@/components/DocumentUploadPanel'
 import { CUSTOMER_REQUIRED_DOCS } from '@/types'
 import type { Document } from '@/types'
 import { formatDate } from '@/lib/dates'
-import { Download, Upload, ChevronDown, ChevronUp, CheckCircle, AlertCircle, ArrowUp, ArrowDown, ArrowUpDown, X, Info } from 'lucide-react'
+import { Download, Upload, ChevronDown, ChevronUp, CheckCircle, AlertCircle, ArrowUp, ArrowDown, ArrowUpDown, X, Info, Trash2 } from 'lucide-react'
 import { useSortable } from '@/lib/sort'
 import clsx from 'clsx'
 
@@ -27,6 +27,9 @@ export function ImportShipments() {
   const [submitting, setSubmitting] = useState<string | null>(null)
   const [submittingAll, setSubmittingAll] = useState(false)
   const [remarks, setRemarks] = useState<Record<string, string>>({})
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [deleting, setDeleting] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
 
   // All customer-stage shipments belonging to this user
   const { data: listData, isLoading } = useQuery({
@@ -133,6 +136,41 @@ export function ImportShipments() {
     }
     if (failed > 0) toast.error(`${failed} submission${failed !== 1 ? 's' : ''} failed`)
     setSubmittingAll(false)
+  }
+
+  async function deleteSelected() {
+    setDeleting(true)
+    const ids = [...selectedIds]
+    const results = await Promise.allSettled(ids.map(id => shipmentsApi.delete(id)))
+    const succeeded = results.filter(r => r.status === 'fulfilled').length
+    const failed = results.filter(r => r.status === 'rejected').length
+    if (succeeded > 0) {
+      toast.success(`${succeeded} shipment${succeeded !== 1 ? 's' : ''} deleted`)
+      qc.invalidateQueries({ queryKey: ['shipments', 'my-active'] })
+      qc.invalidateQueries({ queryKey: ['shipments'] })
+      setSelectedIds(new Set())
+    }
+    if (failed > 0) toast.error(`${failed} deletion${failed !== 1 ? 's' : ''} failed`)
+    setDeleting(false)
+    setConfirmDelete(false)
+  }
+
+  function toggleSelect(id: string) {
+    setConfirmDelete(false)
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+
+  function toggleSelectAll() {
+    setConfirmDelete(false)
+    if (selectedIds.size === shipments.length) {
+      setSelectedIds(new Set())
+    } else {
+      setSelectedIds(new Set(shipments.map(s => s.id)))
+    }
   }
 
   return (
@@ -251,10 +289,40 @@ export function ImportShipments() {
             )}
           </h2>
           <div className="flex items-center gap-3">
+            {selectedIds.size > 0 && (
+              confirmDelete ? (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-red-600 dark:text-red-400 font-medium">
+                    Delete {selectedIds.size} shipment{selectedIds.size !== 1 ? 's' : ''}?
+                  </span>
+                  <button
+                    onClick={deleteSelected}
+                    disabled={deleting}
+                    className="text-xs bg-red-600 text-white px-3 py-1.5 rounded-lg hover:bg-red-700 disabled:opacity-50 font-medium"
+                  >
+                    {deleting ? 'Deleting…' : 'Confirm'}
+                  </button>
+                  <button
+                    onClick={() => setConfirmDelete(false)}
+                    disabled={deleting}
+                    className="text-xs border dark:border-gray-600 dark:text-gray-300 px-3 py-1.5 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setConfirmDelete(true)}
+                  className="flex items-center gap-1.5 text-xs text-red-600 dark:text-red-400 border border-red-300 dark:border-red-700 px-3 py-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 font-medium"
+                >
+                  <Trash2 size={12} /> Delete {selectedIds.size} selected
+                </button>
+              )
+            )}
             {(() => {
               const readyIds = shipments.filter(s => {
                 const docs = docsMap[s.id] ?? []
-                return docs.filter(d => CUSTOMER_REQUIRED_DOCS.includes(d.doc_type)).length === CUSTOMER_REQUIRED_DOCS.length
+                return CUSTOMER_REQUIRED_DOCS.every(t => docs.some(d => d.doc_type === t))
               }).map(s => s.id)
               return readyIds.length > 1 ? (
                 <button
@@ -302,7 +370,13 @@ export function ImportShipments() {
                 )
               }
               return (
-                <div className="grid grid-cols-[2fr_1.5fr_1fr_1.2fr_auto_auto] gap-4 px-5 py-2.5 bg-gray-50 dark:bg-gray-900/30 border-b dark:border-gray-700 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide min-w-[560px]">
+                <div className="grid grid-cols-[auto_2fr_1.5fr_1fr_1.2fr_auto_auto] gap-4 px-5 py-2.5 bg-gray-50 dark:bg-gray-900/30 border-b dark:border-gray-700 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide min-w-[600px]">
+                  <input
+                    type="checkbox"
+                    checked={shipments.length > 0 && selectedIds.size === shipments.length}
+                    onChange={toggleSelectAll}
+                    className="w-3.5 h-3.5 rounded border-gray-300 dark:border-gray-600 cursor-pointer accent-blue-600 self-center"
+                  />
                   {hd('BL Number',    'bl')}
                   {hd('Invoice',      'invoice')}
                   {hd('Pull-out Date','pull_out')}
@@ -315,9 +389,8 @@ export function ImportShipments() {
 
             {shipments.map(s => {
               const docs = docsMap[s.id] ?? []
-              const customerDocs = docs.filter(d => CUSTOMER_REQUIRED_DOCS.includes(d.doc_type))
-              const count = customerDocs.length
-              const isComplete = count === CUSTOMER_REQUIRED_DOCS.length
+              const individualCount = CUSTOMER_REQUIRED_DOCS.filter(t => docs.some(d => d.doc_type === t)).length
+              const isComplete = individualCount === CUSTOMER_REQUIRED_DOCS.length
               const isExpanded = expanded === s.id
               const isSubmitting = submitting === s.id || submittingAll
               const docsLoading = docQueries[shipments.indexOf(s)]?.isLoading
@@ -326,9 +399,16 @@ export function ImportShipments() {
                 <div key={s.id} className="border-b dark:border-gray-700 last:border-0">
                   {/* Main row */}
                   <div
-                    className="grid grid-cols-[2fr_1.5fr_1fr_1.2fr_auto_auto] gap-4 px-5 py-3.5 items-center hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors cursor-pointer min-w-[560px]"
+                    className="grid grid-cols-[auto_2fr_1.5fr_1fr_1.2fr_auto_auto] gap-4 px-5 py-3.5 items-center hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors cursor-pointer min-w-[600px]"
                     onClick={() => setExpanded(isExpanded ? null : s.id)}
                   >
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(s.id)}
+                      onChange={() => toggleSelect(s.id)}
+                      onClick={e => e.stopPropagation()}
+                      className="w-3.5 h-3.5 rounded border-gray-300 dark:border-gray-600 cursor-pointer accent-blue-600"
+                    />
                     <span className="font-semibold text-gray-900 dark:text-gray-100 text-sm">{s.bl_number}</span>
                     <span className="text-sm text-gray-600 dark:text-gray-300 truncate">{s.invoice_number}</span>
                     <span className="text-sm text-gray-500 dark:text-gray-400">{s.pull_out_date ? formatDate(s.pull_out_date) : '—'}</span>
@@ -342,16 +422,18 @@ export function ImportShipments() {
                           ? 'bg-gray-100 dark:bg-gray-700 text-gray-400'
                           : isComplete
                           ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'
-                          : count > 0
+                          : individualCount > 0
                           ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400'
                           : 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400'
                       )}
                     >
-                      {isComplete
-                        ? <><CheckCircle size={12} /> 6 / 6</>
-                        : docsLoading
+                      {docsLoading
                         ? '…'
-                        : <><AlertCircle size={12} /> {count} / 6</>
+                        : isComplete
+                        ? <><CheckCircle size={12} /> {CUSTOMER_REQUIRED_DOCS.length} / {CUSTOMER_REQUIRED_DOCS.length}</>
+                        : individualCount > 0
+                        ? <><AlertCircle size={12} /> {individualCount} / {CUSTOMER_REQUIRED_DOCS.length}</>
+                        : <><AlertCircle size={12} /> 0 / {CUSTOMER_REQUIRED_DOCS.length}</>
                       }
                     </span>
 
@@ -403,7 +485,7 @@ export function ImportShipments() {
                             >
                               {isSubmitting ? 'Submitting…' : 'Submit for Review'}
                             </button>
-                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1.5">All 6 documents uploaded — ready to submit to the FFD team.</p>
+                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1.5">Required documents uploaded — ready to submit to the FFD team.</p>
                           </div>
                         </div>
                       )}

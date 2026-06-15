@@ -468,7 +468,7 @@ export function Reports() {
   const toLabel   = `${MONTH_ABBR[toMonth - 1]} ${toYear}`
 
   return (
-    <div className="space-y-6 max-w-5xl">
+    <div className="space-y-6">
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div>
@@ -553,8 +553,10 @@ function OperationalReports({ data, fromLabel, toLabel }: { data: any; fromLabel
   const onTimeTotal = (s.on_time + s.late) || 1
   const onTimePct   = Math.round((s.on_time / onTimeTotal) * 100)
 
-  const rejTotal = (data.rejection?.approved + data.rejection?.rejected) || 1
-  const rejPct   = Math.round(((data.rejection?.rejected || 0) / rejTotal) * 100)
+  const rejAtSubmission = data.rejection?.rejected    || 0
+  const rejMidProcess   = data.rejection?.mid_process || 0
+  const rejTotal = (data.rejection?.approved + rejAtSubmission + rejMidProcess) || 1
+  const rejPct   = Math.round(((rejAtSubmission + rejMidProcess) / rejTotal) * 100)
 
   const maxHoldCount = Math.max(...(data.holds_by_entity || []).map((h: any) => h.count), 1)
   const maxStageHours = Math.max(...(data.stage_durations || []).map((d: any) => d.avg_hours), 1)
@@ -592,21 +594,27 @@ function OperationalReports({ data, fromLabel, toLabel }: { data: any; fromLabel
           icon={<CheckCircle size={16} className="text-emerald-600" />}
           accent="bg-emerald-50 dark:bg-emerald-900/30"
         />
+        <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-xl p-5 shadow-sm flex flex-col gap-3">
+          <div className="flex items-start justify-between">
+            <p className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Send-back Rate to Customer</p>
+            <div className="p-2 rounded-lg shrink-0 bg-red-50 dark:bg-red-900/30"><AlertTriangle size={16} className="text-red-500" /></div>
+          </div>
+          <div>
+            <p className="text-3xl font-bold text-gray-900 dark:text-white leading-none">{rejPct}%</p>
+            <div className="mt-1.5 flex flex-col gap-0.5">
+              <p className="text-xs text-gray-400 dark:text-gray-500">At submission: <span className="text-gray-600 dark:text-gray-300 font-medium">{rejAtSubmission}</span></p>
+              <p className="text-xs text-gray-400 dark:text-gray-500">Mid-process: <span className="text-gray-600 dark:text-gray-300 font-medium">{rejMidProcess}</span></p>
+            </div>
+          </div>
+        </div>
         <KpiCard
-          label="Doc Send-back Rate"
-          value={`${rejPct}%`}
-          sub={`${data.rejection?.rejected || 0} sent back of ${rejTotal}`}
-          icon={<AlertTriangle size={16} className="text-red-500" />}
-          accent="bg-red-50 dark:bg-red-900/30"
-        />
-        <KpiCard
-          label="Containers Returned by Transport"
+          label="Containers Moved by AMLS"
           value={(s.containers_returned ?? 0).toLocaleString()}
           icon={<Boxes size={16} className="text-teal-600" />}
           accent="bg-teal-50 dark:bg-teal-900/30"
         />
         <KpiCard
-          label="Containers Moved by FFD/MBRF"
+          label="Containers Moved by MBRF"
           value={(s.containers_closed ?? 0).toLocaleString()}
           icon={<Boxes size={16} className="text-orange-600" />}
           accent="bg-orange-50 dark:bg-orange-900/30"

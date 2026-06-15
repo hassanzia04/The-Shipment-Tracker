@@ -99,7 +99,9 @@ TEAM_HOLD_PERMISSIONS: dict[Team, list[ExternalEntity]] = {
 
 
 class DocumentType(str, Enum):
-    # Customer mandatory documents (all 6 required before job proceeds)
+    # Customer single combined upload — FF team splits this into the 6 individual types below
+    COMBINED_DOCS = "COMBINED_DOCS"
+    # Individual required documents — populated after FF team splits the combined upload
     COMMERCIAL_INVOICE = "COMMERCIAL_INVOICE"
     PACKING_LIST = "PACKING_LIST"
     CERT_OF_ORIGIN = "CERT_OF_ORIGIN"
@@ -169,3 +171,5 @@ class EventType(str, Enum):
     DO_REVALIDATION_REQUESTED = "DO_REVALIDATION_REQUESTED"
     DO_REVALIDATED = "DO_REVALIDATED"
     OUTSOURCED_TRUCK_ASSIGNED = "OUTSOURCED_TRUCK_ASSIGNED"
+    TRUCK_UNASSIGNED = "TRUCK_UNASSIGNED"
+    RECALLED_FROM_TRANSPORT = "RECALLED_FROM_TRANSPORT"

@@ -57,6 +57,10 @@ TEMPLATES: dict[str, dict] = {
         "subject": "FFD Tracker — Shipment re-sent to Transport",
         "body": "FFD has re-confirmed CCROs for BL: {bl_number} and sent it back to Transport. Please assign trucks.",
     },
+    "recalled_from_transport": {
+        "subject": "FFD Tracker — Shipment recalled by FFD",
+        "body": "FFD has recalled BL: {bl_number} from Transport to make corrections. Truck assignments are no longer needed until re-confirmed.",
+    },
     "sent_back_to_customer": {
         "subject": "FFD Tracker — Documents returned for correction",
         "body": "Your documents for BL: {bl_number} have been returned by the FFD team for correction. Please log in to review the remarks and re-upload.",
@@ -72,6 +76,22 @@ TEMPLATES: dict[str, dict] = {
     "container_returned_to_ffd": {
         "subject": "FFD Tracker — Container returned to FFD",
         "body": "Transport has returned a container from BL: {bl_number} to FFD (no truck available). Please log in to review and take action.",
+    },
+    "permit_completed": {
+        "subject": "FFD Tracker — Permit task completed",
+        "body": "The Permit task for BL: {bl_number} has been completed by the PRO team.",
+    },
+    "bayan_completed": {
+        "subject": "FFD Tracker — Bayan task completed",
+        "body": "The Bayan task for BL: {bl_number} has been completed by the PRO team.",
+    },
+    "truck_unassigned": {
+        "subject": "FFD Tracker — Truck unassigned, container back in queue",
+        "body": "Transport has unassigned a truck from a container on BL: {bl_number}. The container is back in the pending queue — please log in to review and take action.",
+    },
+    "container_reset_to_transport": {
+        "subject": "FFD Tracker — Container returned to your queue",
+        "body": "FFD has returned a container on BL: {bl_number} back to your queue for truck assignment.",
     },
     "documents_resubmitted": {
         "subject": "FFD Tracker — Shipment re-submitted after send-back",
@@ -107,7 +127,7 @@ async def _get_cc_emails_for_user(db: AsyncSession, user_id: uuid.UUID) -> list[
     return [row.cc_email for row in result.scalars().all()]
 
 
-async def notify_team(db: AsyncSession, shipment, team: Team, template_key: str, **extra: str) -> None:
+async def notify_team(db: AsyncSession, shipment, team: Team, template_key: str, in_app_only: bool = False, **extra: str) -> None:
     from app.notifications.tasks import send_email_task
 
     template = TEMPLATES.get(template_key, {})
@@ -122,20 +142,32 @@ async def notify_team(db: AsyncSession, shipment, team: Team, template_key: str,
     )
     subject = f"{template.get('subject', 'FFD Tracker')} — BL: {shipment.bl_number}"
 
+    remark_val = escaped_extra.get("remark", "").strip()
+    email_html = f"<p>{body}</p>"
+    if remark_val:
+        email_html += f"<br><p><strong>Remarks:</strong> {remark_val}</p>"
+
     for user in users:
-        notif = Notification(
+        if not in_app_only:
+            db.add(Notification(
+                shipment_id=shipment.id,
+                recipient_id=user.id,
+                channel="EMAIL",
+                template=template_key,
+                payload={"subject": template.get("subject", ""), "body": body},
+            ))
+        db.add(Notification(
             shipment_id=shipment.id,
             recipient_id=user.id,
-            channel="EMAIL",
+            channel="IN_APP",
             template=template_key,
             payload={"subject": template.get("subject", ""), "body": body},
-        )
-        db.add(notif)
+        ))
 
-    if users:
+    if users and not in_app_only:
         team_emails = [u.email for u in users]
         try:
-            send_email_task.delay(team_emails, subject, f"<p>{body}</p>", cc_emails or None)
+            send_email_task.delay(team_emails, subject, email_html, cc_emails or None)
         except Exception:
             logger.exception("Failed to queue team email for %s (broker unavailable?)", team.value)
 
@@ -155,14 +187,22 @@ async def notify_user(db: AsyncSession, shipment, user: User, template_key: str,
         full_name=_html.escape(user.full_name),
         **escaped_extra,
     )
-    notif = Notification(
+    payload = {"subject": template.get("subject", ""), "body": body}
+    email_notif = Notification(
         shipment_id=shipment.id,
         recipient_id=user.id,
         channel="EMAIL",
         template=template_key,
-        payload={"subject": template.get("subject", ""), "body": body},
+        payload=payload,
     )
-    db.add(notif)
+    db.add(email_notif)
+    db.add(Notification(
+        shipment_id=shipment.id,
+        recipient_id=user.id,
+        channel="IN_APP",
+        template=template_key,
+        payload=payload,
+    ))
     try:
         send_email_task.delay(
             user.email,
@@ -171,7 +211,7 @@ async def notify_user(db: AsyncSession, shipment, user: User, template_key: str,
             cc_emails or None,
         )
     except Exception:
-        notif.queue_failed = True
+        email_notif.queue_failed = True
         logger.exception("Failed to queue email to %s (broker unavailable?)", user.email)
     await db.commit()
 
@@ -193,7 +233,7 @@ async def send_invitation_email(invitation) -> None:
 
 
 async def get_user_notifications(db: AsyncSession, user_id: uuid.UUID, unread_only: bool = False) -> list[Notification]:
-    q = select(Notification).where(Notification.recipient_id == user_id)
+    q = select(Notification).where(Notification.recipient_id == user_id, Notification.channel == "IN_APP")
     if unread_only:
         q = q.where(Notification.is_read == False)
     q = q.order_by(Notification.created_at.desc()).limit(50)
@@ -208,3 +248,13 @@ async def mark_read(db: AsyncSession, user_id: uuid.UUID, notification_id: uuid.
         notif.is_read = True
         notif.read_at = datetime.now(timezone.utc)
         await db.commit()
+
+
+async def mark_all_read(db: AsyncSession, user_id: uuid.UUID) -> None:
+    from sqlalchemy import update
+    await db.execute(
+        update(Notification)
+        .where(Notification.recipient_id == user_id, Notification.channel == "IN_APP", Notification.is_read == False)
+        .values(is_read=True, read_at=datetime.now(timezone.utc))
+    )
+    await db.commit()

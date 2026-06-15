@@ -1,5 +1,7 @@
 import re
 import uuid
+from datetime import datetime
+from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +18,47 @@ _TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
 _VALID_TEAMS = {t.value for t in Team}
+
+
+# ── In-app notifications for current user ─────────────────────────────────────
+
+class NotificationOut(BaseModel):
+    id: uuid.UUID
+    shipment_id: uuid.UUID | None
+    template: str
+    payload: dict[str, Any]
+    is_read: bool
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class MarkReadRequest(BaseModel):
+    ids: list[uuid.UUID] = []
+    all: bool = False
+
+
+@router.get("/my", response_model=list[NotificationOut])
+async def get_my_notifications(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    from app.notifications.service import get_user_notifications
+    return await get_user_notifications(db, user.id, unread_only=False)
+
+
+@router.post("/mark-read", status_code=204)
+async def mark_notifications_read(
+    body: MarkReadRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    from app.notifications.service import mark_read, mark_all_read
+    if body.all:
+        await mark_all_read(db, user.id)
+    else:
+        for nid in body.ids:
+            await mark_read(db, user.id, nid)
 
 
 class CCConfigCreate(BaseModel):

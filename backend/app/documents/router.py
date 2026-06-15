@@ -1,4 +1,5 @@
 import io
+import json
 import uuid
 from fastapi import APIRouter, Depends, UploadFile, File, Form, Query, HTTPException
 from fastapi.responses import StreamingResponse
@@ -30,6 +31,22 @@ async def detect_document_type(
     return {"doc_type": service.detect_doc_type(raw)}
 
 
+@router.post("/ai-detect-splits")
+async def ai_detect_splits(
+    file: Optional[UploadFile] = File(None),
+    source_document_id: Optional[uuid.UUID] = Form(None),
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+):
+    if source_document_id:
+        pdf_bytes, _ = await service.get_document_content(source_document_id, db, actor)
+    elif file:
+        pdf_bytes = await file.read()
+    else:
+        raise HTTPException(status_code=422, detail="Provide either file or source_document_id")
+    return await service.ai_detect_splits(pdf_bytes)
+
+
 @router.post("", response_model=schemas.DocumentOut)
 async def upload_document(
     shipment_id: uuid.UUID = Form(...),
@@ -41,6 +58,40 @@ async def upload_document(
     actor: User = Depends(get_current_user),
 ):
     return await service.upload_document(db, actor, shipment_id, doc_type, file, task_id, container_id)
+
+
+@router.post("/split-upload", response_model=list[schemas.DocumentOut])
+async def split_upload_document(
+    shipment_id: uuid.UUID = Form(...),
+    file: UploadFile = File(...),
+    segments: str = Form(...),
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+):
+    try:
+        parsed = json.loads(segments)
+        if not isinstance(parsed, list):
+            raise ValueError
+    except Exception:
+        raise HTTPException(status_code=422, detail="segments must be a JSON array")
+    return await service.split_and_upload_document(db, actor, shipment_id, file, parsed)
+
+
+@router.post("/split-by-document", response_model=list[schemas.DocumentOut])
+async def split_by_document(
+    source_document_id: uuid.UUID = Form(...),
+    shipment_id: uuid.UUID = Form(...),
+    segments: str = Form(...),
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+):
+    try:
+        parsed = json.loads(segments)
+        if not isinstance(parsed, list):
+            raise ValueError
+    except Exception:
+        raise HTTPException(status_code=422, detail="segments must be a JSON array")
+    return await service.split_document_by_id(db, actor, source_document_id, shipment_id, parsed)
 
 
 @router.get("/ccros/pending-zip")

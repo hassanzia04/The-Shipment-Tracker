@@ -10,7 +10,7 @@ import { DocumentUploadPanel } from '@/components/DocumentUploadPanel'
 import { StageTimeline } from '@/components/StageTimeline'
 import { HoldPanel } from '@/components/HoldPanel'
 import { useAuth } from '@/hooks/useAuth'
-import { STAGE_LABELS, TASK_TYPE_LABELS, DOC_TYPE_LABELS, ENTITY_LABELS, HOLD_REASON_LABELS } from '@/types'
+import { STAGE_LABELS, TASK_TYPE_LABELS, DOC_TYPE_LABELS, ENTITY_LABELS, HOLD_REASON_LABELS, CUSTOMER_REQUIRED_DOCS } from '@/types'
 import type { Task, Document as ShipmentDoc, Container, Truck, Shipment, ShipmentStage, DocumentType } from '@/types'
 import { formatDate, formatDateTime, formatFileSize } from '@/lib/dates'
 import { ChevronDown, ChevronUp, CheckCircle, Clock, AlertTriangle, Info, Upload, Trash2, Download, Pencil, X, Eye } from 'lucide-react'
@@ -56,6 +56,38 @@ function getLatestRemarkForTeam(
     }
     return true
   }) || null
+}
+
+const OBSERVER_STATUS_CONFIGS = [
+  {
+    eventTypes: ['SENT_BACK_TO_CUSTOMER', 'DOCUMENTS_REJECTED'],
+    targetTeam: 'CUSTOMER',
+    stage: 'CUSTOMER' as ShipmentStage,
+    label: 'Waiting for customer — shipment returned for re-submission',
+    bg: 'bg-amber-50 dark:bg-amber-900/20',
+    border: 'border-amber-300 dark:border-amber-700',
+  },
+  {
+    eventTypes: ['SENT_BACK_TO_FFD'],
+    targetTeam: 'FFD',
+    stage: 'FFD_REVIEW' as ShipmentStage,
+    label: 'Returned to FFD for review',
+    bg: 'bg-amber-50 dark:bg-amber-900/20',
+    border: 'border-amber-300 dark:border-amber-700',
+  },
+]
+
+function getObserverStatusBanner(
+  events: ShipmentEvent[],
+  team: string,
+  currentStage: ShipmentStage,
+): { event: ShipmentEvent; label: string; bg: string; border: string } | null {
+  for (const config of OBSERVER_STATUS_CONFIGS) {
+    if (team === config.targetTeam || currentStage !== config.stage) continue
+    const event = [...events].reverse().find(e => config.eventTypes.includes(e.event_type) && e.remark)
+    if (event) return { event, label: config.label, bg: config.bg, border: config.border }
+  }
+  return null
 }
 
 const REMARK_STYLE: Record<string, { bg: string; border: string; icon: JSX.Element; label: string }> = {
@@ -232,6 +264,8 @@ export function ShipmentDetail() {
   const [sendBackRemark, setSendBackRemark] = useState('')
   const [showDelegateRop, setShowDelegateRop] = useState(false)
   const [delegateRopRemark, setDelegateRopRemark] = useState('')
+  const [showRecall, setShowRecall] = useState(false)
+  const [recallRemark, setRecallRemark] = useState('')
   const [downloadingAll, setDownloadingAll] = useState(false)
   const [editingDate, setEditingDate] = useState(false)
   const [dateInput, setDateInput] = useState('')
@@ -321,8 +355,9 @@ export function ShipmentDetail() {
   const activeTasks = visibleTasks.filter(t => t.status !== 'COMPLETED')
   const myTasks = activeTasks.filter(t => t.assigned_team === team)
   const latestRemark = getLatestRemarkForTeam(shipment.events || [], shipment.tasks, team, stage)
+  const observerBanner = getObserverStatusBanner(shipment.events || [], team, stage)
 
-  const customerDocs = documents.filter(d => ['COMMERCIAL_INVOICE','PACKING_LIST','CERT_OF_ORIGIN','HALAL_CERT','BL','HEALTH_CERT'].includes(d.doc_type))
+  const customerDocs = documents.filter(d => ['COMMERCIAL_INVOICE','PACKING_LIST','CERT_OF_ORIGIN','HALAL_CERT','BL','HEALTH_CERT','MISCELLANEOUS'].includes(d.doc_type))
   const processDocs = documents.filter(d => !['COMMERCIAL_INVOICE','PACKING_LIST','CERT_OF_ORIGIN','HALAL_CERT','BL','HEALTH_CERT'].includes(d.doc_type))
 
   const ccroTask = shipment.tasks.find(t => t.task_type === 'CCRO' && t.status !== 'COMPLETED')
@@ -464,6 +499,18 @@ export function ShipmentDetail() {
         </div>
       )}
 
+      {/* Observer status banner — shown to all non-target teams to surface where the shipment is waiting */}
+      {observerBanner && (
+        <div className={clsx('flex gap-3 p-4 rounded-xl border', observerBanner.bg, observerBanner.border)}>
+          <AlertTriangle size={18} className="text-amber-500 shrink-0 mt-0.5" />
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-gray-800 dark:text-gray-100">{observerBanner.label}</p>
+            <p className="text-sm text-gray-700 dark:text-gray-300 mt-0.5">"{observerBanner.event.remark}"</p>
+            <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">{formatDateTime(observerBanner.event.created_at)}</p>
+          </div>
+        </div>
+      )}
+
       {/* Transport / DC: split layout */}
       {isTransportOrDc && (
         <TransportDcLayout
@@ -583,12 +630,14 @@ export function ShipmentDetail() {
             <div>
               <button
                 onClick={() => action(() => shipmentsApi.submit(id!, customerRemark.trim() || undefined), 'Documents submitted to FFD team')}
-                disabled={submitting || customerDocs.length < 6}
+                disabled={submitting || !CUSTOMER_REQUIRED_DOCS.every(t => customerDocs.some(d => d.doc_type === t))}
                 className="bg-blue-600 text-white px-5 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
               >
                 Submit for Review
               </button>
-              {customerDocs.length < 6 && <p className="text-xs text-amber-600 mt-1">Upload all 6 documents before submitting</p>}
+              {!CUSTOMER_REQUIRED_DOCS.every(t => customerDocs.some(d => d.doc_type === t)) && (
+                <p className="text-xs text-amber-600 mt-1">Upload your required documents before submitting</p>
+              )}
             </div>
           </div>
         )}
@@ -599,11 +648,18 @@ export function ShipmentDetail() {
         <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-xl p-4 space-y-3">
           <h2 className="font-semibold text-gray-800 dark:text-gray-100">Review Documents</h2>
           <textarea value={remark} onChange={e => setRemark(e.target.value)} placeholder="Reason for sending back (required)…" className="w-full border dark:border-gray-600 rounded-lg p-2 text-sm resize-none h-20 bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500" />
+          {!CUSTOMER_REQUIRED_DOCS.every(t => customerDocs.some(d => d.doc_type === t)) && (
+            <p className="text-xs text-amber-600">Split the combined PDF into all 6 documents before approving.</p>
+          )}
           <div className="flex gap-2">
             <button onClick={() => action(() => shipmentsApi.rejectDocs(id!, remark), 'Sent back to customer')} disabled={!remark.trim() || submitting} className="bg-red-500 text-white px-4 py-2 rounded-lg text-sm hover:bg-red-600 disabled:opacity-50">
               Send Back
             </button>
-            <button onClick={() => action(() => shipmentsApi.approveDocs(id!), 'Approved — Permit + DO tasks opened')} disabled={submitting} className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-green-700 disabled:opacity-50">
+            <button
+              onClick={() => action(() => shipmentsApi.approveDocs(id!), 'Approved — Permit + DO tasks opened')}
+              disabled={submitting || !CUSTOMER_REQUIRED_DOCS.every(t => customerDocs.some(d => d.doc_type === t))}
+              className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-green-700 disabled:opacity-50"
+            >
               Approve &amp; Open Tasks
             </button>
           </div>
@@ -892,6 +948,47 @@ export function ShipmentDetail() {
             </div>
           )}
 
+        </div>
+      )}
+
+      {/* FFD: recall from Transport (TRANSPORT stage, no trucks assigned yet) */}
+      {team === 'FFD' && stage === 'TRANSPORT' && (
+        <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-xl p-4">
+          {!showRecall ? (
+            <button
+              onClick={() => setShowRecall(true)}
+              className="flex items-center gap-1.5 text-sm text-amber-700 dark:text-amber-400 border border-amber-300 dark:border-amber-700 px-3 py-1.5 rounded-lg hover:bg-amber-50 dark:hover:bg-amber-900/20 transition-colors"
+            >
+              <AlertTriangle size={14} /> Recall from Transport
+            </button>
+          ) : (
+            <div className="space-y-3">
+              <div>
+                <p className="text-sm font-semibold text-gray-800 dark:text-gray-100">Recall from Transport</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                  The shipment returns to IN_PROGRESS so you can upload missing CCROs and re-confirm. This is only allowed if Transport has not yet assigned any trucks.
+                </p>
+              </div>
+              <textarea
+                value={recallRemark}
+                onChange={e => setRecallRemark(e.target.value)}
+                placeholder="Explain why you are recalling (required)…"
+                className="w-full text-sm border dark:border-gray-600 rounded-lg p-2.5 h-20 resize-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-amber-400"
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={() => action(() => shipmentsApi.recallFromTransport(id!, recallRemark), 'Recalled from Transport').then(() => { setShowRecall(false); setRecallRemark('') })}
+                  disabled={submitting || !recallRemark.trim()}
+                  className="text-sm bg-amber-600 text-white px-4 py-1.5 rounded-lg hover:bg-amber-700 disabled:opacity-50"
+                >
+                  {submitting ? 'Recalling…' : 'Confirm Recall'}
+                </button>
+                <button onClick={() => { setShowRecall(false); setRecallRemark('') }} className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

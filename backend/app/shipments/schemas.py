@@ -260,6 +260,10 @@ class SendBackToTransportRequest(BaseModel):
     remark: str
 
 
+class RecallFromTransportRequest(BaseModel):
+    remark: str
+
+
 class RequestBayanPaymentRequest(BaseModel):
     remark: Optional[str] = None
 

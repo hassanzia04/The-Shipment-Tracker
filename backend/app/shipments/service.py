@@ -318,8 +318,6 @@ async def list_shipments(
     from sqlalchemy import func as sa_func
 
     base_where = []
-    if actor.team == Team.CUSTOMER:
-        base_where.append(Shipment.customer_id == actor.id)
     if search:
         term = f"%{search}%"
         from sqlalchemy import or_
@@ -466,10 +464,7 @@ async def list_shipments(
 
 
 async def get_shipment(db: AsyncSession, shipment_id: uuid.UUID, actor: User) -> Shipment:
-    shipment = await _get_shipment(db, shipment_id)
-    if actor.team == Team.CUSTOMER and shipment.customer_id != actor.id:
-        raise HTTPException(status_code=403, detail="Access denied")
-    return shipment
+    return await _get_shipment(db, shipment_id)
 
 
 async def set_amls_job_number(db: AsyncSession, shipment_id: uuid.UUID, actor: User, amls_job_number: str | None) -> Shipment:
@@ -490,9 +485,8 @@ async def submit_documents(db: AsyncSession, shipment_id: uuid.UUID, actor: User
     from app.documents.models import Document
     docs = await db.execute(select(Document).where(Document.shipment_id == shipment_id))
     uploaded_types = {d.doc_type for d in docs.scalars().all()}
-    missing = [d.value for d in CUSTOMER_REQUIRED_DOCS if d not in uploaded_types]
-    if missing:
-        raise HTTPException(status_code=400, detail=f"Missing documents: {', '.join(missing)}")
+    if not all(t in uploaded_types for t in CUSTOMER_REQUIRED_DOCS):
+        raise HTTPException(status_code=400, detail="Please upload all required documents before submitting.")
 
     prev_stage = shipment.current_stage
 
@@ -538,7 +532,7 @@ async def send_back_to_customer(db: AsyncSession, shipment_id: uuid.UUID, actor:
     await db.commit()
 
     from app.notifications.service import notify_team
-    await notify_team(db, shipment, Team.CUSTOMER, "sent_back_to_customer")
+    await notify_team(db, shipment, Team.CUSTOMER, "sent_back_to_customer", remark=remark)
     return await _get_shipment(db, shipment_id)
 
 
@@ -555,7 +549,7 @@ async def reject_documents(db: AsyncSession, shipment_id: uuid.UUID, actor: User
     await db.commit()
 
     from app.notifications.service import notify_team
-    await notify_team(db, shipment, Team.CUSTOMER, "documents_rejected")
+    await notify_team(db, shipment, Team.CUSTOMER, "documents_rejected", remark=remark)
     return await _get_shipment(db, shipment_id)
 
 
@@ -690,9 +684,13 @@ async def complete_task(
     await _record_event(db, shipment, EventType.TASK_COMPLETED, actor, task_id=task_id, remark=remark)
     await db.commit()
 
+    from app.notifications.service import notify_team
     if task_type == TaskType.BAYAN_PAYMENT:
-        from app.notifications.service import notify_team
         await notify_team(db, shipment, Team.PRO, "bayan_payment_confirmed")
+    elif task_type == TaskType.PERMIT:
+        await notify_team(db, shipment, Team.FFD, "permit_completed", in_app_only=True)
+    elif task_type == TaskType.BAYAN:
+        await notify_team(db, shipment, Team.FFD, "bayan_completed", in_app_only=True)
     return await _get_shipment(db, shipment_id)
 
 
@@ -869,6 +867,33 @@ async def confirm_ccro_and_send_to_transport(db: AsyncSession, shipment_id: uuid
     return await _get_shipment(db, shipment_id)
 
 
+# ── FFD: Recall from Transport (before any truck assigned) ───────────────────
+
+async def recall_from_transport(db: AsyncSession, shipment_id: uuid.UUID, actor: User, remark: str) -> Shipment:
+    """FFD pulls the shipment back to IN_PROGRESS so they can upload missing CCROs.
+    Only allowed while no trucks have been assigned yet."""
+    shipment = await _get_shipment(db, shipment_id)
+    _assert_team(actor, Team.FFD)
+    _assert_stage(shipment, ShipmentStage.TRANSPORT)
+
+    for container in shipment.containers:
+        if container.truck_id is not None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot recall — container {container.container_number} already has a truck assigned",
+            )
+
+    prev_stage = shipment.current_stage
+    shipment.current_stage = ShipmentStage.IN_PROGRESS
+    await _record_event(db, shipment, EventType.RECALLED_FROM_TRANSPORT, actor,
+                        stage_from=prev_stage, stage_to=ShipmentStage.IN_PROGRESS, remark=remark)
+    await db.commit()
+
+    from app.notifications.service import notify_team
+    await notify_team(db, shipment, Team.TRANSPORT, "recalled_from_transport")
+    return await _get_shipment(db, shipment_id)
+
+
 # ── FFD: Re-send to Transport after it was sent back ─────────────────────────
 
 async def send_back_to_transport(db: AsyncSession, shipment_id: uuid.UUID, actor: User, remark: str) -> Shipment:
@@ -941,6 +966,39 @@ async def assign_truck(
         await _record_event(db, shipment, EventType.STAGE_CHANGED, actor,
                             stage_from=prev, stage_to=ShipmentStage.DC_TRANSPORT, remark="All containers assigned")
     await db.commit()
+    return await _get_shipment(db, shipment_id)
+
+
+# ── Transport: Unassign truck (reset to PENDING for reassignment or return) ───
+
+async def unassign_truck(
+    db: AsyncSession, shipment_id: uuid.UUID, container_id: uuid.UUID,
+    actor: User, remark: str,
+) -> Shipment:
+    shipment = await _get_shipment(db, shipment_id)
+    _assert_team(actor, Team.TRANSPORT)
+
+    result = await db.execute(select(Container).where(Container.id == container_id, Container.shipment_id == shipment_id))
+    container = result.scalar_one_or_none()
+    if not container:
+        raise HTTPException(status_code=404, detail="Container not found")
+    if container.arrived_at:
+        raise HTTPException(status_code=400, detail="Container has already arrived at DC — truck cannot be unassigned")
+    if container.status not in [ContainerStatus.ASSIGNED, ContainerStatus.IN_TRANSIT, ContainerStatus.BREAKDOWN]:
+        raise HTTPException(status_code=400, detail="Truck can only be unassigned from containers that are Assigned, In Transit, or Breakdown")
+
+    container.truck_id = None
+    container.expected_arrival_at = None
+    container.actual_pull_out_date = None
+    container.status = ContainerStatus.PENDING
+
+    db.add(ContainerEvent(container_id=container_id, event_type="TRUCK_UNASSIGNED", actor_id=actor.id, remark=remark))
+    await _record_event(db, shipment, EventType.TRUCK_UNASSIGNED, actor,
+                        remark=f"Container {container.container_number} — {remark}")
+    await db.commit()
+
+    from app.notifications.service import notify_team
+    await notify_team(db, shipment, Team.FFD, "truck_unassigned", remark=remark)
     return await _get_shipment(db, shipment_id)
 
 
@@ -1022,7 +1080,7 @@ async def return_container_to_ffd(
 ) -> Shipment:
     shipment = await _get_shipment(db, shipment_id)
     _assert_team(actor, Team.TRANSPORT)
-    _assert_stage(shipment, ShipmentStage.TRANSPORT)
+    _assert_stage(shipment, ShipmentStage.TRANSPORT, ShipmentStage.DC_TRANSPORT)
 
     container = next((c for c in shipment.containers if c.id == container_id), None)
     if not container:
@@ -1037,6 +1095,8 @@ async def return_container_to_ffd(
     await _record_event(db, shipment, EventType.CONTAINER_RETURNED_TO_FFD, actor, remark=remark)
     await db.commit()
 
+    from app.notifications.service import notify_team
+    await notify_team(db, shipment, Team.FFD, "container_returned_to_ffd", remark=remark)
     return await _get_shipment(db, shipment_id)
 
 
@@ -1058,6 +1118,9 @@ async def reset_container_to_transport(
     db.add(ContainerEvent(container_id=container_id, event_type="CONTAINER_RESET_TO_TRANSPORT", actor_id=actor.id, remark=None))
     await _record_event(db, shipment, EventType.CONTAINER_RESET_TO_TRANSPORT, actor)
     await db.commit()
+
+    from app.notifications.service import notify_team
+    await notify_team(db, shipment, Team.TRANSPORT, "container_reset_to_transport")
     return await _get_shipment(db, shipment_id)
 
 
@@ -1111,7 +1174,7 @@ async def send_back_to_ffd(db: AsyncSession, shipment_id: uuid.UUID, actor: User
     await db.commit()
 
     from app.notifications.service import notify_team
-    await notify_team(db, shipment, Team.FFD, "sent_back_to_ffd")
+    await notify_team(db, shipment, Team.FFD, "sent_back_to_ffd", remark=remark)
     return await _get_shipment(db, shipment_id)
 
 
@@ -1239,14 +1302,17 @@ async def delete_container(
     if not actor.is_admin and container.status != ContainerStatus.PENDING:
         raise HTTPException(status_code=400, detail="Only pending containers can be deleted")
 
-    # Delete CCRO document (nulls FK, removes OCI file, deletes DB record)
+    # Null out ccro_document_id FK before touching documents
     if container.ccro_document_id:
-        from app.documents.service import delete_document
-        try:
-            await delete_document(db, actor, container.ccro_document_id)
-        except Exception:
-            container.ccro_document_id = None
-            await db.flush()
+        container.ccro_document_id = None
+        await db.flush()
+
+    # Null out any Document.container_id references to this container (avoids FK violation)
+    from app.documents.models import Document as _Doc
+    docs_result = await db.execute(select(_Doc).where(_Doc.container_id == container_id))
+    for doc in docs_result.scalars().all():
+        doc.container_id = None
+    await db.flush()
 
     # Delete container events
     events = await db.execute(select(ContainerEvent).where(ContainerEvent.container_id == container_id))
@@ -1272,8 +1338,7 @@ def _assert_team(actor: User, *teams: Team):
 
 
 def _assert_customer_owns(shipment: Shipment, actor: User):
-    if actor.team == Team.CUSTOMER and shipment.customer_id != actor.id:
-        raise HTTPException(status_code=403, detail="Access denied")
+    pass  # all Customer team members share access to all shipments
 
 
 # ── Bulk Excel import ─────────────────────────────────────────────────────────
@@ -1373,11 +1438,15 @@ async def import_shipments_from_excel(
             if not bl_num or not inv_num:
                 errors.append(f"Row {i}: BL Number and Invoice Number are required")
                 continue
-            if not bayan_raw or not consign_raw:
-                missing_fields = []
-                if not bayan_raw: missing_fields.append("Bayan Type")
-                if not consign_raw: missing_fields.append("Consignee")
-                errors.append(f"Row {i} (BL: {bl_num}): {' and '.join(missing_fields)} {'are' if len(missing_fields) > 1 else 'is'} required")
+            missing_fields = []
+            if not prod_raw:    missing_fields.append("Product Type")
+            if not port_raw:    missing_fields.append("Loading Port")
+            if not sl_raw:      missing_fields.append("Shipping Line")
+            if not op_raw:      missing_fields.append("Offloading Location")
+            if not bayan_raw:   missing_fields.append("Bayan Type")
+            if not consign_raw: missing_fields.append("Consignee")
+            if missing_fields:
+                errors.append(f"Row {i} (BL: {bl_num}): {', '.join(missing_fields)} {'are' if len(missing_fields) > 1 else 'is'} required")
                 continue
 
             try:
@@ -1628,8 +1697,6 @@ async def export_container_billing(
 ) -> bytes:
     from app.masters.models import Truck
     shipment = await _get_shipment(db, shipment_id)
-    if actor.team == Team.CUSTOMER and shipment.customer_id != actor.id:
-        raise HTTPException(status_code=403, detail="Access denied")
 
     from datetime import date as date_type
     from datetime import datetime as dt_type
@@ -1983,18 +2050,14 @@ async def get_container_view(db: AsyncSession, actor: User, historical: bool = F
         else:
             filters.append(Shipment.current_stage != ShipmentStage.COMPLETED)
 
-    # Customers can only see their own shipments
-    if actor.team == Team.CUSTOMER:
-        filters.append(Shipment.customer_id == actor.id)
-
     from app.documents.models import Document as Doc
 
-    # Subquery: was this container ever reset back to Transport by FFD
+    # Subquery: was this container ever reset back to Transport by FFD, or had its truck unassigned
     was_requeued_sq = (
         select(ContainerEvent.id)
         .where(
             ContainerEvent.container_id == Container.id,
-            ContainerEvent.event_type == "CONTAINER_RESET_TO_TRANSPORT",
+            ContainerEvent.event_type.in_(["CONTAINER_RESET_TO_TRANSPORT", "TRUCK_UNASSIGNED"]),
         )
         .correlate(Container)
         .exists()

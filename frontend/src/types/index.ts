@@ -27,6 +27,7 @@ export type HoldReason =
   | 'OTHER'
 
 export type DocumentType =
+  | 'COMBINED_DOCS'
   | 'COMMERCIAL_INVOICE'
   | 'PACKING_LIST'
   | 'CERT_OF_ORIGIN'
@@ -242,6 +243,16 @@ export interface Truck {
   created_at: string
 }
 
+export const TEAM_LABELS: Record<Team, string> = {
+  CUSTOMER:            'Customer',
+  FFD:                 'FFD',
+  PRO:                 'PRO',
+  TRANSPORT:           'Transport',
+  DC:                  'DC',
+  MANAGEMENT:          'Management',
+  CUSTOMER_MANAGEMENT: 'Customer Management',
+}
+
 // Label maps for display
 export const STAGE_LABELS: Record<ShipmentStage, string> = {
   CUSTOMER: 'Customer',
@@ -284,6 +295,7 @@ export const HOLD_REASON_LABELS: Record<HoldReason, string> = {
 }
 
 export const DOC_TYPE_LABELS: Record<DocumentType, string> = {
+  COMBINED_DOCS: 'Required Documents',
   COMMERCIAL_INVOICE: 'Commercial Invoice',
   PACKING_LIST: 'Packing List',
   CERT_OF_ORIGIN: 'Certificate of Origin',

@@ -576,18 +576,28 @@ async def reports(
     avg_cycle_days = round(avg_seconds / 86400, 1) if avg_seconds else None
 
     # ── On-time rate ──────────────────────────────────────────────────────────
-    completed_rows = (await db.execute(
-        select(Shipment).where(
+    from sqlalchemy import func as _func, case as _case, cast as _cast, Date as _Date, or_ as _or
+    on_time_result = (await db.execute(
+        select(
+            func.count(Shipment.id).label("total"),
+            func.sum(_case(
+                (
+                    _or(
+                        Shipment.pull_out_date == None,
+                        _cast(Shipment.completed_at, _Date) <= Shipment.pull_out_date,
+                    ),
+                    1,
+                ),
+                else_=0,
+            )).label("on_time"),
+        ).where(
             Shipment.current_stage == ShipmentStage.COMPLETED,
             Shipment.completed_at != None,
             *period_filter,
         )
-    )).scalars().all()
-    on_time = sum(
-        1 for s in completed_rows
-        if s.pull_out_date is None or s.completed_at.replace(tzinfo=None).date() <= s.pull_out_date
-    )
-    late = len(completed_rows) - on_time
+    )).one()
+    on_time = int(on_time_result.on_time or 0)
+    late = int(on_time_result.total or 0) - on_time
 
     # ── Container movement counts in the period ───────────────────────────────
     containers_returned = (await db.execute(
@@ -802,6 +812,7 @@ async def reports(
             ShipmentEvent.event_type.in_([
                 EventType.DOCUMENTS_APPROVED,
                 EventType.DOCUMENTS_REJECTED,
+                EventType.SENT_BACK_TO_CUSTOMER,
             ]),
             *period_filter,
         )
@@ -844,6 +855,7 @@ async def reports(
         "rejection": {
             "approved": rej.get(EventType.DOCUMENTS_APPROVED.value, 0),
             "rejected": rej.get(EventType.DOCUMENTS_REJECTED.value, 0),
+            "mid_process": rej.get(EventType.SENT_BACK_TO_CUSTOMER.value, 0),
         },
         "task_durations": task_durations,
     })
@@ -910,7 +922,7 @@ async def ai_summary(
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ):
-    if actor.team not in (Team.MANAGEMENT, Team.CUSTOMER) and not actor.is_admin:
+    if actor.team not in (Team.MANAGEMENT, Team.CUSTOMER, Team.CUSTOMER_MANAGEMENT) and not actor.is_admin:
         raise HTTPException(status_code=403, detail="Access denied")
 
     if not settings.ANTHROPIC_API_KEY:
@@ -934,25 +946,75 @@ async def ai_summary(
     )
     by_stage = {row[0].value: row[1] for row in stage_counts_result.all()}
 
-    holds_count = (await db.execute(
-        select(func.count(ShipmentTask.id))
+    holds_result = await db.execute(
+        select(ShipmentTask.hold_entity, func.count(ShipmentTask.id))
         .join(Shipment, Shipment.id == ShipmentTask.shipment_id)
         .where(ShipmentTask.status == TaskStatus.ON_HOLD, *active_filter)
+        .group_by(ShipmentTask.hold_entity)
+    )
+    holds_by_entity = {
+        (row[0].value if row[0] else "OTHER"): row[1]
+        for row in holds_result.all()
+    }
+    holds_count = sum(holds_by_entity.values())
+    holds_summary = ", ".join(f"{k}: {v}" for k, v in holds_by_entity.items()) or "none"
+
+    from datetime import date as _date
+    today = datetime.now(timezone.utc).date()
+
+    _pre_transport = [ShipmentStage.CUSTOMER, ShipmentStage.FFD_REVIEW, ShipmentStage.IN_PROGRESS]
+    _transport = [ShipmentStage.TRANSPORT, ShipmentStage.DC_TRANSPORT]
+
+    overdue_result = await db.execute(
+        select(Shipment.current_stage, func.count(Shipment.id))
+        .where(
+            Shipment.pull_out_date <= today,
+            Shipment.pull_out_date != None,
+            Shipment.current_stage != ShipmentStage.COMPLETED,
+            *base_filter,
+        )
+        .group_by(Shipment.current_stage)
+    )
+    overdue_by_stage: dict[str, int] = {}
+    for row in overdue_result.all():
+        overdue_by_stage[row[0].value] = row[1]
+
+    overdue_customer    = overdue_by_stage.get("CUSTOMER", 0)
+    overdue_ffd         = overdue_by_stage.get("FFD_REVIEW", 0)
+    overdue_in_progress = overdue_by_stage.get("IN_PROGRESS", 0)
+    overdue_transport   = overdue_by_stage.get("TRANSPORT", 0) + overdue_by_stage.get("DC_TRANSPORT", 0)
+    total_overdue       = sum(overdue_by_stage.values())
+
+    expiring_dos = (await db.execute(
+        select(func.count(Shipment.id)).where(
+            Shipment.do_validity_date >= today,
+            Shipment.do_validity_date <= today + timedelta(days=7),
+            Shipment.current_stage != ShipmentStage.COMPLETED,
+            *base_filter,
+        )
     )).scalar() or 0
 
-    stage_lines = ", ".join(
-        f"{count} in {stage.replace('_', ' ').title()}"
-        for stage, count in by_stage.items()
-        if stage != ShipmentStage.COMPLETED.value and count > 0
-    )
-
     prompt = (
-        f"You are summarising a shipment tracking system for a logistics company. "
-        f"Give a brief 2-3 sentence plain-English summary of the current pipeline state. "
-        f"Be professional and factual. Do not use bullet points or headers.\n\n"
-        f"Data: {total_active} active shipments. "
-        f"Breakdown: {stage_lines or 'none'}. "
-        f"Tasks currently on hold: {holds_count}."
+        "You are a senior logistics analyst for a freight forwarding company. "
+        "Write a concise 3-sentence dashboard summary for senior management. "
+        "Do not use bullet points, headers, or markdown. Be direct and factual.\n\n"
+        "Sentence 1 — overdue pull-outs only: "
+        f"{total_overdue} shipments are overdue on pull-out date "
+        f"(Customer — pending document submission: {overdue_customer}, "
+        f"FFD Review — pending FFD document review: {overdue_ffd}, "
+        f"In Progress — documentation work in progress: {overdue_in_progress}, "
+        f"With Transport: {overdue_transport}).\n"
+        "Sentence 2 — active holds only: "
+        f"{holds_count} task(s) on hold ({holds_summary}).\n"
+        "Sentence 3 — overall pipeline picture only, do not mention overdue or holds: "
+        f"{total_active} active shipments "
+        f"(Customer: {by_stage.get('CUSTOMER', 0)}, "
+        f"FFD Review: {by_stage.get('FFD_REVIEW', 0)}, "
+        f"In Progress: {by_stage.get('IN_PROGRESS', 0)}, "
+        f"Transport: {by_stage.get('TRANSPORT', 0)}, "
+        f"DC/Transport: {by_stage.get('DC_TRANSPORT', 0)}), "
+        f"{expiring_dos} DO(s) expiring within 7 days.\n\n"
+        "Note: 'Customer' stage = customer has not submitted documents yet, not a completed delivery."
     )
 
     try:

@@ -296,14 +296,26 @@ async def _get_ai_summary(data: dict) -> list[str]:
             for k, v in data["holds_by_entity"].items()
         ) or "none"
 
+        pullouts = data.get("pullouts_today", [])
+        pullouts_customer   = sum(1 for p in pullouts if p["stage"] == "CUSTOMER")
+        pullouts_ffd_review = sum(1 for p in pullouts if p["stage"] == "FFD_REVIEW")
+        pullouts_in_progress = sum(1 for p in pullouts if p["stage"] == "IN_PROGRESS")
+        pullouts_transport  = sum(1 for p in pullouts if p["stage"] in ("TRANSPORT", "DC_TRANSPORT"))
+
         prompt = (
-            "You are a logistics operations analyst for a freight forwarding company.\n\n"
-            "Based on today's operational data, write exactly 3 concise bullet points for senior management.\n"
-            "Focus on: overall pipeline health, any urgent issues (breakdowns, expiring DOs, items on hold), "
-            "and today's progress. Each bullet must be under 25 words.\n"
-            "Return only the 3 bullet points, one per line, each starting with a bullet character •.\n\n"
-            "OPERATIONAL DATA:\n"
-            f"- Date: {data['report_date']}\n"
+            "You are a senior logistics analyst for a freight forwarding company.\n\n"
+            "Write exactly 3 bullet points. Each under 20 words. Start each with •. No markdown, no headers, no bold.\n"
+            "• Point 1: overdue pull-outs only. Nothing else.\n"
+            "• Point 2: active holds only. Nothing else.\n"
+            "• Point 3: overall pipeline picture only. Do not mention overdue or holds.\n\n"
+            "Note: 'Customer' stage = customer has not submitted documents yet, not a completed delivery.\n\n"
+            "Today's data:\n"
+            f"- Overdue pull-outs: {len(pullouts)} "
+            f"(Customer — pending document submission: {pullouts_customer}, "
+            f"FFD Review — pending FFD document review: {pullouts_ffd_review}, "
+            f"In Progress — documentation work in progress: {pullouts_in_progress}, "
+            f"With Transport: {pullouts_transport})\n"
+            f"- Tasks on hold: {data['total_on_hold']} ({holds_summary})\n"
             f"- Active shipments: {data['total_active']} "
             f"(Customer: {data['stage_counts'].get('CUSTOMER', 0)}, "
             f"FFD Review: {data['stage_counts'].get('FFD_REVIEW', 0)}, "
@@ -312,10 +324,6 @@ async def _get_ai_summary(data: dict) -> list[str]:
             f"DC/Transport: {data['stage_counts'].get('DC_TRANSPORT', 0)})\n"
             f"- New shipments today: {data['new_today']}\n"
             f"- Completed today: {data['completed_today']}\n"
-            f"- Containers in transit: {data['container_status_counts'].get('IN_TRANSIT', 0)}\n"
-            f"- Containers at DC: {data['container_status_counts'].get('AT_DC', 0)}\n"
-            f"- Containers on breakdown: {data['container_status_counts'].get('BREAKDOWN', 0)}\n"
-            f"- Tasks on hold: {data['total_on_hold']} ({holds_summary})\n"
             f"- DOs expiring in 7 days: {len(data['expiring_dos'])}\n"
         )
 
@@ -561,23 +569,22 @@ def _render_html(data: dict, ai_bullets: list[str]) -> str:
                 f'{_td(s["bl_number"], "font-weight:600;white-space:nowrap;")}'
                 f'<td style="padding:8px 12px;font-family:Arial,sans-serif;font-size:13px;">{date_cell}</td>'
                 f'{_td(stage_label)}'
-                f'<td style="padding:8px 12px;">{reason_badge}</td>'
                 f'<td style="padding:8px 12px;">{hold_cell}</td>'
                 f'</tr>'
             )
         pullout_inner = (
             '<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:1px solid #e2e8f0;">'
-            f'<tr>{_th("BL Number")}{_th("Pull-out Date")}{_th("Stage")}{_th("Reason")}{_th("Hold")}</tr>'
+            f'<tr>{_th("BL Number")}{_th("Pull-out Date")}{_th("Stage")}{_th("Hold")}</tr>'
             f'{pullout_rows}'
             '</table>'
         )
         pullout_section = (
-            _section_header(f"Pull-outs Not Actioned ({len(pullouts_today)})") +
+            _section_header(f"Overdue Pull-outs ({len(pullouts_today)})") +
             f'<tr><td style="padding:0 32px 8px;">{pullout_inner}</td></tr>'
         )
     else:
         pullout_section = (
-            _section_header("Pull-outs Not Actioned") +
+            _section_header("Overdue Pull-outs") +
             '<tr><td style="padding:0 32px 8px;">'
             '<p style="margin:0;font-family:Arial,sans-serif;font-size:13px;color:#9ca3af;'
             'text-align:center;padding:12px 0;">All pull-outs actioned — nothing pending.</p>'
@@ -658,6 +665,9 @@ def _render_html(data: dict, ai_bullets: list[str]) -> str:
   <tr><td bgcolor="#f8fafc" style="background-color:#f8fafc;padding:16px 32px;border-top:1px solid #e2e8f0;">
     <p style="margin:0;font-family:Arial,sans-serif;font-size:11px;color:#94a3b8;text-align:center;">
       Shipment Tracker &nbsp;&middot;&nbsp; Automated Daily Operations Report &nbsp;&middot;&nbsp; {report_date}
+    </p>
+    <p style="margin:6px 0 0;font-family:Arial,sans-serif;font-size:11px;text-align:center;">
+      <a href="https://fftracker.bayanattechnology.com/" style="color:#1d4ed8;text-decoration:none;">fftracker.bayanattechnology.com</a>
     </p>
   </td></tr>
 

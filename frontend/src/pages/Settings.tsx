@@ -4,6 +4,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { authApi } from '@/api/auth'
 import { notificationsApi, CCConfig, DailyReportRecipient } from '@/api/notifications'
 import type { User } from '@/types'
+import { TEAM_LABELS } from '@/types'
 import { Moon, Sun, Plus, X, Clock } from 'lucide-react'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
@@ -228,7 +229,7 @@ export function Settings() {
           </div>
           <div>
             <p className="text-gray-500 dark:text-gray-400">Team</p>
-            <p className="font-medium text-gray-900 dark:text-white">{user?.team}</p>
+            <p className="font-medium text-gray-900 dark:text-white">{user ? TEAM_LABELS[user.team] : ''}</p>
           </div>
           <div>
             <p className="text-gray-500 dark:text-gray-400">Role</p>
