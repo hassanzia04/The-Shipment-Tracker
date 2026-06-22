@@ -67,7 +67,7 @@ TEMPLATES: dict[str, dict] = {
     },
     "bayan_payment_requested": {
         "subject": "FFD Tracker — Bayan payment required",
-        "body": "A Bayan payment is required for BL: {bl_number}. Please log in to complete the payment.",
+        "body": "A Bayan payment is required for BL: {bl_number}. Please complete the payment and confirm.",
     },
     "do_revalidation_requested": {
         "subject": "FFD Tracker — DO revalidation requested",
@@ -119,7 +119,7 @@ TEMPLATES: dict[str, dict] = {
     },
     "bayan_payment_bulk_requested": {
         "subject": "FFD Tracker — Bayan payment required ({count} shipment{plural})",
-        "body": "Bayan payment is required for {count} shipment{plural}. The Bayan documents are attached to this email. Please complete the payment and confirm in the tracker.",
+        "body": "Bayan payment is required for {count} shipment{plural}. The Bayan documents are attached to this email. Please complete the payment and confirm.",
     },
     "ccro_bulk_received": {
         "subject": "FFD Tracker — CCROs confirmed ({count} shipment{plural}), please arrange transport",
@@ -409,6 +409,131 @@ async def notify_team_bulk_pull_out(
     await db.commit()
 
 
+async def notify_bayan_payment_requested(db: AsyncSession, shipment) -> None:
+    """Send payment request email + in-app notification for a single Transfer Bayan shipment."""
+    from app.notifications.tasks import send_email_with_attachments_task
+    from app.documents.models import Document
+    from app.enums import DocumentType
+
+    users = await _get_team_users(db, Team.CUSTOMER)
+    cc_emails = await _get_cc_emails_for_team(db, Team.CUSTOMER)
+
+    template = TEMPLATES["bayan_payment_requested"]
+    subject = template["subject"]
+    body = template["body"].format(bl_number=shipment.bl_number)
+    tracker_url = _html.escape(settings.FRONTEND_URL)
+
+    for user in users:
+        db.add(Notification(
+            shipment_id=shipment.id,
+            recipient_id=user.id,
+            channel="IN_APP",
+            template="bayan_payment_requested",
+            payload={"subject": subject, "body": f"Bayan payment required — BL: {shipment.bl_number}"},
+        ))
+
+    if users:
+        team_emails = [u.email for u in users]
+        try:
+            import base64
+            import asyncio
+            from app.documents.service import fetch_oci_bytes, extract_bayan_meta
+            from sqlalchemy import select as sa_select
+
+            bayan_doc_result = await db.execute(
+                sa_select(Document).where(
+                    Document.shipment_id == shipment.id,
+                    Document.doc_type == DocumentType.BAYAN,
+                ).order_by(Document.uploaded_at.desc()).limit(1)
+            )
+            bayan_doc = bayan_doc_result.scalars().first()
+
+            embedded = []
+            dec_no = ""
+            definit_amount = ""
+
+            if bayan_doc and bayan_doc.oci_path:
+                def _fetch_and_parse():
+                    data = fetch_oci_bytes(bayan_doc.oci_path)
+                    if not data:
+                        return None
+                    meta = extract_bayan_meta(data)
+                    return {
+                        "data_b64": base64.b64encode(data).decode(),
+                        "dec_no": meta.get("dec_no") or "",
+                        "definit_amount": meta.get("definit_amount") or "",
+                    }
+
+                result = await asyncio.to_thread(_fetch_and_parse)
+                if result:
+                    embedded = [{"filename": bayan_doc.original_filename, "data_b64": result["data_b64"]}]
+                    dec_no = result["dec_no"]
+                    definit_amount = result["definit_amount"]
+
+            dec_cell = _html.escape(dec_no) if dec_no else "—"
+            amt_cell = (
+                f'<strong style="color:#1d4ed8;">{_html.escape(definit_amount)} OMR</strong>'
+                if definit_amount else '<span style="color:#9ca3af;">—</span>'
+            )
+            shipment_row = (
+                f'<tr style="border-top:1px solid #e2e8f0;">'
+                f'<td style="padding:7px 10px;font-family:Arial,sans-serif;font-size:13px;font-weight:600;color:#111827;">{_html.escape(shipment.bl_number)}</td>'
+                f'<td style="padding:7px 10px;font-family:Arial,sans-serif;font-size:12px;color:#374151;">{dec_cell}</td>'
+                f'<td style="padding:7px 10px;font-family:Arial,sans-serif;font-size:13px;text-align:right;">{amt_cell}</td>'
+                f'</tr>'
+            )
+
+            email_html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background-color:#f1f5f9;">
+<table width="100%" cellpadding="0" cellspacing="0" bgcolor="#f1f5f9">
+<tr><td align="center" style="padding:24px 16px;">
+<table width="620" cellpadding="0" cellspacing="0" bgcolor="#ffffff"
+  style="background-color:#ffffff;max-width:620px;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.1);">
+  <tr><td bgcolor="#1d4ed8" style="background-color:#1d4ed8;padding:24px 32px;">
+    <p style="margin:0;font-family:Arial,sans-serif;font-size:18px;font-weight:bold;color:#ffffff;">FFD Shipment Tracker</p>
+  </td></tr>
+  <tr><td style="padding:28px 32px 8px;">
+    <p style="margin:0;font-family:Arial,sans-serif;font-size:14px;color:#374151;line-height:1.6;">{body}</p>
+    <table cellpadding="0" cellspacing="0" style="margin-top:16px;border:1px solid #e2e8f0;border-radius:6px;width:100%;border-collapse:collapse;">
+      <tr style="background-color:#f8fafc;">
+        <th style="padding:8px 10px;font-family:Arial,sans-serif;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;text-align:left;">BL Number</th>
+        <th style="padding:8px 10px;font-family:Arial,sans-serif;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;text-align:left;">Declaration No.</th>
+        <th style="padding:8px 10px;font-family:Arial,sans-serif;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;text-align:right;">Amount (OMR)</th>
+      </tr>
+      {shipment_row}
+    </table>
+    {'<p style="margin:16px 0 0;font-family:Arial,sans-serif;font-size:12px;color:#6b7280;">The Bayan document is attached to this email.</p>' if embedded else ''}
+    <p style="margin:12px 0 0;font-family:Arial,sans-serif;font-size:11px;color:#b45309;background-color:#fffbeb;border:1px solid #fcd34d;border-radius:4px;padding:8px 12px;">
+      &#9888; The amount shown above is extracted automatically and may be inaccurate. Please verify the payment amount with the source Bayan document before processing.
+    </p>
+  </td></tr>
+  <tr><td style="padding:20px 32px 28px;">
+    <a href="{tracker_url}"
+       style="display:inline-block;padding:10px 20px;background-color:#1d4ed8;color:#ffffff;
+              font-family:Arial,sans-serif;font-size:13px;font-weight:600;text-decoration:none;border-radius:4px;">
+      Open Tracker &rarr;</a>
+  </td></tr>
+  <tr><td bgcolor="#f8fafc" style="background-color:#f8fafc;padding:16px 32px;border-top:1px solid #e2e8f0;">
+    <p style="margin:0;font-family:Arial,sans-serif;font-size:11px;color:#94a3b8;text-align:center;">
+      Automated alert &mdash; <a href="{tracker_url}" style="color:#1d4ed8;text-decoration:none;">FFD Shipment Tracker</a>
+      &nbsp;&middot;&nbsp; Developed by <strong>Bayanat Technology</strong>
+    </p>
+  </td></tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>"""
+
+            send_email_with_attachments_task.delay(
+                team_emails, subject, email_html, embedded, cc_emails or None
+            )
+        except Exception:
+            logger.exception("Failed to queue Bayan payment email (broker unavailable?)")
+
+
 async def notify_bulk_bayan_payment_requested(
     db: AsyncSession,
     shipments: list,
@@ -428,51 +553,8 @@ async def notify_bulk_bayan_payment_requested(
     subject = template["subject"].format(count=count, plural=plural)
 
     tracker_url = _html.escape(settings.FRONTEND_URL)
-    bl_rows = "".join(
-        f'<tr><td style="padding:4px 8px;font-family:Arial,sans-serif;font-size:13px;color:#374151;">'
-        f'{_html.escape(s.bl_number)}</td></tr>'
-        for s in shipments
-    )
-    email_html = f"""<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"></head>
-<body style="margin:0;padding:0;background-color:#f1f5f9;">
-<table width="100%" cellpadding="0" cellspacing="0" bgcolor="#f1f5f9">
-<tr><td align="center" style="padding:24px 16px;">
-<table width="580" cellpadding="0" cellspacing="0" bgcolor="#ffffff"
-  style="background-color:#ffffff;max-width:580px;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.1);">
-  <tr><td bgcolor="#1d4ed8" style="background-color:#1d4ed8;padding:24px 32px;">
-    <p style="margin:0;font-family:Arial,sans-serif;font-size:18px;font-weight:bold;color:#ffffff;">FFD Shipment Tracker</p>
-  </td></tr>
-  <tr><td style="padding:28px 32px 8px;">
-    <p style="margin:0;font-family:Arial,sans-serif;font-size:14px;color:#374151;line-height:1.6;">{body}</p>
-    <table cellpadding="0" cellspacing="0" style="margin-top:16px;border:1px solid #e2e8f0;border-radius:6px;width:100%;">
-      <tr><td style="padding:8px 8px 4px;background-color:#f8fafc;">
-        <p style="margin:0 0 6px;font-family:Arial,sans-serif;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">BL Numbers</p>
-      </td></tr>
-      {bl_rows}
-    </table>
-    <p style="margin:16px 0 0;font-family:Arial,sans-serif;font-size:12px;color:#6b7280;">
-      The Bayan documents are attached to this email ({len(attachment_specs)} file{'s' if len(attachment_specs) != 1 else ''}).
-    </p>
-  </td></tr>
-  <tr><td style="padding:20px 32px 28px;">
-    <a href="{tracker_url}"
-       style="display:inline-block;padding:10px 20px;background-color:#1d4ed8;color:#ffffff;
-              font-family:Arial,sans-serif;font-size:13px;font-weight:600;text-decoration:none;border-radius:4px;">
-      Open Tracker &rarr;</a>
-  </td></tr>
-  <tr><td bgcolor="#f8fafc" style="background-color:#f8fafc;padding:16px 32px;border-top:1px solid #e2e8f0;">
-    <p style="margin:0;font-family:Arial,sans-serif;font-size:11px;color:#94a3b8;text-align:center;">
-      Automated alert &mdash; <a href="{tracker_url}" style="color:#1d4ed8;text-decoration:none;">FFD Shipment Tracker</a>
-    </p>
-  </td></tr>
-</table>
-</td></tr>
-</table>
-</body>
-</html>"""
 
+    # meta_by_sid populated after PDF fetch — placeholder rows built after
     for user in users:
         for shipment in shipments:
             db.add(Notification(
@@ -488,17 +570,113 @@ async def notify_bulk_bayan_payment_requested(
         try:
             import base64
             import asyncio
-            from app.documents.service import fetch_oci_bytes
+            from app.documents.service import fetch_oci_bytes, extract_bayan_meta
 
-            async def _fetch(spec: dict) -> dict | None:
-                data = await asyncio.to_thread(fetch_oci_bytes, spec["oci_path"])
-                if data:
-                    return {"filename": spec["filename"], "data_b64": base64.b64encode(data).decode()}
-                logger.warning("notify_bulk_bayan_payment_requested: could not fetch %s", spec["oci_path"])
-                return None
+            def _fetch_and_parse(spec: dict) -> dict | None:
+                # Both OCI fetch and PDF parsing run together in a thread pool worker —
+                # neither blocks the event loop, and all specs run in parallel via gather.
+                data = fetch_oci_bytes(spec["oci_path"])
+                if not data:
+                    logger.warning("notify_bulk_bayan_payment_requested: could not fetch %s", spec["oci_path"])
+                    return None
+                meta = extract_bayan_meta(data)
+                return {
+                    "filename": spec["filename"],
+                    "data_b64": base64.b64encode(data).decode(),
+                    "shipment_id": spec.get("shipment_id"),
+                    "bl_number": spec.get("bl_number", ""),
+                    "dec_no": meta.get("dec_no") or "",
+                    "definit_amount": meta.get("definit_amount") or "",
+                }
 
-            results = await asyncio.gather(*[_fetch(s) for s in attachment_specs])
-            embedded = [r for r in results if r is not None]
+            results = await asyncio.gather(*[asyncio.to_thread(_fetch_and_parse, s) for s in attachment_specs])
+            fetched = [r for r in results if r is not None]
+            embedded = [{"filename": r["filename"], "data_b64": r["data_b64"]} for r in fetched]
+
+            # Build lookup: shipment_id → {dec_no, definit_amount}
+            meta_by_sid = {r["shipment_id"]: r for r in fetched if r.get("shipment_id")}
+
+            # Build table rows — one row per shipment
+            def _row(s) -> str:
+                m = meta_by_sid.get(str(s.id), {})
+                dec = _html.escape(m.get("dec_no") or "—")
+                amt = m.get("definit_amount") or ""
+                amt_cell = (
+                    f'<strong style="color:#1d4ed8;">{_html.escape(amt)} OMR</strong>'
+                    if amt else '<span style="color:#9ca3af;">—</span>'
+                )
+                return (
+                    f'<tr style="border-top:1px solid #e2e8f0;">'
+                    f'<td style="padding:7px 10px;font-family:Arial,sans-serif;font-size:13px;font-weight:600;color:#111827;">{_html.escape(s.bl_number)}</td>'
+                    f'<td style="padding:7px 10px;font-family:Arial,sans-serif;font-size:12px;color:#374151;">{dec}</td>'
+                    f'<td style="padding:7px 10px;font-family:Arial,sans-serif;font-size:13px;text-align:right;">{amt_cell}</td>'
+                    f'</tr>'
+                )
+
+            shipment_rows = "".join(_row(s) for s in shipments)
+
+            # Compute total if all amounts extracted
+            amounts = [meta_by_sid.get(str(s.id), {}).get("definit_amount") for s in shipments]
+            total_str = ""
+            try:
+                total = sum(float(a) for a in amounts if a)
+                if total > 0:
+                    total_str = (
+                        f'<tr style="border-top:2px solid #1d4ed8;">'
+                        f'<td colspan="2" style="padding:8px 10px;font-family:Arial,sans-serif;font-size:13px;font-weight:700;color:#111827;">Total</td>'
+                        f'<td style="padding:8px 10px;font-family:Arial,sans-serif;font-size:14px;font-weight:700;color:#1d4ed8;text-align:right;">{total:,.3f} OMR</td>'
+                        f'</tr>'
+                    )
+            except Exception:
+                pass
+
+            email_html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background-color:#f1f5f9;">
+<table width="100%" cellpadding="0" cellspacing="0" bgcolor="#f1f5f9">
+<tr><td align="center" style="padding:24px 16px;">
+<table width="620" cellpadding="0" cellspacing="0" bgcolor="#ffffff"
+  style="background-color:#ffffff;max-width:620px;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.1);">
+  <tr><td bgcolor="#1d4ed8" style="background-color:#1d4ed8;padding:24px 32px;">
+    <p style="margin:0;font-family:Arial,sans-serif;font-size:18px;font-weight:bold;color:#ffffff;">FFD Shipment Tracker</p>
+  </td></tr>
+  <tr><td style="padding:28px 32px 8px;">
+    <p style="margin:0;font-family:Arial,sans-serif;font-size:14px;color:#374151;line-height:1.6;">{body}</p>
+    <table cellpadding="0" cellspacing="0" style="margin-top:16px;border:1px solid #e2e8f0;border-radius:6px;width:100%;border-collapse:collapse;">
+      <tr style="background-color:#f8fafc;">
+        <th style="padding:8px 10px;font-family:Arial,sans-serif;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;text-align:left;">BL Number</th>
+        <th style="padding:8px 10px;font-family:Arial,sans-serif;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;text-align:left;">Declaration No.</th>
+        <th style="padding:8px 10px;font-family:Arial,sans-serif;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;text-align:right;">Amount (OMR)</th>
+      </tr>
+      {shipment_rows}
+      {total_str}
+    </table>
+    <p style="margin:16px 0 0;font-family:Arial,sans-serif;font-size:12px;color:#6b7280;">
+      The Bayan documents are attached to this email ({len(embedded)} file{'s' if len(embedded) != 1 else ''}).
+    </p>
+    <p style="margin:8px 0 0;font-family:Arial,sans-serif;font-size:11px;color:#b45309;background-color:#fffbeb;border:1px solid #fcd34d;border-radius:4px;padding:8px 12px;">
+      &#9888; The amounts shown above are extracted automatically and may be inaccurate. Please verify each payment amount with the source Bayan document before processing.
+    </p>
+  </td></tr>
+  <tr><td style="padding:20px 32px 28px;">
+    <a href="{tracker_url}"
+       style="display:inline-block;padding:10px 20px;background-color:#1d4ed8;color:#ffffff;
+              font-family:Arial,sans-serif;font-size:13px;font-weight:600;text-decoration:none;border-radius:4px;">
+      Open Tracker &rarr;</a>
+  </td></tr>
+  <tr><td bgcolor="#f8fafc" style="background-color:#f8fafc;padding:16px 32px;border-top:1px solid #e2e8f0;">
+    <p style="margin:0;font-family:Arial,sans-serif;font-size:11px;color:#94a3b8;text-align:center;">
+      Automated alert &mdash; <a href="{tracker_url}" style="color:#1d4ed8;text-decoration:none;">FFD Shipment Tracker</a>
+      &nbsp;&middot;&nbsp; Developed by <strong>Bayanat Technology</strong>
+    </p>
+  </td></tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>"""
+
             send_email_with_attachments_task.delay(
                 team_emails, subject, email_html, embedded, cc_emails or None
             )
@@ -577,6 +755,7 @@ async def notify_bulk_ccro_confirmed(
   <tr><td bgcolor="#f8fafc" style="background-color:#f8fafc;padding:16px 32px;border-top:1px solid #e2e8f0;">
     <p style="margin:0;font-family:Arial,sans-serif;font-size:11px;color:#94a3b8;text-align:center;">
       Automated alert &mdash; <a href="{tracker_url}" style="color:#1d4ed8;text-decoration:none;">FFD Shipment Tracker</a>
+      &nbsp;&middot;&nbsp; Developed by <strong>Bayanat Technology</strong>
     </p>
   </td></tr>
 </table>

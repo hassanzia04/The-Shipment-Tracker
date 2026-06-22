@@ -402,7 +402,7 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
 }) {
   const qc = useQueryClient()
   const offset = (page - 1) * PAGE_SIZE
-  const colSpan = isFFD ? 12 : (isCustomer || isPRO) ? 14 : 13
+  const colSpan = isFFD ? 13 : (isCustomer || isPRO) ? 14 : 13
 
   function colCls(key: string, whenVisible: string): string {
     return hiddenCols.has(key) ? 'hidden' : whenVisible
@@ -637,14 +637,14 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
               <th className="text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">#</th>
               <SortableHeader label="BL Number"    column="bl"       sort={sort} onSort={onSort} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
               <SortableHeader label="Invoice"      column="invoice"  sort={sort} onSort={onSort} className={colCls('invoice', 'hidden md:table-cell px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide')} />
-              {!isFFD && <th className={colCls('consignee', 'hidden lg:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>Consignee</th>}
+              <th className={colCls('consignee', 'hidden lg:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>Consignee</th>
               <th className={colCls('port', 'hidden xl:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>Port of Loading</th>
               <th className={colCls('bayan_type', 'hidden xl:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>Bayan Type</th>
               <SortableHeader label={isPRO ? 'My Task' : 'Stage'} column="stage" sort={sort} onSort={onSort} className={colCls('stage', 'px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide')} />
               <th className={colCls('progress', 'text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>Progress</th>
               <SortableHeader label="Planned Pull out" column="pull_out" sort={sort} onSort={onSort} className={colCls('pull_out', 'hidden md:table-cell px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide')} />
-              <th className={colCls('eta', 'hidden xl:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>ETA to Port</th>
-              <th className={colCls('do_validity', 'hidden xl:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>DO Validity</th>
+              <SortableHeader label="ETA to Port"  column="eta"         sort={sort} onSort={onSort} className={colCls('eta',         'hidden xl:table-cell px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide')} />
+              <SortableHeader label="DO Validity"  column="do_validity" sort={sort} onSort={onSort} className={colCls('do_validity', 'hidden xl:table-cell px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide')} />
               <th className={colCls('amls', 'hidden lg:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>{isPRO ? 'Permit No' : 'AMLS Job#'}</th>
               <th />
               {isFFD && <th />}
@@ -703,11 +703,9 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                     </td>
                     <td className="px-3 py-3 font-semibold text-gray-900 dark:text-white">{s.bl_number}</td>
                     <td className={colCls('invoice', 'hidden md:table-cell px-3 py-3 text-gray-500 dark:text-gray-400')}>{s.invoice_number}</td>
-                    {!isFFD && (
-                      <td className={colCls('consignee', 'hidden lg:table-cell px-3 py-3 text-sm text-gray-600 dark:text-gray-300 max-w-[160px]')}>
-                        <span className="truncate block" title={s.consignee_name ?? undefined}>{s.consignee_name ?? <span className="text-gray-400 dark:text-gray-500 italic text-xs">—</span>}</span>
-                      </td>
-                    )}
+                    <td className={colCls('consignee', 'hidden lg:table-cell px-3 py-3 text-sm text-gray-600 dark:text-gray-300 max-w-[160px]')}>
+                      <span className="truncate block" title={s.consignee_name ?? undefined}>{s.consignee_name ?? <span className="text-gray-400 dark:text-gray-500 italic text-xs">—</span>}</span>
+                    </td>
                     <td className={colCls('port', 'hidden xl:table-cell px-3 py-3 text-xs text-gray-600 dark:text-gray-300 whitespace-nowrap')}>
                       {s.loading_port_name || <span className="text-gray-400">—</span>}
                     </td>

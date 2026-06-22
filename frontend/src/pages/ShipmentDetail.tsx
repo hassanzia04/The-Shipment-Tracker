@@ -859,15 +859,6 @@ export function ShipmentDetail() {
             const bp = shipment.tasks.find(t => t.task_type === 'BAYAN_PAYMENT')
             return (
               <div className="pt-2 border-t dark:border-gray-700">
-                {!bp && shipment.tasks.some(t => t.task_type === 'BAYAN' && t.status !== 'COMPLETED' && t.assigned_to_id === user!.id) && (
-                  <button
-                    onClick={() => action(() => shipmentsApi.requestBayanPayment(id!), 'Payment request sent to customer')}
-                    disabled={submitting}
-                    className="text-sm bg-amber-600 text-white px-3 py-1.5 rounded-lg hover:bg-amber-700 disabled:opacity-50"
-                  >
-                    Request Customer Payment (Bayan)
-                  </button>
-                )}
                 {bp?.status === 'IN_PROGRESS' && (
                   <div className="flex items-center gap-2 text-sm text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 px-3 py-2 rounded-lg">
                     <Clock size={14} className="shrink-0" />

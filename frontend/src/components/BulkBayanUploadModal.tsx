@@ -132,7 +132,7 @@ export function BulkBayanUploadModal({ onClose, onDone }: Props) {
         .filter(r => r.shipmentId && r.completeTask && uploadedIds.has(r.shipmentId!))
         .map(async row => {
           try {
-            await shipmentsApi.completeTaskByType(row.shipmentId!, 'BAYAN')
+            await shipmentsApi.completeTaskByType(row.shipmentId!, 'BAYAN', { skipPaymentEmail: isTransfer(row.bayanTypeName) })
           } catch {
             toast.error(`Could not complete Bayan task for ${row.blNumber}`)
           }

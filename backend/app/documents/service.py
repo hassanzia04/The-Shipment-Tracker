@@ -627,6 +627,48 @@ def _filename_tokens(filename: str) -> list[str]:
     return [t.upper() for t in re.split(r'[^A-Za-z0-9]', stem) if len(t) >= 5]
 
 
+def extract_bayan_meta(raw: bytes) -> dict:
+    """Extract declaration number and definitive amount from an Oman Customs Bayan PDF.
+
+    Returns dict with keys 'dec_no' (str|None) and 'definit_amount' (str|None).
+    """
+    import re
+    result = {"dec_no": None, "definit_amount": None}
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(raw))
+        pages_text = []
+        for page in reader.pages[:2]:
+            t = page.extract_text() or ""
+            # Normalize non-breaking and special whitespace that pypdf emits for RTL PDFs
+            t = t.replace('\xa0', ' ').replace(' ', ' ').replace('​', '')
+            pages_text.append(t)
+        text = "\n".join(pages_text)
+        upper = text.upper()
+    except Exception:
+        return result
+
+    # DEC NO. — Oman Customs format: DECIMP followed by digits
+    m = re.search(r'(DECIMP\d+)', upper)
+    if m:
+        result["dec_no"] = m.group(1)
+
+    # DEFINIT amount — Oman Customs layout: "اجمالى قطعى 822.000 DEFINIT" (RTL order)
+    # [^0-9]{0,30} handles any mix of spaces, Arabic chars, or special separators
+    # between the label and number without relying on \s which misses \xa0.
+    _num = r'([0-9,]+\.[0-9]+)'
+    for pat in [
+        rf'DEFINIT[A-Z]*[^0-9]{{0,30}}{_num}',  # label before number
+        rf'{_num}[^0-9]{{0,30}}DEFINIT[A-Z]*',  # number before label (RTL extraction order)
+    ]:
+        m = re.search(pat, upper)
+        if m:
+            result["definit_amount"] = m.group(1).replace(",", "")
+            break
+
+    return result
+
+
 def _extract_bl_from_pdf(filename: str, raw: bytes) -> str | None:
     """Last-resort: scan PDF text for BL using Bayan layout patterns."""
     import re
@@ -1037,7 +1079,6 @@ async def analyze_ccro_files(
         has_active_ccro_task = False
         if shipment:
             from app.shipments.models import ShipmentTask
-            from app.enums import TaskType, TaskStatus
             _task_row = await db.execute(
                 select(ShipmentTask).where(
                     ShipmentTask.shipment_id == shipment.id,

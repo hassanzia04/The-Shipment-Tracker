@@ -300,10 +300,11 @@ async def complete_task(shipment_id: uuid.UUID, task_id: uuid.UUID, body: schema
 async def complete_task_by_type(
     shipment_id: uuid.UUID,
     task_type: TaskType = Query(...),
+    skip_payment_email: bool = Query(default=False),
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ):
-    await service.complete_task_by_type(db, shipment_id, task_type, actor)
+    await service.complete_task_by_type(db, shipment_id, task_type, actor, skip_payment_email=skip_payment_email)
 
 
 # ── Transport actions ─────────────────────────────────────────────────────────

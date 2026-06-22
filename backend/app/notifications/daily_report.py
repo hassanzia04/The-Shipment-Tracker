@@ -683,6 +683,7 @@ def _render_html(data: dict, ai_bullets: list[str]) -> str:
     </p>
     <p style="margin:6px 0 0;font-family:Arial,sans-serif;font-size:11px;text-align:center;">
       <a href="https://fftracker.bayanattechnology.com/" style="color:#1d4ed8;text-decoration:none;">fftracker.bayanattechnology.com</a>
+      &nbsp;&middot;&nbsp; Developed by <strong>Bayanat Technology</strong>
     </p>
   </td></tr>
 

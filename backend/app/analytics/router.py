@@ -938,12 +938,9 @@ async def ai_summary(
     if not settings.ANTHROPIC_API_KEY:
         raise HTTPException(status_code=503, detail="AI summary is not configured")
 
-    # Build pipeline context scoped to the actor
+    # All permitted users see the full pipeline
     base_filter = []
-    if actor.team == Team.CUSTOMER:
-        base_filter.append(Shipment.customer_id == actor.id)
-
-    active_filter = base_filter + [Shipment.current_stage != ShipmentStage.COMPLETED]
+    active_filter = [Shipment.current_stage != ShipmentStage.COMPLETED]
 
     total_active = (await db.execute(
         select(func.count(Shipment.id)).where(*active_filter)

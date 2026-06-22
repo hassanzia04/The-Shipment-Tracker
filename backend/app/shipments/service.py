@@ -443,6 +443,8 @@ async def bulk_request_bayan_payment(
             attachment_specs.append({
                 "filename": bayan_doc.original_filename,
                 "oci_path": bayan_doc.oci_path,
+                "shipment_id": str(shipment_id),
+                "bl_number": shipment.bl_number,
             })
 
     await db.commit()
@@ -704,11 +706,13 @@ async def list_shipments(
     for clause in base_where:
         q = q.where(clause)
     _bl_sort_cols = {
-        'bl':       Shipment.bl_number,
-        'invoice':  Shipment.invoice_number,
-        'stage':    Shipment.current_stage,
-        'pull_out': Shipment.pull_out_date,
-        'time':     Shipment.pull_out_date,
+        'bl':          Shipment.bl_number,
+        'invoice':     Shipment.invoice_number,
+        'stage':       Shipment.current_stage,
+        'pull_out':    Shipment.pull_out_date,
+        'time':        Shipment.pull_out_date,
+        'eta':         Shipment.eta_at_port,
+        'do_validity': Shipment.do_validity_date,
     }
     if sort_by and sort_by in _bl_sort_cols:
         col = _bl_sort_cols[sort_by]
@@ -958,6 +962,7 @@ async def complete_task_by_type(
     shipment_id: uuid.UUID,
     task_type: TaskType,
     actor: User,
+    skip_payment_email: bool = False,
 ) -> None:
     """Find and complete the active task of the given type. Silently skips if no active task."""
     result = await db.execute(
@@ -986,6 +991,12 @@ async def complete_task_by_type(
         await notify_team(db, shipment, Team.FFD, "permit_completed", in_app_only=True)
     elif task_type == TaskType.BAYAN:
         await notify_team(db, shipment, Team.FFD, "bayan_completed", in_app_only=True)
+        if shipment.bayan_type_name == "Transfer" and not skip_payment_email:
+            from app.notifications.service import notify_bayan_payment_requested
+            await notify_bayan_payment_requested(db, shipment)
+            await _record_event(db, shipment, EventType.BAYAN_PAYMENT_EMAIL_SENT, actor,
+                                remark="Payment request email auto-sent to customer (Transfer Bayan)")
+            await db.commit()
 
     if task_type in (TaskType.DO, TaskType.BAYAN, TaskType.PERMIT):
         fresh = await _get_shipment(db, shipment_id)
@@ -1024,6 +1035,12 @@ async def complete_task(
         await notify_team(db, shipment, Team.FFD, "permit_completed", in_app_only=True)
     elif task_type == TaskType.BAYAN:
         await notify_team(db, shipment, Team.FFD, "bayan_completed", in_app_only=True)
+        if shipment.bayan_type_name == "Transfer":
+            from app.notifications.service import notify_bayan_payment_requested
+            await notify_bayan_payment_requested(db, shipment)
+            await _record_event(db, shipment, EventType.BAYAN_PAYMENT_EMAIL_SENT, actor,
+                                remark="Payment request email auto-sent to customer (Transfer Bayan)")
+            await db.commit()
 
     if task_type in (TaskType.DO, TaskType.BAYAN, TaskType.PERMIT):
         fresh = await _get_shipment(db, shipment_id)

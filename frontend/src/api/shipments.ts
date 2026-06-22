@@ -88,8 +88,8 @@ export const shipmentsApi = {
   setDoValidity: (id: string, do_validity_date: string) =>
     api.post<Shipment>(`/shipments/${id}/do-validity`, { do_validity_date }),
 
-  completeTaskByType: (shipmentId: string, taskType: string) =>
-    api.post(`/shipments/${shipmentId}/complete-task-by-type`, null, { params: { task_type: taskType } }),
+  completeTaskByType: (shipmentId: string, taskType: string, options?: { skipPaymentEmail?: boolean }) =>
+    api.post(`/shipments/${shipmentId}/complete-task-by-type`, null, { params: { task_type: taskType, skip_payment_email: options?.skipPaymentEmail ?? false } }),
 
   // Task assignment (FFD → PRO)
   assignTask: (shipmentId: string, taskId: string, assigneeId: string, remark?: string) =>
