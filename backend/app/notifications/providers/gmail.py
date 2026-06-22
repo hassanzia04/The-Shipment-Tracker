@@ -1,8 +1,10 @@
 import base64
 import json
 import os
+from email.mime.base import MIMEBase
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email import encoders
 
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
@@ -51,14 +53,34 @@ class GmailProvider(EmailProvider):
 
         return build("gmail", "v1", credentials=creds)
 
-    async def send(self, to: str | list[str], subject: str, html_body: str, cc: list[str] | None = None) -> None:
-        msg = MIMEMultipart("alternative")
+    async def send(
+        self,
+        to: str | list[str],
+        subject: str,
+        html_body: str,
+        cc: list[str] | None = None,
+        attachments: list[tuple[str, bytes]] | None = None,
+    ) -> None:
+        if attachments:
+            msg = MIMEMultipart("mixed")
+            alt = MIMEMultipart("alternative")
+            alt.attach(MIMEText(html_body, "html"))
+            msg.attach(alt)
+            for filename, data in attachments:
+                part = MIMEBase("application", "octet-stream")
+                part.set_payload(data)
+                encoders.encode_base64(part)
+                part.add_header("Content-Disposition", "attachment", filename=filename)
+                msg.attach(part)
+        else:
+            msg = MIMEMultipart("alternative")
+            msg.attach(MIMEText(html_body, "html"))
+
         msg["Subject"] = subject
         msg["From"] = settings.GMAIL_SENDER_EMAIL
         msg["To"] = ", ".join(to) if isinstance(to, list) else to
         if cc:
             msg["Cc"] = ", ".join(cc)
-        msg.attach(MIMEText(html_body, "html"))
 
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         service = self._get_service()

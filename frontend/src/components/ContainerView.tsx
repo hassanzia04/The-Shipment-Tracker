@@ -1,20 +1,22 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { differenceInCalendarDays, parseISO, isValid } from 'date-fns'
 import { shipmentsApi } from '@/api/shipments'
 import { documentsApi, openDocument } from '@/api/documents'
 import { mastersApi } from '@/api/masters'
-import { useSortable } from '@/lib/sort'
+import type { SortState } from '@/lib/sort'
 import { SortableHeader } from '@/components/SortableHeader'
 
 import { formatDate, formatDateTime } from '@/lib/dates'
 import type { ContainerViewItem, Truck, OutsourcedTruck } from '@/types'
 import {
   AlertTriangle, CheckCircle, Clock, Download, Truck as TruckIcon,
-  Package, MapPin, Search, FileSpreadsheet, X,
+  Package, MapPin, Search, FileSpreadsheet, X, ChevronLeft, ChevronRight,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
+
+const HISTORICAL_PAGE_SIZE = 25
 
 interface Props {
   team: string   // any non-PRO team; action buttons guard themselves to TRANSPORT/DC
@@ -82,6 +84,7 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
 
   // Assign truck form state
   const [truckId, setTruckId] = useState(c.truck_id ?? '')
+  const [driverName, setDriverName] = useState('')
   const [etaDate, setEtaDate] = useState(() => tomorrowDateStr())
   const [etaTime, setEtaTime] = useState('09:00')
 
@@ -151,6 +154,15 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
     } catch { toast.error('Failed to download CCRO') }
   }
 
+  const activeTrucks = trucks.filter(t => t.is_active)
+  const allDriverNames = Array.from(new Set(activeTrucks.map(t => t.driver_name).filter(Boolean))).sort()
+
+  function handleTruckChange(id: string) {
+    setTruckId(id)
+    const truck = activeTrucks.find(t => t.id === id)
+    setDriverName(truck?.driver_name ?? '')
+  }
+
   async function assignTruck() {
     if (!truckId || !etaDate || !etaTime) { toast.error('Select a truck and set the ETA'); return }
     setSubmitting(true)
@@ -161,6 +173,7 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
         truck_id: truckId,
         expected_arrival_at: etaIso,
         offloading_point_id: c.offloading_point_id ?? undefined,
+        driver_name: driverName || undefined,
       })
       toast.success('Truck assigned')
       qc.invalidateQueries({ queryKey: ['container-view'] })
@@ -353,6 +366,14 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
             <span className="text-gray-400 dark:text-gray-500 italic text-xs">Unassigned</span>
           )}
         </td>
+        {/* Port of Loading */}
+        <td className="px-3 py-3 text-xs text-gray-600 dark:text-gray-300 whitespace-nowrap">
+          {c.loading_port_name ?? <span className="text-gray-400 italic">—</span>}
+        </td>
+        {/* Bayan Type */}
+        <td className="px-3 py-3 text-xs text-gray-600 dark:text-gray-300 whitespace-nowrap">
+          {c.bayan_type_name ?? <span className="text-gray-400 italic">—</span>}
+        </td>
         {/* Offloading Location */}
         <td className="px-3 py-3 text-sm text-gray-600 dark:text-gray-300">
           {c.offloading_point_name ?? <span className="text-gray-400 italic text-xs">—</span>}
@@ -486,16 +507,24 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
       {/* ── Assign truck form ── */}
       {expanded === 'assign' && (
         <tr>
-          <td colSpan={8} className="p-0">
+          <td colSpan={10} className="p-0">
             <div className="px-5 py-3 bg-blue-50 dark:bg-blue-900/10 border-t border-b dark:border-gray-700 space-y-3">
               <p className="text-xs font-semibold text-blue-700 dark:text-blue-400">Assign Truck & Driver</p>
               <div className="flex flex-wrap gap-3">
-                <select value={truckId} onChange={e => setTruckId(e.target.value)} className="text-xs border dark:border-gray-600 rounded px-2 py-1.5 bg-white dark:bg-gray-700 text-gray-900 dark:text-white min-w-[200px]">
+                <select value={truckId} onChange={e => handleTruckChange(e.target.value)} className="text-xs border dark:border-gray-600 rounded px-2 py-1.5 bg-white dark:bg-gray-700 text-gray-900 dark:text-white min-w-[200px]">
                   <option value="">Select truck…</option>
-                  {trucks.filter(t => t.is_active).map(t => (
-                    <option key={t.id} value={t.id}>{t.plate_number} — {t.driver_name} ({t.contractor})</option>
+                  {activeTrucks.map(t => (
+                    <option key={t.id} value={t.id}>{t.plate_number} ({t.contractor})</option>
                   ))}
                 </select>
+                {truckId && (
+                  <select value={driverName} onChange={e => setDriverName(e.target.value)} className="text-xs border dark:border-gray-600 rounded px-2 py-1.5 bg-white dark:bg-gray-700 text-gray-900 dark:text-white min-w-[180px]">
+                    <option value="">Select driver…</option>
+                    {allDriverNames.map(name => (
+                      <option key={name} value={name}>{name}</option>
+                    ))}
+                  </select>
+                )}
                 <div className="flex items-center gap-1.5">
                   <span className="text-xs text-gray-500">ETA:</span>
                   <input type="date" value={etaDate} onChange={e => setEtaDate(e.target.value)} className="text-xs border dark:border-gray-600 rounded px-2 py-1.5 bg-white dark:bg-gray-700 dark:text-white" />
@@ -514,7 +543,7 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
       {/* ── Return to FFD form ── */}
       {expanded === 'return' && (
         <tr>
-          <td colSpan={8} className="p-0">
+          <td colSpan={10} className="p-0">
             <div className="px-5 py-3 bg-orange-50 dark:bg-orange-900/10 border-t border-b dark:border-gray-700 space-y-2">
               <p className="text-xs font-semibold text-orange-700 dark:text-orange-400">Return CCRO to FFD</p>
               <p className="text-xs text-orange-600 dark:text-orange-500">Explain why a truck could not be assigned for this container.</p>
@@ -540,7 +569,7 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
       {/* ── Unassign truck form ── */}
       {expanded === 'unassign' && (
         <tr>
-          <td colSpan={8} className="p-0">
+          <td colSpan={10} className="p-0">
             <div className="px-5 py-3 bg-rose-50 dark:bg-rose-900/10 border-t border-b dark:border-gray-700 space-y-2">
               <p className="text-xs font-semibold text-rose-700 dark:text-rose-400">Unassign Truck</p>
               <p className="text-xs text-rose-600 dark:text-rose-500">Container will return to Pending. You can then reassign a truck or return the CCRO to FFD.</p>
@@ -566,7 +595,7 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
       {/* ── Arrival time form ── */}
       {expanded === 'arrived' && (
         <tr>
-          <td colSpan={8} className="p-0">
+          <td colSpan={10} className="p-0">
             <div className="px-5 py-3 bg-purple-50 dark:bg-purple-900/10 border-t border-b dark:border-gray-700 space-y-2">
               <p className="text-xs font-semibold text-purple-700 dark:text-purple-400">
                 {c.arrived_at ? 'Edit Arrival Time' : 'Record Arrival Time'}
@@ -592,7 +621,7 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
       {/* ── DO revalidation request form ── */}
       {expanded === 'revalidation' && (
         <tr>
-          <td colSpan={8} className="p-0">
+          <td colSpan={10} className="p-0">
             <div className="px-5 py-3 bg-rose-50 dark:bg-rose-900/10 border-t border-b dark:border-gray-700 space-y-2">
               <p className="text-xs font-semibold text-rose-700 dark:text-rose-400">Request DO Revalidation</p>
               <p className="text-xs text-rose-600 dark:text-rose-500">Explain why the DO needs to be revalidated before this container can be returned.</p>
@@ -618,7 +647,7 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
       {/* ── Issue (breakdown / delay) form ── */}
       {expanded === 'issue' && (
         <tr>
-          <td colSpan={8} className="p-0">
+          <td colSpan={10} className="p-0">
             <div className="px-5 py-3 bg-amber-50 dark:bg-amber-900/10 border-t border-b dark:border-gray-700 space-y-3">
               <p className="text-xs font-semibold text-amber-700 dark:text-amber-400">Report Issue</p>
               <div className="flex gap-2">
@@ -648,7 +677,7 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
       {/* ── Assign outsourced truck form ── */}
       {expanded === 'assign_outsourced' && (
         <tr>
-          <td colSpan={8} className="p-0">
+          <td colSpan={10} className="p-0">
             <div className="px-5 py-3 bg-cyan-50 dark:bg-cyan-900/10 border-t border-b dark:border-gray-700 space-y-3">
               <p className="text-xs font-semibold text-cyan-700 dark:text-cyan-400">Assign Outsourced Truck (Non-AMLS)</p>
               <div className="flex flex-wrap gap-3">
@@ -684,16 +713,52 @@ export function ContainerView({ team }: Props) {
   const [historical, setHistorical] = useState(false)
   const [amlsOnly, setAmlsOnly] = useState(team === 'DC')
   const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [filterFrom, setFilterFrom] = useState('')
   const [filterTo, setFilterTo] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [exporting, setExporting] = useState(false)
+  const [page, setPage] = useState(1)
+  const [sort, setSort] = useState<SortState>({ column: null, dir: 'asc' })
 
-  const { data: containers = [], isLoading, refetch } = useQuery({
-    queryKey: ['container-view', historical],
-    queryFn: () => shipmentsApi.containerView(historical).then(r => r.data),
+  function toggleSort(column: string) {
+    setSort(s => ({ column, dir: s.column === column && s.dir === 'asc' ? 'desc' : 'asc' }))
+    setPage(1)
+  }
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 300)
+    return () => clearTimeout(t)
+  }, [search])
+
+  useEffect(() => {
+    setPage(1)
+  }, [debouncedSearch, statusFilter, filterFrom, filterTo, amlsOnly, historical])
+
+  const skip = historical ? (page - 1) * HISTORICAL_PAGE_SIZE : 0
+  const limit = historical ? HISTORICAL_PAGE_SIZE : 500
+
+  const { data, isLoading, refetch } = useQuery({
+    queryKey: ['container-view', historical, debouncedSearch, statusFilter, filterFrom, filterTo, amlsOnly, skip, sort.column, sort.dir],
+    queryFn: () => shipmentsApi.containerView({
+      historical,
+      skip,
+      limit,
+      search: debouncedSearch || undefined,
+      status: statusFilter || undefined,
+      from_date: filterFrom || undefined,
+      to_date: filterTo || undefined,
+      amls_only: (amlsOnly && team === 'DC') || undefined,
+      sort_by: sort.column || undefined,
+      sort_dir: sort.column ? sort.dir : undefined,
+    }).then(r => r.data),
     refetchInterval: historical ? false : 2 * 60_000,
+    placeholderData: prev => prev,
   })
+
+  const containers = data?.items ?? []
+  const totalContainers = data?.total ?? 0
+  const totalPages = historical ? Math.max(1, Math.ceil(totalContainers / HISTORICAL_PAGE_SIZE)) : 1
 
   const { data: trucks = [] } = useQuery<Truck[]>({
     queryKey: ['trucks'],
@@ -705,18 +770,6 @@ export function ContainerView({ team }: Props) {
     queryKey: ['outsourcedTrucks'],
     queryFn: () => mastersApi.outsourcedTrucks.list().then(r => r.data),
     enabled: team === 'FFD',
-  })
-
-  const { sorted: sortedContainers, sort: contSort, toggle: contToggle } = useSortable(containers, (c, col) => {
-    switch (col) {
-      case 'bl':        return c.bl_number
-      case 'container': return c.container_number
-      case 'do':        return c.do_validity_date
-      case 'truck':     return c.plate_number
-      case 'location':  return c.offloading_point_name
-      case 'eta':       return c.arrived_at ?? c.expected_arrival_at ?? c.outsourced_expected_arrival_at
-      default:          return null
-    }
   })
 
   // Pending counts — exclude CCRO_RETURNED containers from assignment queue
@@ -748,11 +801,12 @@ export function ContainerView({ team }: Props) {
     setExporting(true)
     try {
       const { data } = await shipmentsApi.containerViewExport({
-        search: search || undefined,
+        search: debouncedSearch || undefined,
         from_date: filterFrom || undefined,
         to_date: filterTo || undefined,
         status: statusFilter || undefined,
         historical,
+        amls_only: (amlsOnly && team === 'DC') || undefined,
       })
       const url = URL.createObjectURL(new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
       const a = document.createElement('a')
@@ -767,17 +821,7 @@ export function ContainerView({ team }: Props) {
     }
   }
 
-  const filteredContainers = sortedContainers.filter(c => {
-    if (amlsOnly && team === 'DC' && !c.offloading_is_amls) return false
-    if (search) {
-      const term = search.toLowerCase()
-      if (!c.container_number.toLowerCase().includes(term) && !c.bl_number.toLowerCase().includes(term)) return false
-    }
-    if (statusFilter && c.status !== statusFilter) return false
-    if (filterFrom && (!c.offloaded_at || c.offloaded_at < filterFrom)) return false
-    if (filterTo && (!c.offloaded_at || c.offloaded_at.slice(0, 10) > filterTo)) return false
-    return true
-  })
+  const filteredContainers = containers
 
   if (isLoading) {
     return <div className="space-y-2">{[...Array(4)].map((_, i) => <div key={i} className="h-12 bg-gray-100 dark:bg-gray-700 rounded-xl animate-pulse" />)}</div>
@@ -929,8 +973,12 @@ export function ContainerView({ team }: Props) {
       </div>
 
       {/* Table */}
-      {filteredContainers.length === 0 && containers.length > 0 && (
-        <p className="text-sm text-gray-400 dark:text-gray-500">No containers match the current filters.</p>
+      {filteredContainers.length === 0 && !isLoading && (
+        <p className="text-sm text-gray-400 dark:text-gray-500">
+          {totalContainers === 0
+            ? (historical ? 'No historical containers found.' : 'No active containers in your queue.')
+            : 'No containers match the current filters.'}
+        </p>
       )}
       {filteredContainers.length > 0 && (
         <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-xl overflow-hidden">
@@ -938,12 +986,14 @@ export function ContainerView({ team }: Props) {
             <table className="w-full text-sm">
               <thead className="bg-gray-50 dark:bg-gray-700 border-b dark:border-gray-600">
                 <tr>
-                  <SortableHeader label="B/L Number"        column="bl"        sort={contSort} onSort={contToggle} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
-                  <SortableHeader label="Container"          column="container" sort={contSort} onSort={contToggle} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
-                  <SortableHeader label="DO Validity"        column="do"        sort={contSort} onSort={contToggle} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
-                  <SortableHeader label="Truck / Driver"     column="truck"     sort={contSort} onSort={contToggle} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
-                  <SortableHeader label="Offloading Location" column="location" sort={contSort} onSort={contToggle} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
-                  <SortableHeader label="ETA / Arrived"      column="eta"       sort={contSort} onSort={contToggle} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
+                  <SortableHeader label="B/L Number"        column="bl"        sort={sort} onSort={toggleSort} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
+                  <SortableHeader label="Container"          column="container" sort={sort} onSort={toggleSort} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
+                  <SortableHeader label="DO Validity"        column="do"        sort={sort} onSort={toggleSort} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
+                  <SortableHeader label="Truck / Driver"     column="truck"     sort={sort} onSort={toggleSort} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
+                  <th className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap">Port of Loading</th>
+                  <th className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap">Bayan Type</th>
+                  <SortableHeader label="Offloading Location" column="location" sort={sort} onSort={toggleSort} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
+                  <SortableHeader label="ETA / Arrived"      column="eta"       sort={sort} onSort={toggleSort} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
                   <th className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap">Offloading Date</th>
                   <th className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Actions</th>
                 </tr>
@@ -963,6 +1013,34 @@ export function ContainerView({ team }: Props) {
               </tbody>
             </table>
           </div>
+
+          {/* Pagination — historical view only */}
+          {historical && totalPages > 1 && (
+            <div className="flex items-center justify-between px-4 py-3 border-t dark:border-gray-700">
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                {totalContainers} container{totalContainers !== 1 ? 's' : ''} total
+              </p>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setPage(p => Math.max(1, p - 1))}
+                  disabled={page === 1}
+                  className="p-1.5 rounded text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-30"
+                >
+                  <ChevronLeft size={15} />
+                </button>
+                <span className="text-xs text-gray-600 dark:text-gray-300 px-2">
+                  Page {page} of {totalPages}
+                </span>
+                <button
+                  onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                  disabled={page === totalPages}
+                  className="p-1.5 rounded text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-30"
+                >
+                  <ChevronRight size={15} />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

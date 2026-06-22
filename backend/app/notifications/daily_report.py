@@ -266,6 +266,19 @@ async def _get_report_data(db: AsyncSession) -> dict:
             }
     pullouts_today = sorted(pullouts_by_bl.values(), key=lambda x: (x["pull_out_date"], x["bl_number"]))
 
+    # Upcoming pull-outs: due in the next 3 days, still in pre-transport stages
+    upcoming_cutoff = today + timedelta(days=3)
+    upcoming_result = await db.execute(
+        select(func.count(Shipment.id.distinct()))
+        .where(
+            Shipment.pull_out_date > today,
+            Shipment.pull_out_date <= upcoming_cutoff,
+            Shipment.pull_out_date != None,
+            Shipment.current_stage.in_(_pre_transport_stages),
+        )
+    )
+    upcoming_pullouts_count: int = upcoming_result.scalar() or 0
+
     return {
         "report_date": now.strftime("%d %B %Y"),
         "report_time": now.strftime("%H:%M"),
@@ -276,6 +289,7 @@ async def _get_report_data(db: AsyncSession) -> dict:
         "containers": containers,
         "container_status_counts": container_status_counts,
         "pullouts_today": pullouts_today,
+        "upcoming_pullouts_count": upcoming_pullouts_count,
         "holds_by_entity": holds_by_entity,
         "total_on_hold": total_on_hold,
         "expiring_dos": expiring_dos,
@@ -325,6 +339,7 @@ async def _get_ai_summary(data: dict) -> list[str]:
             f"- New shipments today: {data['new_today']}\n"
             f"- Completed today: {data['completed_today']}\n"
             f"- DOs expiring in 7 days: {len(data['expiring_dos'])}\n"
+            f"- Upcoming pull-outs due in next 3 days (still need CCRO): {data.get('upcoming_pullouts_count', 0)}\n"
         )
 
         client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)

@@ -4,7 +4,7 @@ import uuid
 from fastapi import APIRouter, Depends, UploadFile, File, Form, Query, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Optional
+from typing import List, Optional
 
 from app.config import settings
 from app.database import get_db
@@ -47,7 +47,79 @@ async def ai_detect_splits(
     return await service.ai_detect_splits(pdf_bytes)
 
 
-@router.post("", response_model=schemas.DocumentOut)
+@router.post("/bulk-do/analyze", response_model=list[schemas.DOAnalysisItem])
+async def analyze_do_uploads(
+    files: List[UploadFile] = File(...),
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+):
+    if actor.team not in [Team.FFD] and not actor.is_admin:
+        raise HTTPException(status_code=403, detail="FFD access only")
+    max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+    file_data: list[tuple[str, bytes]] = []
+    for f in files:
+        raw = await f.read()
+        if len(raw) > max_bytes:
+            raise HTTPException(status_code=413, detail=f"File '{f.filename}' is too large")
+        file_data.append((f.filename or "unknown.pdf", raw))
+    return await service.analyze_do_files(db, file_data, actor)
+
+
+@router.post("/bulk-permit/analyze", response_model=list[schemas.PermitAnalysisItem])
+async def analyze_permit_uploads(
+    files: List[UploadFile] = File(...),
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+):
+    if actor.team not in [Team.PRO, Team.FFD] and not actor.is_admin:
+        raise HTTPException(status_code=403, detail="PRO or FFD access only")
+    max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+    file_data: list[tuple[str, bytes]] = []
+    for f in files:
+        raw = await f.read()
+        if len(raw) > max_bytes:
+            raise HTTPException(status_code=413, detail=f"File '{f.filename}' is too large")
+        file_data.append((f.filename or "unknown.pdf", raw))
+    return await service.analyze_permit_files(db, file_data, actor)
+
+
+@router.post("/bulk-ccro/analyze", response_model=list[schemas.CcroAnalysisItem])
+async def analyze_ccro_uploads(
+    files: List[UploadFile] = File(...),
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+):
+    if actor.team not in [Team.FFD] and not actor.is_admin:
+        raise HTTPException(status_code=403, detail="FFD access only")
+    max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+    file_data: list[tuple[str, bytes]] = []
+    for f in files:
+        raw = await f.read()
+        if len(raw) > max_bytes:
+            raise HTTPException(status_code=413, detail=f"File '{f.filename}' is too large")
+        file_data.append((f.filename or "unknown.pdf", raw))
+    return await service.analyze_ccro_files(db, file_data, actor)
+
+
+@router.post("/bulk-bayan/analyze", response_model=list[schemas.BayanAnalysisItem])
+async def analyze_bayan_uploads(
+    files: List[UploadFile] = File(...),
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+):
+    if actor.team not in [Team.PRO, Team.FFD] and not actor.is_admin:
+        raise HTTPException(status_code=403, detail="PRO or FFD access only")
+    max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+    file_data: list[tuple[str, bytes]] = []
+    for f in files:
+        raw = await f.read()
+        if len(raw) > max_bytes:
+            raise HTTPException(status_code=413, detail=f"File '{f.filename}' is too large")
+        file_data.append((f.filename or "unknown.pdf", raw))
+    return await service.analyze_bayan_files(db, file_data, actor)
+
+
+@router.post("", response_model=schemas.DocumentUploadOut)
 async def upload_document(
     shipment_id: uuid.UUID = Form(...),
     doc_type: DocumentType = Form(...),
@@ -57,7 +129,20 @@ async def upload_document(
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ):
-    return await service.upload_document(db, actor, shipment_id, doc_type, file, task_id, container_id)
+    bl_warning: str | None = None
+    if doc_type == DocumentType.CCRO:
+        raw = await file.read()
+        await file.seek(0)
+        extracted_bl = service.extract_bl_from_ccro(raw)
+        if extracted_bl:
+            from sqlalchemy import select as _select
+            from app.shipments.models import Shipment as _Shipment
+            shipment_bl = (await db.execute(_select(_Shipment.bl_number).where(_Shipment.id == shipment_id))).scalar_one_or_none()
+            if shipment_bl and extracted_bl != shipment_bl.upper().strip():
+                bl_warning = f"BL mismatch: document says {extracted_bl} but shipment is {shipment_bl}"
+
+    doc = await service.upload_document(db, actor, shipment_id, doc_type, file, task_id, container_id)
+    return {**schemas.DocumentOut.model_validate(doc).model_dump(), "bl_warning": bl_warning}
 
 
 @router.post("/split-upload", response_model=list[schemas.DocumentOut])

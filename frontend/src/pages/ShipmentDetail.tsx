@@ -7,6 +7,7 @@ import { documentsApi, openDocument } from '@/api/documents'
 import { authApi } from '@/api/auth'
 import { mastersApi } from '@/api/masters'
 import { DocumentUploadPanel } from '@/components/DocumentUploadPanel'
+import { CreatableSelect } from '@/components/CreatableSelect'
 import { StageTimeline } from '@/components/StageTimeline'
 import { HoldPanel } from '@/components/HoldPanel'
 import { useAuth } from '@/hooks/useAuth'
@@ -142,7 +143,7 @@ function DocChecklist({ documents, shipment }: { documents: ShipmentDoc[], shipm
   ).length
 
   const processRows = [
-    hasPermit && { type: 'PERMIT', label: 'Permit',         done: uploadedTypes.has('PERMIT'), note: undefined as string | undefined },
+    hasPermit && { type: 'PERMIT', label: 'Permit',         done: uploadedTypes.has('PERMIT') || shipment.permit_not_required, note: shipment.permit_not_required ? 'N/A' : undefined },
     hasBayan  && { type: 'BAYAN',  label: 'Bayan',          done: uploadedTypes.has('BAYAN'),  note: undefined },
     hasDo     && { type: 'DO',     label: 'Delivery Order', done: uploadedTypes.has('DO'),     note: undefined },
     hasCcro && totalContainers > 0 && {
@@ -254,6 +255,73 @@ export function ShipmentDetail() {
     enabled: user?.team === 'TRANSPORT' || user?.team === 'DC',
   })
 
+  const isCustomerTeam = user?.team === 'CUSTOMER'
+  const { data: productTypes = [] } = useQuery({ queryKey: ['productTypes'], queryFn: () => mastersApi.productTypes.list().then(r => r.data), enabled: isCustomerTeam })
+  const { data: loadingPorts = [] } = useQuery({ queryKey: ['loadingPorts'], queryFn: () => mastersApi.loadingPorts.list().then(r => r.data), enabled: isCustomerTeam })
+  const { data: shippingLines = [] } = useQuery({ queryKey: ['shippingLines'], queryFn: () => mastersApi.shippingLines.list().then(r => r.data), enabled: isCustomerTeam })
+  const { data: offloadingPoints = [] } = useQuery({ queryKey: ['offloadingPoints'], queryFn: () => mastersApi.offloadingPoints.list().then(r => r.data), enabled: isCustomerTeam })
+  const { data: bayanTypes = [] } = useQuery({ queryKey: ['bayanTypes'], queryFn: () => mastersApi.bayanTypes.list().then(r => r.data), enabled: isCustomerTeam })
+  const { data: consignees = [] } = useQuery({ queryKey: ['consignees'], queryFn: () => mastersApi.consignees.list().then(r => r.data), enabled: isCustomerTeam })
+
+  const [showEditDetails, setShowEditDetails] = useState(false)
+  const [editForm, setEditForm] = useState({
+    bl_number: '', invoice_number: '', container_count: '',
+    product_type_id: '', loading_port_id: '', shipping_line_id: '',
+    offloading_point_id: '', bayan_type_id: '', eta_at_port: '', consignee_id: '',
+  })
+  const [savingDetails, setSavingDetails] = useState(false)
+
+  function openEditDetails() {
+    if (!shipment) return
+    setEditForm({
+      bl_number: shipment.bl_number,
+      invoice_number: shipment.invoice_number,
+      container_count: String(shipment.container_count ?? ''),
+      product_type_id: shipment.product_type_id ?? '',
+      loading_port_id: shipment.loading_port_id ?? '',
+      shipping_line_id: shipment.shipping_line_id ?? '',
+      offloading_point_id: shipment.offloading_point_id ?? '',
+      bayan_type_id: shipment.bayan_type_id ?? '',
+      eta_at_port: shipment.eta_at_port ?? '',
+      consignee_id: shipment.consignee_id ?? '',
+    })
+    setShowEditDetails(true)
+  }
+
+  async function saveDetails() {
+    const count = parseInt(editForm.container_count, 10)
+    if (!editForm.bl_number.trim() || !editForm.invoice_number.trim()) {
+      toast.error('BL number and invoice number are required')
+      return
+    }
+    if (!editForm.container_count || isNaN(count) || count < 1 || count > 99) {
+      toast.error('Container count must be a number between 1 and 99')
+      return
+    }
+    setSavingDetails(true)
+    try {
+      await shipmentsApi.update(id!, {
+        bl_number: editForm.bl_number.trim(),
+        invoice_number: editForm.invoice_number.trim(),
+        container_count: count,
+        product_type_id: editForm.product_type_id || undefined,
+        loading_port_id: editForm.loading_port_id || undefined,
+        shipping_line_id: editForm.shipping_line_id || undefined,
+        offloading_point_id: editForm.offloading_point_id || undefined,
+        bayan_type_id: editForm.bayan_type_id || undefined,
+        eta_at_port: editForm.eta_at_port || undefined,
+        consignee_id: editForm.consignee_id || undefined,
+      })
+      toast.success('Shipment details updated')
+      refresh()
+      setShowEditDetails(false)
+    } catch (e: any) {
+      toast.error(e.response?.data?.detail || 'Failed to update details')
+    } finally {
+      setSavingDetails(false)
+    }
+  }
+
   const [remark, setRemark] = useState('')
   const [customerRemark, setCustomerRemark] = useState('')
   const [showTimeline, setShowTimeline] = useState(false)
@@ -361,18 +429,24 @@ export function ShipmentDetail() {
   const processDocs = documents.filter(d => !['COMMERCIAL_INVOICE','PACKING_LIST','CERT_OF_ORIGIN','HALAL_CERT','BL','HEALTH_CERT'].includes(d.doc_type))
 
   const ccroTask = shipment.tasks.find(t => t.task_type === 'CCRO' && t.status !== 'COMPLETED')
-  const allContainersHaveCcro = shipment.containers.length > 0 &&
-    shipment.containers.every(c => documents.some(d => d.container_id === c.id && d.doc_type === 'CCRO'))
+  const containersMissingCcro = shipment.containers.filter(
+    c => !documents.some(d => d.container_id === c.id && d.doc_type === 'CCRO')
+  )
+  const allContainersHaveCcro = shipment.containers.length > 0 && containersMissingCcro.length === 0
   const confirmBlockReason: string | null =
     !shipment.do_validity_date ? 'DO validity date must be set first' :
-    !allContainersHaveCcro ? 'Upload one CCRO per container before confirming' :
+    !allContainersHaveCcro ? (
+      containersMissingCcro.length === 1
+        ? `No CCRO for container ${containersMissingCcro[0].container_number} — upload or delete it`
+        : `No CCRO for ${containersMissingCcro.length} containers: ${containersMissingCcro.map(c => c.container_number).join(', ')}`
+    ) :
     null
 
   return (
     <div className="lg:flex lg:gap-6 lg:items-start">
     <div className="flex-1 min-w-0 space-y-6">
       {/* Header */}
-      <div className="flex items-start justify-between flex-wrap gap-3">
+      <div className="sticky top-0 z-10 bg-white dark:bg-gray-800 pb-4 border-b border-gray-100 dark:border-gray-700/60 flex items-start justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">BL: {shipment.bl_number}</h1>
           <p className="text-sm text-gray-500 dark:text-gray-400">Invoice: {shipment.invoice_number}</p>
@@ -381,6 +455,8 @@ export function ShipmentDetail() {
             { label: 'Loading Port', value: shipment.loading_port_name },
             { label: 'Shipping Line', value: shipment.shipping_line_name },
             { label: 'Offloading', value: shipment.offloading_point_name },
+            { label: 'Bayan Type', value: shipment.bayan_type_name },
+            { label: 'Consignee', value: shipment.consignee_name },
           ].filter(item => item.value).length > 0 && (
             <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2">
               {[
@@ -388,6 +464,8 @@ export function ShipmentDetail() {
                 { label: 'Loading Port', value: shipment.loading_port_name },
                 { label: 'Shipping Line', value: shipment.shipping_line_name },
                 { label: 'Offloading', value: shipment.offloading_point_name },
+                { label: 'Bayan Type', value: shipment.bayan_type_name },
+                { label: 'Consignee', value: shipment.consignee_name },
               ].filter(item => item.value).map(item => (
                 <span key={item.label} className="text-xs text-gray-500 dark:text-gray-400">
                   <span className="text-gray-400 dark:text-gray-500">{item.label}: </span>
@@ -605,6 +683,93 @@ export function ShipmentDetail() {
         {shipment.completed_at && <div><span className="text-gray-500 dark:text-gray-400">Completed</span><p className="font-medium dark:text-gray-100">{formatDate(shipment.completed_at)}</p></div>}
       </div>
 
+      {/* Edit shipment details — CUSTOMER team at CUSTOMER stage, not during bayan payment */}
+      {team === 'CUSTOMER' && stage === 'CUSTOMER' && !shipment.tasks.some(t => t.task_type === 'BAYAN_PAYMENT' && t.status !== 'COMPLETED') && (
+        <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-xl p-4">
+          {!showEditDetails ? (
+            <button
+              onClick={openEditDetails}
+              className="flex items-center gap-1.5 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100"
+            >
+              <Pencil size={14} /> Edit Shipment Details
+            </button>
+          ) : (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-semibold text-gray-800 dark:text-gray-100">Edit Shipment Details</p>
+                <button onClick={() => setShowEditDetails(false)} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
+                  <X size={16} />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">BL Number <span className="text-red-500">*</span></label>
+                  <input
+                    value={editForm.bl_number}
+                    onChange={e => setEditForm(p => ({ ...p, bl_number: e.target.value }))}
+                    className="w-full border dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Invoice Number <span className="text-red-500">*</span></label>
+                  <input
+                    value={editForm.invoice_number}
+                    onChange={e => setEditForm(p => ({ ...p, invoice_number: e.target.value }))}
+                    className="w-full border dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Container Count <span className="text-red-500">*</span></label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={99}
+                    value={editForm.container_count}
+                    onChange={e => setEditForm(p => ({ ...p, container_count: e.target.value }))}
+                    className="w-full border dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">ETA at Port</label>
+                  <input
+                    type="date"
+                    value={editForm.eta_at_port}
+                    onChange={e => setEditForm(p => ({ ...p, eta_at_port: e.target.value }))}
+                    className="w-full border dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <CreatableSelect label="Product Type" value={editForm.product_type_id} onChange={v => setEditForm(p => ({ ...p, product_type_id: v }))} options={productTypes} onAdd={async name => { const { data } = await mastersApi.productTypes.create(name); qc.invalidateQueries({ queryKey: ['productTypes'] }); return data }} />
+                <CreatableSelect label="Loading Port" value={editForm.loading_port_id} onChange={v => setEditForm(p => ({ ...p, loading_port_id: v }))} options={loadingPorts} onAdd={async name => { const { data } = await mastersApi.loadingPorts.create(name); qc.invalidateQueries({ queryKey: ['loadingPorts'] }); return data }} />
+                <CreatableSelect label="Shipping Line" value={editForm.shipping_line_id} onChange={v => setEditForm(p => ({ ...p, shipping_line_id: v }))} options={shippingLines} onAdd={async name => { const { data } = await mastersApi.shippingLines.create(name); qc.invalidateQueries({ queryKey: ['shippingLines'] }); return data }} />
+                <CreatableSelect label="Offloading Location" value={editForm.offloading_point_id} onChange={v => setEditForm(p => ({ ...p, offloading_point_id: v }))} options={offloadingPoints} onAdd={async name => { const { data } = await mastersApi.offloadingPoints.create(name); qc.invalidateQueries({ queryKey: ['offloadingPoints'] }); return data }} />
+                <CreatableSelect label="Bayan Type" value={editForm.bayan_type_id} onChange={v => setEditForm(p => ({ ...p, bayan_type_id: v }))} options={bayanTypes} onAdd={async name => { const { data } = await mastersApi.bayanTypes.create(name); qc.invalidateQueries({ queryKey: ['bayanTypes'] }); return data }} />
+                <CreatableSelect label="Consignee" value={editForm.consignee_id} onChange={v => setEditForm(p => ({ ...p, consignee_id: v }))} options={consignees} onAdd={async name => { const { data } = await mastersApi.consignees.create(name); qc.invalidateQueries({ queryKey: ['consignees'] }); return data }} />
+              </div>
+
+              <div className="flex gap-2 pt-1">
+                <button
+                  onClick={saveDetails}
+                  disabled={savingDetails}
+                  className="text-sm bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50 font-medium"
+                >
+                  {savingDetails ? 'Saving…' : 'Save Changes'}
+                </button>
+                <button
+                  onClick={() => setShowEditDetails(false)}
+                  className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 px-2 py-2"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Customer Documents */}
       <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-xl p-4">
         <h2 className="font-semibold text-gray-800 dark:text-gray-100 mb-3">Shipment Documents</h2>
@@ -679,10 +844,12 @@ export function ShipmentDetail() {
               userId={user!.id}
               proUsers={proUsers}
               doValidityDate={shipment.do_validity_date}
+              permitRef={shipment.permit_ref}
+              shipmentPermitNotRequired={shipment.permit_not_required}
               documents={documents}
               onUpdated={refresh}
               submitting={submitting}
-              onComplete={() => action(() => shipmentsApi.completeTask(id!, task.id), 'Task completed')}
+              onComplete={(pnr) => action(() => shipmentsApi.completeTask(id!, task.id, undefined, pnr), 'Task completed')}
             />
           ))}
 
@@ -692,7 +859,7 @@ export function ShipmentDetail() {
             const bp = shipment.tasks.find(t => t.task_type === 'BAYAN_PAYMENT')
             return (
               <div className="pt-2 border-t dark:border-gray-700">
-                {!bp && (
+                {!bp && shipment.tasks.some(t => t.task_type === 'BAYAN' && t.status !== 'COMPLETED' && t.assigned_to_id === user!.id) && (
                   <button
                     onClick={() => action(() => shipmentsApi.requestBayanPayment(id!), 'Payment request sent to customer')}
                     disabled={submitting}
@@ -1036,9 +1203,9 @@ export function ShipmentDetail() {
             ))}
           </div>
         ) : (
-          team !== 'FFD' && <p className="text-sm text-gray-400">No process documents uploaded yet</p>
+          team !== 'FFD' && team !== 'PRO' && <p className="text-sm text-gray-400">No process documents uploaded yet</p>
         )}
-        {team === 'FFD' && (
+        {(team === 'FFD' || team === 'PRO') && (
           <div className={clsx(processDocs.length > 0 && 'mt-3 pt-3 border-t dark:border-gray-700')}>
             <FfdMiscUpload shipmentId={id!} onUploaded={refresh} />
           </div>
@@ -1075,17 +1242,19 @@ const TASK_REQUIRED_DOC: Partial<Record<string, string>> = {
   DO: 'DO',
 }
 
-function TaskRow({ task, shipmentId, userTeam, userId, proUsers, doValidityDate, documents, onUpdated, submitting, onComplete }: {
+function TaskRow({ task, shipmentId, userTeam, userId, proUsers, doValidityDate, permitRef, shipmentPermitNotRequired, documents, onUpdated, submitting, onComplete }: {
   task: Task
   shipmentId: string
   userTeam: string
   userId: string
   proUsers: { id: string; full_name: string; active_task_count: number }[]
   doValidityDate: string | null
+  permitRef: string | null
+  shipmentPermitNotRequired: boolean
   documents: ShipmentDoc[]
   onUpdated: () => void
   submitting: boolean
-  onComplete: () => void
+  onComplete: (permitNotRequired?: boolean) => void
 }) {
   const [uploading, setUploading] = useState(false)
   const [permitNotRequired, setPermitNotRequired] = useState(false)
@@ -1096,6 +1265,8 @@ function TaskRow({ task, shipmentId, userTeam, userId, proUsers, doValidityDate,
   const [showReassign, setShowReassign] = useState(false)
   const [doValidityInput, setDoValidityInput] = useState(doValidityDate ?? '')
   const [savingValidity, setSavingValidity] = useState(false)
+  const [permitRefInput, setPermitRefInput] = useState(permitRef ?? '')
+  const [savingPermitRef, setSavingPermitRef] = useState(false)
 
   const isProTask = task.assigned_team === 'PRO'
   const canAssign = userTeam === 'FFD' && isProTask && task.status !== 'COMPLETED'
@@ -1111,6 +1282,19 @@ function TaskRow({ task, shipmentId, userTeam, userId, proUsers, doValidityDate,
       toast.error(e.response?.data?.detail || 'Failed to save')
     } finally {
       setSavingValidity(false)
+    }
+  }
+
+  async function savePermitRef() {
+    setSavingPermitRef(true)
+    try {
+      await shipmentsApi.setPermitRef(shipmentId, permitRefInput)
+      toast.success('Permit reference saved')
+      onUpdated()
+    } catch (e: any) {
+      toast.error(e.response?.data?.detail || 'Failed to save')
+    } finally {
+      setSavingPermitRef(false)
     }
   }
 
@@ -1137,7 +1321,7 @@ function TaskRow({ task, shipmentId, userTeam, userId, proUsers, doValidityDate,
   const isCcro = task.task_type === 'CCRO'
   const requiredDocType = TASK_REQUIRED_DOC[task.task_type]
   const uploadedDoc: ShipmentDoc | undefined = requiredDocType
-    ? documents.find(d => d.doc_type === requiredDocType && d.task_id === task.id)
+    ? documents.find(d => d.doc_type === requiredDocType)
     : undefined
   const doValidityMissing = task.task_type === 'DO' && !doValidityDate
   const canComplete = !isCcro && (!requiredDocType || !!uploadedDoc || (task.task_type === 'PERMIT' && permitNotRequired)) && !doValidityMissing
@@ -1177,7 +1361,11 @@ function TaskRow({ task, shipmentId, userTeam, userId, proUsers, doValidityDate,
           )}
         </div>
         {canAct && task.status !== 'ON_HOLD' && canComplete && (
-          <button onClick={onComplete} disabled={submitting} className="text-xs bg-green-600 text-white px-3 py-1 rounded hover:bg-green-700 disabled:opacity-50">
+          <button
+            onClick={() => onComplete(task.task_type === 'PERMIT' ? permitNotRequired : undefined)}
+            disabled={submitting}
+            className="text-xs bg-green-600 text-white px-3 py-1 rounded hover:bg-green-700 disabled:opacity-50"
+          >
             {task.task_type === 'BAYAN_PAYMENT' ? 'Confirm Payment' : 'Mark Complete'}
           </button>
         )}
@@ -1313,6 +1501,45 @@ function TaskRow({ task, shipmentId, userTeam, userId, proUsers, doValidityDate,
         </div>
       )}
 
+      {/* Permit reference number */}
+      {task.task_type === 'PERMIT' && (
+        <div className="border-t dark:border-gray-600 pt-2 space-y-1">
+          <p className="text-xs text-gray-500 dark:text-gray-400 font-medium">Permit Reference No.</p>
+          {userTeam === 'PRO' ? (
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={permitRefInput}
+                onChange={e => setPermitRefInput(e.target.value)}
+                placeholder="Enter permit reference number"
+                className="text-xs border dark:border-gray-600 rounded px-2 py-1.5 bg-white dark:bg-gray-700 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500 flex-1 min-w-0"
+              />
+              {permitRefInput !== (permitRef ?? '') && (
+                <button
+                  onClick={savePermitRef}
+                  disabled={savingPermitRef}
+                  className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700 disabled:opacity-50 whitespace-nowrap"
+                >
+                  {savingPermitRef ? 'Saving…' : 'Save'}
+                </button>
+              )}
+              {permitRefInput === (permitRef ?? '') && permitRef && (
+                <span className="text-xs text-green-600 dark:text-green-400">✓ Saved</span>
+              )}
+            </div>
+          ) : (
+            <p className="text-xs text-gray-700 dark:text-gray-300">
+              {permitRef || <span className="text-gray-400 dark:text-gray-500 italic">Not entered</span>}
+            </p>
+          )}
+          {shipmentPermitNotRequired && (
+            <p className="text-xs text-amber-600 dark:text-amber-400 font-medium">
+              Permit not required for this shipment
+            </p>
+          )}
+        </div>
+      )}
+
       {/* DO validity date — FFD sets/updates it at any time */}
       {task.task_type === 'DO' && userTeam === 'FFD' && (
         <div className="border-t dark:border-gray-600 pt-2 space-y-1">
@@ -1393,7 +1620,7 @@ function BulkCcroUpload({ shipmentId, onUploaded }: { shipmentId: string; onUplo
   const [uploading, setUploading] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [results, setResults] = useState<null | {
-    results: { filename: string; container_number: string | null; status: string; conflict_bl?: string; container_id: string | null }[]
+    results: { filename: string; container_number: string | null; status: string; conflict_bl?: string; bl_warning?: string | null; container_id: string | null }[]
     matched: number; created: number; failed: number; duplicates: number
   }>(null)
   const [editingIdx, setEditingIdx] = useState<number | null>(null)
@@ -1534,6 +1761,11 @@ function BulkCcroUpload({ shipmentId, onUploaded }: { shipmentId: string; onUplo
                       Duplicate — active on {r.conflict_bl}
                     </span>
                   )}
+                  {r.bl_warning && (
+                    <span className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 px-1.5 py-0.5 rounded" title={r.bl_warning}>
+                      BL mismatch
+                    </span>
+                  )}
                 </div>
               </div>
             ))}
@@ -1584,7 +1816,7 @@ function ContainerCcroSlot({ shipmentId, container, taskId, ccroDoc, onUpdated }
   async function handleUpload(file: File) {
     setUploading(true)
     try {
-      await documentsApi.upload({
+      const { data } = await documentsApi.upload({
         shipment_id: shipmentId,
         doc_type: 'CCRO',
         file,
@@ -1592,6 +1824,13 @@ function ContainerCcroSlot({ shipmentId, container, taskId, ccroDoc, onUpdated }
         container_id: container.id,
       })
       toast.success(`CCRO uploaded for ${container.container_number}`)
+      if (data.bl_warning) {
+        toast(data.bl_warning, {
+          icon: '⚠️',
+          duration: 10000,
+          style: { background: '#fef3c7', color: '#92400e', border: '1px solid #fbbf24', maxWidth: '420px' },
+        })
+      }
       onUpdated()
     } catch (e: any) {
       toast.error(e.response?.data?.detail || 'Upload failed')
@@ -1642,12 +1881,22 @@ function AssignTruckForm({ shipmentId, containerId, trucks, onAssigned, alwaysOp
 }) {
   const [show, setShow] = useState(false)
   const [truckId, setTruckId] = useState('')
+  const [driverName, setDriverName] = useState('')
   const [etaDate, setEtaDate] = useState(() => defaultEta().date)
   const [etaTime, setEtaTime] = useState('09:00')
   const [etaConfirmed, setEtaConfirmed] = useState(false)
   const [saving, setSaving] = useState(false)
 
+  const activeTrucks = trucks.filter(t => t.is_active)
+  const allDriverNames = Array.from(new Set(activeTrucks.map(t => t.driver_name).filter(Boolean))).sort()
+
   const etaIso = etaDate && etaTime ? new Date(`${etaDate}T${etaTime}`).toISOString() : ''
+
+  function handleTruckChange(id: string) {
+    setTruckId(id)
+    const truck = activeTrucks.find(t => t.id === id)
+    setDriverName(truck?.driver_name ?? '')
+  }
 
   function confirmEta() {
     if (etaDate && etaTime) setEtaConfirmed(true)
@@ -1665,6 +1914,7 @@ function AssignTruckForm({ shipmentId, containerId, trucks, onAssigned, alwaysOp
         container_id: containerId,
         truck_id: truckId,
         expected_arrival_at: etaIso,
+        driver_name: driverName || undefined,
       })
       toast.success('Truck assigned')
       onAssigned()
@@ -1687,14 +1937,27 @@ function AssignTruckForm({ shipmentId, containerId, trucks, onAssigned, alwaysOp
     <div className="space-y-2.5 p-2.5 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
       <select
         value={truckId}
-        onChange={e => setTruckId(e.target.value)}
+        onChange={e => handleTruckChange(e.target.value)}
         className="w-full text-xs border dark:border-gray-600 rounded px-2 py-1.5 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
       >
-        <option value="">Select truck / driver…</option>
-        {trucks.filter(t => t.is_active).map(t => (
-          <option key={t.id} value={t.id}>{t.plate_number} — {t.driver_name} ({t.contractor})</option>
+        <option value="">Select truck…</option>
+        {activeTrucks.map(t => (
+          <option key={t.id} value={t.id}>{t.plate_number} ({t.contractor})</option>
         ))}
       </select>
+
+      {truckId && (
+        <select
+          value={driverName}
+          onChange={e => setDriverName(e.target.value)}
+          className="w-full text-xs border dark:border-gray-600 rounded px-2 py-1.5 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+        >
+          <option value="">Select driver…</option>
+          {allDriverNames.map(name => (
+            <option key={name} value={name}>{name}</option>
+          ))}
+        </select>
+      )}
 
       {/* ETA picker with explicit OK button */}
       {!etaConfirmed ? (

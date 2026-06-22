@@ -79,9 +79,10 @@ function getLabel(event: ShipmentEvent, taskName: string | undefined): string {
     case 'CONTAINER_OFFLOADED':    return 'Container offloaded at DC'
     case 'CONTAINER_RETURNED':     return 'Container returned'
     case 'SENT_BACK_TO_FFD':       return 'Shipment sent back to FFD team'
-    case 'PULL_OUT_DATE_CHANGED':  return 'Pull-out date updated'
-    case 'DO_VALIDITY_UPDATED':    return 'DO validity date updated'
-    default:                       return event.event_type.replace(/_/g, ' ').toLowerCase()
+    case 'PULL_OUT_DATE_CHANGED':      return 'Pull-out date updated'
+    case 'SHIPMENT_DETAILS_CHANGED':   return 'Shipment details updated'
+    case 'DO_VALIDITY_UPDATED':        return 'DO validity date updated'
+    default:                           return event.event_type.replace(/_/g, ' ').toLowerCase()
   }
 }
 

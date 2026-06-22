@@ -577,6 +577,14 @@ async def reports(
 
     # ── On-time rate ──────────────────────────────────────────────────────────
     from sqlalchemy import func as _func, case as _case, cast as _cast, Date as _Date, or_ as _or
+    max_pullout_sq = (
+        select(
+            Container.shipment_id,
+            func.max(Container.actual_pull_out_date).label("max_actual_pullout"),
+        )
+        .group_by(Container.shipment_id)
+        .subquery()
+    )
     on_time_result = (await db.execute(
         select(
             func.count(Shipment.id).label("total"),
@@ -584,15 +592,17 @@ async def reports(
                 (
                     _or(
                         Shipment.pull_out_date == None,
-                        _cast(Shipment.completed_at, _Date) <= Shipment.pull_out_date,
+                        _cast(max_pullout_sq.c.max_actual_pullout, _Date) <= Shipment.pull_out_date,
                     ),
                     1,
                 ),
                 else_=0,
             )).label("on_time"),
-        ).where(
+        )
+        .join(max_pullout_sq, max_pullout_sq.c.shipment_id == Shipment.id)
+        .where(
             Shipment.current_stage == ShipmentStage.COMPLETED,
-            Shipment.completed_at != None,
+            max_pullout_sq.c.max_actual_pullout != None,
             *period_filter,
         )
     )).one()

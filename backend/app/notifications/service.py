@@ -109,6 +109,26 @@ TEMPLATES: dict[str, dict] = {
         "subject": "You have been invited to FFD Tracker",
         "body": "You have been invited to join FFD Tracker as {team}. Click the link below to set up your account:\n{link}",
     },
+    "pull_out_date_changed": {
+        "subject": "FFD Tracker — Pull-out date updated",
+        "body": "The pull-out date for BL: {bl_number} has been updated to {new_date} by {customer_name}.",
+    },
+    "pull_out_dates_bulk_changed": {
+        "subject": "FFD Tracker — Pull-out dates updated ({count} shipments)",
+        "body": "Pull-out dates for {count} shipments have been set to {new_date} by {customer_name}.",
+    },
+    "bayan_payment_bulk_requested": {
+        "subject": "FFD Tracker — Bayan payment required ({count} shipment{plural})",
+        "body": "Bayan payment is required for {count} shipment{plural}. The Bayan documents are attached to this email. Please complete the payment and confirm in the tracker.",
+    },
+    "ccro_bulk_received": {
+        "subject": "FFD Tracker — CCROs confirmed ({count} shipment{plural}), please arrange transport",
+        "body": "CCROs for {count} shipment{plural} have been confirmed. Please assign trucks to the containers listed below.",
+    },
+    "ccro_bulk_sent_to_dc": {
+        "subject": "FFD Tracker — {count} shipment{plural} incoming, CCROs sent to Transport",
+        "body": "CCROs for {count} shipment{plural} have been sent to the Transport team. Please coordinate with Transport regarding expected arrivals.",
+    },
 }
 
 
@@ -127,7 +147,85 @@ async def _get_cc_emails_for_user(db: AsyncSession, user_id: uuid.UUID) -> list[
     return [row.cc_email for row in result.scalars().all()]
 
 
-async def notify_team(db: AsyncSession, shipment, team: Team, template_key: str, in_app_only: bool = False, **extra: str) -> None:
+def _render_alert_email(body: str, shipment_url: str, remark: str = "", doc_links: list[dict] | None = None) -> str:
+    remark_block = ""
+    if remark:
+        remark_block = (
+            f'<p style="margin:12px 0 0;font-family:Arial,sans-serif;font-size:13px;color:#374151;">'
+            f'<strong>Remarks:</strong> {remark}</p>'
+        )
+
+    doc_block = ""
+    if doc_links:
+        buttons = ""
+        for link in doc_links:
+            filename = _html.escape(link["filename"])
+            url = _html.escape(link["url"])
+            buttons += (
+                f'<a href="{url}" style="display:inline-block;margin:4px 8px 4px 0;padding:8px 16px;'
+                f'background-color:#1d4ed8;color:#ffffff;font-family:Arial,sans-serif;font-size:13px;'
+                f'font-weight:600;text-decoration:none;border-radius:4px;">&#8681; {filename}</a>'
+            )
+        doc_block = (
+            '<table width="100%" cellpadding="0" cellspacing="0" '
+            'style="border:1px solid #e2e8f0;border-radius:6px;margin-top:16px;">'
+            '<tr><td style="padding:12px 16px;background-color:#f8fafc;">'
+            '<p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:11px;font-weight:600;'
+            'color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Documents</p>'
+            f'{buttons}'
+            '<p style="margin:8px 0 0;font-family:Arial,sans-serif;font-size:11px;color:#9ca3af;">'
+            'Links expire in 7 days.</p>'
+            '</td></tr></table>'
+        )
+
+    app_url = _html.escape(settings.FRONTEND_URL)
+    shipment_url_escaped = _html.escape(shipment_url)
+
+    return f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background-color:#f1f5f9;">
+<table width="100%" cellpadding="0" cellspacing="0" bgcolor="#f1f5f9">
+<tr><td align="center" style="padding:24px 16px;">
+<table width="580" cellpadding="0" cellspacing="0" bgcolor="#ffffff"
+  style="background-color:#ffffff;max-width:580px;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.1);">
+
+  <tr><td bgcolor="#1d4ed8" style="background-color:#1d4ed8;padding:24px 32px;">
+    <p style="margin:0;font-family:Arial,sans-serif;font-size:18px;font-weight:bold;color:#ffffff;">
+      FFD Shipment Tracker
+    </p>
+  </td></tr>
+
+  <tr><td style="padding:28px 32px 8px;">
+    <p style="margin:0;font-family:Arial,sans-serif;font-size:14px;color:#374151;line-height:1.6;">{body}</p>
+    {remark_block}
+    {doc_block}
+  </td></tr>
+
+  <tr><td style="padding:20px 32px 28px;">
+    <a href="{shipment_url_escaped}"
+       style="display:inline-block;padding:10px 20px;background-color:#1d4ed8;color:#ffffff;
+              font-family:Arial,sans-serif;font-size:13px;font-weight:600;text-decoration:none;
+              border-radius:4px;">View Shipment &rarr;</a>
+  </td></tr>
+
+  <tr><td bgcolor="#f8fafc" style="background-color:#f8fafc;padding:16px 32px;border-top:1px solid #e2e8f0;">
+    <p style="margin:0;font-family:Arial,sans-serif;font-size:11px;color:#94a3b8;text-align:center;">
+      This is an automated alert from the
+      <a href="{app_url}" style="color:#1d4ed8;text-decoration:none;">Shipment Tracker</a>
+      app, developed by
+      <strong style="color:#6b7280;">Bayanat Technology</strong>.
+    </p>
+  </td></tr>
+
+</table>
+</td></tr>
+</table>
+</body>
+</html>"""
+
+
+async def notify_team(db: AsyncSession, shipment, team: Team, template_key: str, in_app_only: bool = False, doc_links: list[dict] | None = None, **extra: str) -> None:
     from app.notifications.tasks import send_email_task
 
     template = TEMPLATES.get(template_key, {})
@@ -141,11 +239,10 @@ async def notify_team(db: AsyncSession, shipment, team: Team, template_key: str,
         **escaped_extra,
     )
     subject = f"{template.get('subject', 'FFD Tracker')} — BL: {shipment.bl_number}"
+    shipment_url = f"{settings.FRONTEND_URL}/shipments/{shipment.id}"
 
     remark_val = escaped_extra.get("remark", "").strip()
-    email_html = f"<p>{body}</p>"
-    if remark_val:
-        email_html += f"<br><p><strong>Remarks:</strong> {remark_val}</p>"
+    email_html = _render_alert_email(body, shipment_url, remark=remark_val, doc_links=doc_links)
 
     for user in users:
         if not in_app_only:
@@ -203,16 +300,343 @@ async def notify_user(db: AsyncSession, shipment, user: User, template_key: str,
         template=template_key,
         payload=payload,
     ))
+    shipment_url = f"{settings.FRONTEND_URL}/shipments/{shipment.id}"
     try:
         send_email_task.delay(
             user.email,
             f"{template.get('subject', 'FFD Tracker')} — BL: {shipment.bl_number}",
-            f"<p>{body}</p>",
+            _render_alert_email(body, shipment_url),
             cc_emails or None,
         )
     except Exception:
         email_notif.queue_failed = True
         logger.exception("Failed to queue email to %s (broker unavailable?)", user.email)
+    await db.commit()
+
+
+_PULL_OUT_NOTIF_TEAMS = [Team.FFD, Team.TRANSPORT, Team.DC, Team.CUSTOMER]
+
+
+async def _get_pull_out_notif_users(db: AsyncSession) -> list[User]:
+    users: list[User] = []
+    for team in _PULL_OUT_NOTIF_TEAMS:
+        users.extend(await _get_team_users(db, team))
+    return users
+
+
+async def notify_pull_out_date_changed(
+    db: AsyncSession,
+    shipment,
+    new_date: str,
+    customer_name: str,
+) -> None:
+    """Email + in-app notification to FFD, Transport, DC and Customer for a single pull-out date change."""
+    from app.notifications.tasks import send_email_task
+
+    template = TEMPLATES["pull_out_date_changed"]
+    users = await _get_pull_out_notif_users(db)
+    cc_emails = await _get_cc_emails_for_team(db, Team.FFD)
+
+    body = template["body"].format(
+        bl_number=_html.escape(shipment.bl_number),
+        new_date=_html.escape(new_date),
+        customer_name=_html.escape(customer_name),
+    )
+    subject = f"FFD Tracker — Pull-out date updated — BL: {shipment.bl_number}"
+    email_html = f"<p>{body}</p>"
+
+    for user in users:
+        db.add(Notification(
+            shipment_id=shipment.id,
+            recipient_id=user.id,
+            channel="IN_APP",
+            template="pull_out_date_changed",
+            payload={"subject": subject, "body": body},
+        ))
+
+    if users:
+        all_emails = [u.email for u in users]
+        try:
+            send_email_task.delay(all_emails, subject, email_html, cc_emails or None)
+        except Exception:
+            logger.exception("Failed to queue pull-out date changed email (broker unavailable?)")
+
+    await db.commit()
+
+
+async def notify_team_bulk_pull_out(
+    db: AsyncSession,
+    shipments: list,
+    new_date: str,
+    customer_name: str,
+) -> None:
+    """Single batched email + in-app notification to FFD, Transport, DC and Customer for bulk pull-out date changes."""
+    from app.notifications.tasks import send_email_task
+
+    template = TEMPLATES["pull_out_dates_bulk_changed"]
+    users = await _get_pull_out_notif_users(db)
+    cc_emails = await _get_cc_emails_for_team(db, Team.FFD)
+    count = len(shipments)
+    bl_list = ", ".join(s.bl_number for s in shipments)
+
+    body = template["body"].format(
+        count=count,
+        new_date=_html.escape(new_date),
+        customer_name=_html.escape(customer_name),
+    )
+    subject = f"FFD Tracker — Pull-out dates updated ({count} shipment{'s' if count != 1 else ''})"
+    email_html = (
+        f"<p>{body}</p>"
+        f"<br><p><strong>BL Numbers:</strong> {_html.escape(bl_list)}</p>"
+    )
+
+    for user in users:
+        db.add(Notification(
+            shipment_id=None,
+            recipient_id=user.id,
+            channel="IN_APP",
+            template="pull_out_dates_bulk_changed",
+            payload={"subject": subject, "body": body},
+        ))
+
+    if users:
+        all_emails = [u.email for u in users]
+        try:
+            send_email_task.delay(all_emails, subject, email_html, cc_emails or None)
+        except Exception:
+            logger.exception("Failed to queue bulk pull-out date email (broker unavailable?)")
+
+    await db.commit()
+
+
+async def notify_bulk_bayan_payment_requested(
+    db: AsyncSession,
+    shipments: list,
+    attachment_specs: list[dict],
+) -> None:
+    """Send a single email to the Customer team with all Bayan PDFs attached and in-app notifications per shipment."""
+    from app.notifications.tasks import send_email_with_attachments_task
+
+    users = await _get_team_users(db, Team.CUSTOMER)
+    cc_emails = await _get_cc_emails_for_team(db, Team.CUSTOMER)
+    count = len(shipments)
+    plural = "s" if count != 1 else ""
+    bl_list = ", ".join(_html.escape(s.bl_number) for s in shipments)
+
+    template = TEMPLATES["bayan_payment_bulk_requested"]
+    body = template["body"].format(count=count, plural=plural)
+    subject = template["subject"].format(count=count, plural=plural)
+
+    tracker_url = _html.escape(settings.FRONTEND_URL)
+    bl_rows = "".join(
+        f'<tr><td style="padding:4px 8px;font-family:Arial,sans-serif;font-size:13px;color:#374151;">'
+        f'{_html.escape(s.bl_number)}</td></tr>'
+        for s in shipments
+    )
+    email_html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background-color:#f1f5f9;">
+<table width="100%" cellpadding="0" cellspacing="0" bgcolor="#f1f5f9">
+<tr><td align="center" style="padding:24px 16px;">
+<table width="580" cellpadding="0" cellspacing="0" bgcolor="#ffffff"
+  style="background-color:#ffffff;max-width:580px;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.1);">
+  <tr><td bgcolor="#1d4ed8" style="background-color:#1d4ed8;padding:24px 32px;">
+    <p style="margin:0;font-family:Arial,sans-serif;font-size:18px;font-weight:bold;color:#ffffff;">FFD Shipment Tracker</p>
+  </td></tr>
+  <tr><td style="padding:28px 32px 8px;">
+    <p style="margin:0;font-family:Arial,sans-serif;font-size:14px;color:#374151;line-height:1.6;">{body}</p>
+    <table cellpadding="0" cellspacing="0" style="margin-top:16px;border:1px solid #e2e8f0;border-radius:6px;width:100%;">
+      <tr><td style="padding:8px 8px 4px;background-color:#f8fafc;">
+        <p style="margin:0 0 6px;font-family:Arial,sans-serif;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">BL Numbers</p>
+      </td></tr>
+      {bl_rows}
+    </table>
+    <p style="margin:16px 0 0;font-family:Arial,sans-serif;font-size:12px;color:#6b7280;">
+      The Bayan documents are attached to this email ({len(attachment_specs)} file{'s' if len(attachment_specs) != 1 else ''}).
+    </p>
+  </td></tr>
+  <tr><td style="padding:20px 32px 28px;">
+    <a href="{tracker_url}"
+       style="display:inline-block;padding:10px 20px;background-color:#1d4ed8;color:#ffffff;
+              font-family:Arial,sans-serif;font-size:13px;font-weight:600;text-decoration:none;border-radius:4px;">
+      Open Tracker &rarr;</a>
+  </td></tr>
+  <tr><td bgcolor="#f8fafc" style="background-color:#f8fafc;padding:16px 32px;border-top:1px solid #e2e8f0;">
+    <p style="margin:0;font-family:Arial,sans-serif;font-size:11px;color:#94a3b8;text-align:center;">
+      Automated alert &mdash; <a href="{tracker_url}" style="color:#1d4ed8;text-decoration:none;">FFD Shipment Tracker</a>
+    </p>
+  </td></tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>"""
+
+    for user in users:
+        for shipment in shipments:
+            db.add(Notification(
+                shipment_id=shipment.id,
+                recipient_id=user.id,
+                channel="IN_APP",
+                template="bayan_payment_bulk_requested",
+                payload={"subject": subject, "body": f"Bayan payment required — BL: {shipment.bl_number}"},
+            ))
+
+    if users:
+        team_emails = [u.email for u in users]
+        try:
+            import base64
+            import asyncio
+            from app.documents.service import fetch_oci_bytes
+
+            async def _fetch(spec: dict) -> dict | None:
+                data = await asyncio.to_thread(fetch_oci_bytes, spec["oci_path"])
+                if data:
+                    return {"filename": spec["filename"], "data_b64": base64.b64encode(data).decode()}
+                logger.warning("notify_bulk_bayan_payment_requested: could not fetch %s", spec["oci_path"])
+                return None
+
+            results = await asyncio.gather(*[_fetch(s) for s in attachment_specs])
+            embedded = [r for r in results if r is not None]
+            send_email_with_attachments_task.delay(
+                team_emails, subject, email_html, embedded, cc_emails or None
+            )
+        except Exception:
+            logger.exception("Failed to queue bulk Bayan payment email (broker unavailable?)")
+
+    await db.commit()
+
+
+async def notify_bulk_ccro_confirmed(
+    db: AsyncSession,
+    # List of dicts: { shipment, container_numbers: list[str], doc_links: list[dict] }
+    confirmed: list[dict],
+) -> None:
+    """Send ONE email to Transport + ONE email to DC summarising all BLs and containers."""
+    from app.notifications.tasks import send_email_task
+
+    count = len(confirmed)
+    plural = "s" if count != 1 else ""
+    all_doc_links = [dl for entry in confirmed for dl in entry["doc_links"]]
+
+    def _shipment_table_rows() -> str:
+        rows = ""
+        for entry in confirmed:
+            bl = _html.escape(entry["shipment"].bl_number)
+            containers = _html.escape(", ".join(entry["container_numbers"]))
+            rows += (
+                f'<tr>'
+                f'<td style="padding:6px 10px;font-family:Arial,sans-serif;font-size:13px;'
+                f'color:#374151;border-bottom:1px solid #e2e8f0;">{bl}</td>'
+                f'<td style="padding:6px 10px;font-family:Arial,sans-serif;font-size:13px;'
+                f'color:#374151;border-bottom:1px solid #e2e8f0;">{containers}</td>'
+                f'</tr>'
+            )
+        return rows
+
+    def _build_email(body: str) -> str:
+        doc_buttons = ""
+        if all_doc_links:
+            for dl in all_doc_links:
+                fname = _html.escape(dl["filename"])
+                url = _html.escape(dl["url"])
+                doc_buttons += (
+                    f'<a href="{url}" style="display:inline-block;margin:4px 8px 4px 0;'
+                    f'padding:8px 14px;background-color:#1d4ed8;color:#ffffff;'
+                    f'font-family:Arial,sans-serif;font-size:12px;font-weight:600;'
+                    f'text-decoration:none;border-radius:4px;">&#8681; {fname}</a>'
+                )
+
+        tracker_url = _html.escape(settings.FRONTEND_URL)
+        return f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background-color:#f1f5f9;">
+<table width="100%" cellpadding="0" cellspacing="0" bgcolor="#f1f5f9">
+<tr><td align="center" style="padding:24px 16px;">
+<table width="620" cellpadding="0" cellspacing="0" bgcolor="#ffffff"
+  style="background-color:#ffffff;max-width:620px;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.1);">
+  <tr><td bgcolor="#1d4ed8" style="background-color:#1d4ed8;padding:24px 32px;">
+    <p style="margin:0;font-family:Arial,sans-serif;font-size:18px;font-weight:bold;color:#ffffff;">FFD Shipment Tracker</p>
+  </td></tr>
+  <tr><td style="padding:28px 32px 8px;">
+    <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:14px;color:#374151;line-height:1.6;">{body}</p>
+    <table cellpadding="0" cellspacing="0" style="width:100%;border:1px solid #e2e8f0;border-radius:6px;border-collapse:collapse;">
+      <tr style="background-color:#f8fafc;">
+        <th style="padding:8px 10px;font-family:Arial,sans-serif;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;text-align:left;border-bottom:1px solid #e2e8f0;">BL Number</th>
+        <th style="padding:8px 10px;font-family:Arial,sans-serif;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;text-align:left;border-bottom:1px solid #e2e8f0;">Containers</th>
+      </tr>
+      {_shipment_table_rows()}
+    </table>
+    {f'<div style="margin-top:16px;padding:12px 16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;"><p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">CCRO Documents</p>{doc_buttons}<p style="margin:8px 0 0;font-family:Arial,sans-serif;font-size:11px;color:#9ca3af;">Links expire in 7 days.</p></div>' if doc_buttons else ''}
+  </td></tr>
+  <tr><td style="padding:20px 32px 28px;">
+    <a href="{tracker_url}" style="display:inline-block;padding:10px 20px;background-color:#1d4ed8;color:#ffffff;font-family:Arial,sans-serif;font-size:13px;font-weight:600;text-decoration:none;border-radius:4px;">Open Tracker &rarr;</a>
+  </td></tr>
+  <tr><td bgcolor="#f8fafc" style="background-color:#f8fafc;padding:16px 32px;border-top:1px solid #e2e8f0;">
+    <p style="margin:0;font-family:Arial,sans-serif;font-size:11px;color:#94a3b8;text-align:center;">
+      Automated alert &mdash; <a href="{tracker_url}" style="color:#1d4ed8;text-decoration:none;">FFD Shipment Tracker</a>
+    </p>
+  </td></tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>"""
+
+    # Transport team
+    transport_users = await _get_team_users(db, Team.TRANSPORT)
+    transport_cc = await _get_cc_emails_for_team(db, Team.TRANSPORT)
+    transport_tmpl = TEMPLATES["ccro_bulk_received"]
+    transport_body = transport_tmpl["body"].format(count=count, plural=plural)
+    transport_subject = transport_tmpl["subject"].format(count=count, plural=plural)
+    for user in transport_users:
+        for entry in confirmed:
+            db.add(Notification(
+                shipment_id=entry["shipment"].id,
+                recipient_id=user.id,
+                channel="IN_APP",
+                template="ccro_bulk_received",
+                payload={"subject": transport_subject, "body": f"CCROs confirmed — BL: {entry['shipment'].bl_number}"},
+            ))
+    if transport_users:
+        try:
+            send_email_task.delay(
+                [u.email for u in transport_users],
+                transport_subject,
+                _build_email(transport_body),
+                transport_cc or None,
+            )
+        except Exception:
+            logger.exception("Failed to queue bulk CCRO email to Transport")
+
+    # DC team
+    dc_users = await _get_team_users(db, Team.DC)
+    dc_cc = await _get_cc_emails_for_team(db, Team.DC)
+    dc_tmpl = TEMPLATES["ccro_bulk_sent_to_dc"]
+    dc_body = dc_tmpl["body"].format(count=count, plural=plural)
+    dc_subject = dc_tmpl["subject"].format(count=count, plural=plural)
+    for user in dc_users:
+        for entry in confirmed:
+            db.add(Notification(
+                shipment_id=entry["shipment"].id,
+                recipient_id=user.id,
+                channel="IN_APP",
+                template="ccro_bulk_sent_to_dc",
+                payload={"subject": dc_subject, "body": f"Shipment incoming — BL: {entry['shipment'].bl_number}"},
+            ))
+    if dc_users:
+        try:
+            send_email_task.delay(
+                [u.email for u in dc_users],
+                dc_subject,
+                _build_email(dc_body),
+                dc_cc or None,
+            )
+        except Exception:
+            logger.exception("Failed to queue bulk CCRO email to DC")
+
     await db.commit()
 
 

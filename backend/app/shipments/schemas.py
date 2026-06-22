@@ -28,9 +28,13 @@ class SubmitDocumentsRequest(BaseModel):
 
 
 class ShipmentUpdate(BaseModel):
+    bl_number: Optional[str] = None
+    invoice_number: Optional[str] = None
+    container_count: Optional[int] = None
     pull_out_date: Optional[date] = None
     product_type_id: Optional[UUID] = None
     loading_port_id: Optional[UUID] = None
+    shipping_line_id: Optional[UUID] = None
     rop_inspection_type_id: Optional[UUID] = None
     offloading_point_id: Optional[UUID] = None
     bayan_type_id: Optional[UUID] = None
@@ -40,6 +44,20 @@ class ShipmentUpdate(BaseModel):
 
 class AmlsJobRequest(BaseModel):
     amls_job_number: Optional[str] = None
+
+
+class BulkPullOutDateUpdate(BaseModel):
+    shipment_ids: list[UUID]
+    pull_out_date: date
+
+
+class BulkBayanPaymentRequest(BaseModel):
+    shipment_ids: list[UUID]
+    remark: Optional[str] = None
+
+
+class BulkConfirmCcroRequest(BaseModel):
+    shipment_ids: list[UUID]
 
 
 class TaskOut(BaseModel):
@@ -65,6 +83,10 @@ class AssignTaskRequest(BaseModel):
 
 class DoValidityRequest(BaseModel):
     do_validity_date: date
+
+
+class PermitRefRequest(BaseModel):
+    permit_ref: Optional[str] = None
 
 
 class EventOut(BaseModel):
@@ -124,6 +146,8 @@ class ShipmentOut(BaseModel):
     updated_at: datetime
     completed_at: Optional[datetime]
     do_validity_date: Optional[date] = None
+    permit_ref: Optional[str] = None
+    permit_not_required: bool = False
     container_count: Optional[int] = None
     amls_job_number: Optional[str] = None
     offloading_point_name: Optional[str] = None
@@ -172,9 +196,12 @@ class ShipmentListOut(BaseModel):
     dc_health_cert_missing: bool = False
     dn_missing: bool = False
     amls_job_number: Optional[str] = None
+    permit_ref: Optional[str] = None
     do_validity_date: Optional[date] = None
     eta_at_port: Optional[date] = None
     consignee_name: Optional[str] = None
+    loading_port_name: Optional[str] = None
+    bayan_type_name: Optional[str] = None
 
 
 class PaginatedShipments(BaseModel):
@@ -206,6 +233,7 @@ class ReleaseHoldRequest(BaseModel):
 
 class CompleteTaskRequest(BaseModel):
     remark: Optional[str] = None
+    permit_not_required: bool = False
 
 
 class OpenBayanRequest(BaseModel):
@@ -229,6 +257,7 @@ class AssignTruckRequest(BaseModel):
     truck_id: UUID
     expected_arrival_at: datetime
     offloading_point_id: Optional[UUID] = None
+    driver_name: Optional[str] = None
 
 
 class BreakdownRequest(BaseModel):
@@ -305,6 +334,15 @@ class ContainerViewItem(BaseModel):
     outsourced_expected_arrival_at: Optional[datetime] = None
     outsourced_plate_number: Optional[str] = None
     outsourced_driver_name: Optional[str] = None
+    loading_port_name: Optional[str] = None
+    bayan_type_name: Optional[str] = None
+
+
+class PaginatedContainerView(BaseModel):
+    items: list[ContainerViewItem]
+    total: int
+    skip: int
+    limit: int
 
 
 class DoRevalidationRequest(BaseModel):

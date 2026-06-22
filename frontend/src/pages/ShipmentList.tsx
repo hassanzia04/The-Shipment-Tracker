@@ -1,24 +1,43 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 import { differenceInCalendarDays, parseISO, isValid } from 'date-fns'
 import { shipmentsApi } from '@/api/shipments'
 import { authApi } from '@/api/auth'
+import { documentsApi } from '@/api/documents'
 import { ContainerView } from '@/components/ContainerView'
+import { BulkBayanUploadModal } from '@/components/BulkBayanUploadModal'
+import { BulkPermitUploadModal } from '@/components/BulkPermitUploadModal'
+import { BulkDOUploadModal } from '@/components/BulkDOUploadModal'
+import { BulkCcroUploadModal } from '@/components/BulkCcroUploadModal'
 import { useAuth } from '@/hooks/useAuth'
 import toast from 'react-hot-toast'
 import {
   Plus, Search, AlertTriangle, Clock, Table2,
-  ChevronLeft, ChevronRight, Save, X, Calendar,
+  ChevronLeft, ChevronRight, X, Calendar,
   ChevronDown, ChevronUp, UserCheck, ListTodo, Box,
-  CheckCircle, DollarSign, Pencil, FileSpreadsheet,
+  CheckCircle, DollarSign, Pencil, FileSpreadsheet, Files, Download, Loader2,
+  SlidersHorizontal,
 } from 'lucide-react'
 import { STAGE_LABELS, TASK_TYPE_LABELS } from '@/types'
 import type { ShipmentListItem, ShipmentStage, TaskType, TaskStatus } from '@/types'
+import type { SortState } from '@/lib/sort'
 import { formatDate } from '@/lib/dates'
-import { useSortable } from '@/lib/sort'
 import { SortableHeader } from '@/components/SortableHeader'
 import clsx from 'clsx'
+
+const ALL_COLUMNS = [
+  { key: 'invoice',    label: 'Invoice' },
+  { key: 'consignee',  label: 'Consignee' },
+  { key: 'port',       label: 'Port of Loading' },
+  { key: 'bayan_type', label: 'Bayan Type' },
+  { key: 'stage',      label: 'Stage' },
+  { key: 'progress',   label: 'Progress' },
+  { key: 'pull_out',   label: 'Planned Pull Out' },
+  { key: 'eta',        label: 'ETA to Port' },
+  { key: 'do_validity',label: 'DO Validity' },
+  { key: 'amls',       label: 'AMLS Job# / Permit No' },
+] as const
 
 // ── Progress status indicator ─────────────────────────────────────────────────
 
@@ -128,6 +147,70 @@ function Pagination({ page, totalPages, total, onPage }: {
         )}
         <button onClick={() => onPage(page + 1)} disabled={page === totalPages} className="p-1.5 rounded text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-30">
           <ChevronRight size={15} />
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ── FFD: inline panel — send docs back to customer ───────────────────────────
+
+function InlineSendBackPanel({ shipmentId, blNumber, onDone }: {
+  shipmentId: string
+  blNumber: string
+  onDone: () => void
+}) {
+  const qc = useQueryClient()
+  const [remark, setRemark] = useState('')
+  const [saving, setSaving] = useState(false)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  useEffect(() => { textareaRef.current?.focus() }, [])
+
+  async function submit() {
+    if (!remark.trim()) { toast.error('Please enter a reason'); return }
+    setSaving(true)
+    try {
+      await shipmentsApi.rejectDocs(shipmentId, remark.trim())
+      toast.success('Docs sent back to customer')
+      qc.invalidateQueries({ queryKey: ['shipments'] })
+      onDone()
+    } catch (e: any) {
+      toast.error(e.response?.data?.detail || 'Failed to send back')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="px-5 py-4 bg-red-50 dark:bg-red-900/10 border-t dark:border-gray-700 space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-semibold text-red-700 dark:text-red-400">
+          Send docs back — BL: {blNumber}
+        </p>
+        <button onClick={onDone} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
+          <X size={13} />
+        </button>
+      </div>
+      <textarea
+        ref={textareaRef}
+        value={remark}
+        onChange={e => setRemark(e.target.value)}
+        placeholder="Reason for sending back…"
+        rows={4}
+        onKeyDown={e => { if (e.key === 'Escape') onDone() }}
+        className="w-full text-xs border dark:border-gray-600 rounded-lg px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-red-400 resize-none"
+      />
+      <div className="flex items-center gap-2">
+        <button
+          onClick={submit}
+          disabled={saving || !remark.trim()}
+          className="flex items-center gap-1.5 text-xs bg-red-600 text-white px-3 py-1.5 rounded-lg hover:bg-red-700 disabled:opacity-50 font-medium"
+        >
+          {saving ? 'Sending…' : 'Send Back'}
+        </button>
+        <button onClick={onDone} className="text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 px-2 py-1.5">
+          Cancel
         </button>
       </div>
     </div>
@@ -299,7 +382,7 @@ function InlineAssignPanel({ shipmentId, proUsers, onDone }: {
 
 // ── Priority table (with optional FFD inline assign) ─────────────────────────
 
-function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCustomer, isPRO, isDC, expandedId, onExpand, proUsers, onRefresh }: {
+function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCustomer, isPRO, isDC, expandedId, onExpand, proUsers, onRefresh, sort, onSort, hiddenCols = new Set() }: {
   shipments: ShipmentListItem[]
   page: number
   totalPages: number
@@ -313,14 +396,117 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
   onExpand?: (id: string | null) => void
   proUsers?: { id: string; full_name: string }[]
   onRefresh?: () => void
+  sort: SortState
+  onSort: (col: string) => void
+  hiddenCols?: Set<string>
 }) {
   const qc = useQueryClient()
   const offset = (page - 1) * PAGE_SIZE
-  const colSpan = isFFD ? 13 : 12
+  const colSpan = isFFD ? 12 : (isCustomer || isPRO) ? 14 : 13
 
+  function colCls(key: string, whenVisible: string): string {
+    return hiddenCols.has(key) ? 'hidden' : whenVisible
+  }
   const [editingDateId, setEditingDateId] = useState<string | null>(null)
   const [dateValue, setDateValue] = useState('')
   const [savingDateId, setSavingDateId] = useState<string | null>(null)
+
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [bulkDate, setBulkDate] = useState('')
+  const [savingBulk, setSavingBulk] = useState(false)
+
+  const [selectedProIds, setSelectedProIds] = useState<Set<string>>(new Set())
+  const [savingBulkPayment, setSavingBulkPayment] = useState(false)
+
+  const [downloadingIds, setDownloadingIds] = useState<Set<string>>(new Set())
+  const [approvingIds, setApprovingIds] = useState<Set<string>>(new Set())
+
+  async function handleApproveDocs(shipmentId: string) {
+    setApprovingIds(prev => new Set(prev).add(shipmentId))
+    try {
+      await shipmentsApi.approveDocs(shipmentId)
+      toast.success('Documents approved')
+      qc.invalidateQueries({ queryKey: ['shipments'] })
+    } catch (e: any) {
+      toast.error(e.response?.data?.detail || 'Failed to approve docs')
+    } finally {
+      setApprovingIds(prev => { const next = new Set(prev); next.delete(shipmentId); return next })
+    }
+  }
+
+  async function handleDownloadAll(shipmentId: string, blNumber: string) {
+    setDownloadingIds(prev => new Set(prev).add(shipmentId))
+    try {
+      const { data } = await documentsApi.downloadAll(shipmentId)
+      const url = URL.createObjectURL(new Blob([data], { type: 'application/zip' }))
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `BL_${blNumber}_documents.zip`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch {
+      toast.error('Failed to download documents')
+    } finally {
+      setDownloadingIds(prev => { const next = new Set(prev); next.delete(shipmentId); return next })
+    }
+  }
+
+  function toggleSelect(id: string) {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+
+  function toggleSelectAll(rows: ShipmentListItem[]) {
+    setSelectedIds(prev => prev.size === rows.length ? new Set() : new Set(rows.map(s => s.id)))
+  }
+
+  async function saveBulkDate() {
+    if (!bulkDate || selectedIds.size === 0) return
+    setSavingBulk(true)
+    try {
+      await shipmentsApi.bulkUpdatePullOutDate(Array.from(selectedIds), bulkDate)
+      qc.invalidateQueries({ queryKey: ['shipments'] })
+      const count = selectedIds.size
+      setSelectedIds(new Set())
+      setBulkDate('')
+      toast.success(`${count} pull-out date${count !== 1 ? 's' : ''} updated`)
+    } catch (e: any) {
+      toast.error(e.response?.data?.detail || 'Failed to update dates')
+    } finally {
+      setSavingBulk(false)
+    }
+  }
+
+  function toggleSelectPro(id: string) {
+    setSelectedProIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+
+  function toggleSelectAllPro(rows: ShipmentListItem[]) {
+    setSelectedProIds(prev => prev.size === rows.length ? new Set() : new Set(rows.map(s => s.id)))
+  }
+
+  async function submitBulkBayanPayment() {
+    if (selectedProIds.size === 0) return
+    setSavingBulkPayment(true)
+    try {
+      await shipmentsApi.bulkRequestBayanPayment(Array.from(selectedProIds))
+      qc.invalidateQueries({ queryKey: ['shipments'] })
+      const count = selectedProIds.size
+      setSelectedProIds(new Set())
+      toast.success(`Payment requested for ${count} shipment${count !== 1 ? 's' : ''}`)
+    } catch (e: any) {
+      toast.error(e.response?.data?.detail || 'Failed to send payment request')
+    } finally {
+      setSavingBulkPayment(false)
+    }
+  }
 
   const [editingAmlsId, setEditingAmlsId] = useState<string | null>(null)
   const [amlsValue, setAmlsValue] = useState('')
@@ -340,6 +526,24 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
     }
   }
 
+  const [editingPermitId, setEditingPermitId] = useState<string | null>(null)
+  const [permitRefValue, setPermitRefValue] = useState('')
+  const [savingPermitId, setSavingPermitId] = useState<string | null>(null)
+
+  async function savePermitRef(shipmentId: string) {
+    setSavingPermitId(shipmentId)
+    try {
+      await shipmentsApi.setPermitRef(shipmentId, permitRefValue.trim() || null)
+      toast.success('Permit No updated')
+      qc.invalidateQueries({ queryKey: ['shipments'] })
+      setEditingPermitId(null)
+    } catch (e: any) {
+      toast.error(e.response?.data?.detail || 'Failed to update Permit No')
+    } finally {
+      setSavingPermitId(null)
+    }
+  }
+
   async function savePullOutDate(shipmentId: string) {
     if (!dateValue) return
     setSavingDateId(shipmentId)
@@ -355,27 +559,16 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
     }
   }
 
-  const { sorted, sort, toggle } = useSortable(shipments, (s, col) => {
-    switch (col) {
-      case 'bl':       return s.bl_number
-      case 'invoice':  return s.invoice_number
-      case 'stage':    return s.current_stage
-      case 'pull_out': return s.pull_out_date
-      case 'time':     return s.pull_out_date
-      default:         return null
-    }
-  })
-
   const pendingPayments = isCustomer
-    ? sorted.filter(s => s.bayan_payment_pending && s.bayan_payment_task_id)
+    ? shipments.filter(s => s.bayan_payment_pending && s.bayan_payment_task_id)
     : []
   const displaySorted = isCustomer && pendingPayments.length > 0
-    ? [...sorted].sort((a, b) => {
+    ? [...shipments].sort((a, b) => {
         if (a.bayan_payment_pending && !b.bayan_payment_pending) return -1
         if (!a.bayan_payment_pending && b.bayan_payment_pending) return 1
         return 0
       })
-    : sorted
+    : shipments
 
   async function confirmPayment(shipmentId: string, taskId: string) {
     try {
@@ -421,17 +614,38 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
         <table className="w-full text-sm">
           <thead className="bg-gray-50 dark:bg-gray-700 border-b dark:border-gray-600">
             <tr>
+              {isCustomer && (
+                <th className="px-3 py-3 w-10">
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.size === displaySorted.length && displaySorted.length > 0}
+                    onChange={() => toggleSelectAll(displaySorted)}
+                    className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                  />
+                </th>
+              )}
+              {isPRO && (
+                <th className="px-3 py-3 w-10">
+                  <input
+                    type="checkbox"
+                    checked={selectedProIds.size === displaySorted.length && displaySorted.length > 0}
+                    onChange={() => toggleSelectAllPro(displaySorted)}
+                    className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                  />
+                </th>
+              )}
               <th className="text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">#</th>
-              <SortableHeader label="BL Number"    column="bl"       sort={sort} onSort={toggle} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
-              <SortableHeader label="Invoice"      column="invoice"  sort={sort} onSort={toggle} className="hidden md:table-cell px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
-              <th className="hidden lg:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap">Consignee</th>
-              <SortableHeader label={isPRO ? 'My Task' : 'Stage'} column="stage" sort={sort} onSort={toggle} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
-              <th className="text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap">Progress</th>
-              <SortableHeader label="Pull-out Date" column="pull_out" sort={sort} onSort={toggle} className="hidden md:table-cell px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
-              <SortableHeader label="Time Left"    column="time"     sort={sort} onSort={toggle} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
-              <th className="hidden xl:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap">ETA to Port</th>
-              <th className="hidden xl:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap">DO Validity</th>
-              <th className="hidden lg:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap">AMLS Job#</th>
+              <SortableHeader label="BL Number"    column="bl"       sort={sort} onSort={onSort} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
+              <SortableHeader label="Invoice"      column="invoice"  sort={sort} onSort={onSort} className={colCls('invoice', 'hidden md:table-cell px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide')} />
+              {!isFFD && <th className={colCls('consignee', 'hidden lg:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>Consignee</th>}
+              <th className={colCls('port', 'hidden xl:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>Port of Loading</th>
+              <th className={colCls('bayan_type', 'hidden xl:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>Bayan Type</th>
+              <SortableHeader label={isPRO ? 'My Task' : 'Stage'} column="stage" sort={sort} onSort={onSort} className={colCls('stage', 'px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide')} />
+              <th className={colCls('progress', 'text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>Progress</th>
+              <SortableHeader label="Planned Pull out" column="pull_out" sort={sort} onSort={onSort} className={colCls('pull_out', 'hidden md:table-cell px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide')} />
+              <th className={colCls('eta', 'hidden xl:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>ETA to Port</th>
+              <th className={colCls('do_validity', 'hidden xl:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>DO Validity</th>
+              <th className={colCls('amls', 'hidden lg:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>{isPRO ? 'Permit No' : 'AMLS Job#'}</th>
               <th />
               {isFFD && <th />}
             </tr>
@@ -446,6 +660,7 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
               const isOverdue = u.days !== null && u.days < 0
               const isExpanded = expandedId === s.id
               const showAssignBtn = isFFD && s.current_stage === 'IN_PROGRESS'
+              const showReviewBtn = isFFD && s.current_stage === 'FFD_REVIEW'
               const showPaymentBtn = isCustomer && s.bayan_payment_pending && s.bayan_payment_task_id
 
               return (
@@ -459,6 +674,26 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                       isExpanded && '!bg-blue-50 dark:!bg-blue-900/10',
                     )}
                   >
+                    {isCustomer && (
+                      <td className="px-3 py-3">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(s.id)}
+                          onChange={() => toggleSelect(s.id)}
+                          className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                        />
+                      </td>
+                    )}
+                    {isPRO && (
+                      <td className="px-3 py-3">
+                        <input
+                          type="checkbox"
+                          checked={selectedProIds.has(s.id)}
+                          onChange={() => toggleSelectPro(s.id)}
+                          className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                        />
+                      </td>
+                    )}
                     <td className="px-3 py-3">
                       <div className="flex items-center gap-1.5">
                         {isOverdue && <AlertTriangle size={14} className="text-red-500" />}
@@ -467,11 +702,19 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                       </div>
                     </td>
                     <td className="px-3 py-3 font-semibold text-gray-900 dark:text-white">{s.bl_number}</td>
-                    <td className="hidden md:table-cell px-3 py-3 text-gray-500 dark:text-gray-400">{s.invoice_number}</td>
-                    <td className="hidden lg:table-cell px-3 py-3 text-sm text-gray-600 dark:text-gray-300 max-w-[160px]">
-                      <span className="truncate block" title={s.consignee_name ?? undefined}>{s.consignee_name ?? <span className="text-gray-400 dark:text-gray-500 italic text-xs">—</span>}</span>
+                    <td className={colCls('invoice', 'hidden md:table-cell px-3 py-3 text-gray-500 dark:text-gray-400')}>{s.invoice_number}</td>
+                    {!isFFD && (
+                      <td className={colCls('consignee', 'hidden lg:table-cell px-3 py-3 text-sm text-gray-600 dark:text-gray-300 max-w-[160px]')}>
+                        <span className="truncate block" title={s.consignee_name ?? undefined}>{s.consignee_name ?? <span className="text-gray-400 dark:text-gray-500 italic text-xs">—</span>}</span>
+                      </td>
+                    )}
+                    <td className={colCls('port', 'hidden xl:table-cell px-3 py-3 text-xs text-gray-600 dark:text-gray-300 whitespace-nowrap')}>
+                      {s.loading_port_name || <span className="text-gray-400">—</span>}
                     </td>
-                    <td className="px-3 py-3">
+                    <td className={colCls('bayan_type', 'hidden xl:table-cell px-3 py-3 text-xs text-gray-600 dark:text-gray-300 whitespace-nowrap')}>
+                      {s.bayan_type_name || <span className="text-gray-400">—</span>}
+                    </td>
+                    <td className={colCls('stage', 'px-3 py-3')}>
                       {isPRO && s.current_stage === 'IN_PROGRESS' ? (
                         <div className="flex flex-col gap-1">
                           {s.permit_status && s.permit_status !== 'COMPLETED' && (
@@ -538,10 +781,10 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                         </span>
                       )}
                     </td>
-                    <td className="px-3 py-3">
+                    <td className={colCls('progress', 'px-3 py-3')}>
                       <ProgressCell s={s} />
                     </td>
-                    <td className="hidden md:table-cell px-3 py-3 text-gray-600 dark:text-gray-300">
+                    <td className={colCls('pull_out', 'hidden md:table-cell px-3 py-3 text-gray-600 dark:text-gray-300')}>
                       {isCustomer && editingDateId === s.id ? (
                         <div className="flex items-center gap-1">
                           <input
@@ -586,11 +829,10 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                         </div>
                       )}
                     </td>
-                    <td className={clsx('px-3 py-3 text-xs', u.color)}>{u.label}</td>
-                    <td className="hidden xl:table-cell px-3 py-3 text-xs text-gray-600 dark:text-gray-300 whitespace-nowrap">
+                    <td className={colCls('eta', 'hidden xl:table-cell px-3 py-3 text-xs text-gray-600 dark:text-gray-300 whitespace-nowrap')}>
                       {formatDate(s.eta_at_port)}
                     </td>
-                    <td className="hidden xl:table-cell px-3 py-3 whitespace-nowrap">
+                    <td className={colCls('do_validity', 'hidden xl:table-cell px-3 py-3 whitespace-nowrap')}>
                       {s.do_validity_date ? (
                         <span className={clsx('text-xs', doValidityStyle(s.do_validity_date).color)}>
                           {formatDate(s.do_validity_date)}
@@ -599,8 +841,52 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                         <span className="text-xs text-gray-400">—</span>
                       )}
                     </td>
-                    <td className="hidden lg:table-cell px-3 py-3">
-                      {isFFD && editingAmlsId === s.id ? (
+                    <td className={colCls('amls', 'hidden lg:table-cell px-3 py-3')}>
+                      {isPRO ? (
+                        editingPermitId === s.id ? (
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="text"
+                              value={permitRefValue}
+                              onChange={e => setPermitRefValue(e.target.value)}
+                              autoFocus
+                              placeholder="Permit No…"
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') savePermitRef(s.id)
+                                if (e.key === 'Escape') setEditingPermitId(null)
+                              }}
+                              className="text-xs border dark:border-gray-600 rounded px-2 py-1 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500 w-24"
+                            />
+                            <button
+                              onClick={() => savePermitRef(s.id)}
+                              disabled={savingPermitId === s.id}
+                              className="p-1 text-green-600 hover:text-green-700 disabled:opacity-40"
+                              title="Save"
+                            >
+                              <CheckCircle size={14} />
+                            </button>
+                            <button
+                              onClick={() => setEditingPermitId(null)}
+                              disabled={savingPermitId === s.id}
+                              className="p-1 text-gray-400 hover:text-gray-600 disabled:opacity-40"
+                              title="Cancel"
+                            >
+                              <X size={12} />
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => { setEditingPermitId(s.id); setPermitRefValue(s.permit_ref ?? '') }}
+                            className="flex items-center gap-1 text-left border border-dashed border-gray-300 dark:border-gray-600 hover:border-blue-400 dark:hover:border-blue-500 rounded px-1.5 py-0.5 transition-colors group/permit"
+                            title="Edit Permit No"
+                          >
+                            <span className="text-xs text-gray-600 dark:text-gray-300">
+                              {s.permit_ref || <span className="text-gray-400 italic">—</span>}
+                            </span>
+                            <Pencil size={10} className="text-gray-400 group-hover/permit:text-blue-500 shrink-0 transition-colors" />
+                          </button>
+                        )
+                      ) : isFFD && editingAmlsId === s.id ? (
                         <div className="flex items-center gap-1">
                           <input
                             type="text"
@@ -631,21 +917,21 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                             <X size={12} />
                           </button>
                         </div>
-                      ) : (
-                        <div className="flex items-center gap-1.5 group/amls">
+                      ) : isFFD ? (
+                        <button
+                          onClick={() => { setEditingAmlsId(s.id); setAmlsValue(s.amls_job_number ?? '') }}
+                          className="flex items-center gap-1 text-left border border-dashed border-gray-300 dark:border-gray-600 hover:border-blue-400 dark:hover:border-blue-500 rounded px-1.5 py-0.5 transition-colors group/amls"
+                          title="Edit AMLS Job#"
+                        >
                           <span className="text-xs text-gray-600 dark:text-gray-300">
-                            {s.amls_job_number || <span className="text-gray-400">—</span>}
+                            {s.amls_job_number || <span className="text-gray-400 italic">—</span>}
                           </span>
-                          {isFFD && (
-                            <button
-                              onClick={() => { setEditingAmlsId(s.id); setAmlsValue(s.amls_job_number ?? '') }}
-                              className="opacity-0 group-hover/amls:opacity-100 transition-opacity p-0.5 text-gray-400 hover:text-blue-600"
-                              title="Edit AMLS Job#"
-                            >
-                              <Pencil size={11} />
-                            </button>
-                          )}
-                        </div>
+                          <Pencil size={10} className="text-gray-400 group-hover/amls:text-blue-500 shrink-0 transition-colors" />
+                        </button>
+                      ) : (
+                        <span className="text-xs text-gray-600 dark:text-gray-300">
+                          {s.amls_job_number || <span className="text-gray-400">—</span>}
+                        </span>
                       )}
                     </td>
                     <td className="px-3 py-3">
@@ -658,6 +944,16 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                             <DollarSign size={11} /> Confirm Payment
                           </button>
                         )}
+                        <button
+                          onClick={() => handleDownloadAll(s.id, s.bl_number)}
+                          disabled={downloadingIds.has(s.id)}
+                          title="Download all documents"
+                          className="text-gray-400 hover:text-blue-600 disabled:opacity-40 transition-colors"
+                        >
+                          {downloadingIds.has(s.id)
+                            ? <Loader2 size={14} className="animate-spin" />
+                            : <Download size={14} />}
+                        </button>
                         <Link to={`/shipments/${s.id}`} className="text-blue-600 hover:underline text-xs whitespace-nowrap">
                           View →
                         </Link>
@@ -665,6 +961,30 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                     </td>
                     {isFFD && (
                       <td className="px-3 py-3">
+                        {showReviewBtn && (
+                          <div className="flex flex-col gap-1">
+                            <button
+                              onClick={() => handleApproveDocs(s.id)}
+                              disabled={approvingIds.has(s.id)}
+                              className="flex items-center gap-1 text-xs bg-green-600 text-white px-2.5 py-1.5 rounded-lg hover:bg-green-700 disabled:opacity-50 font-medium whitespace-nowrap"
+                            >
+                              {approvingIds.has(s.id) ? <Loader2 size={11} className="animate-spin" /> : <CheckCircle size={11} />}
+                              Approve
+                            </button>
+                            <button
+                              onClick={() => onExpand?.(isExpanded ? null : s.id)}
+                              className={clsx(
+                                'flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border font-medium transition-colors whitespace-nowrap',
+                                isExpanded
+                                  ? 'bg-red-600 text-white border-red-600'
+                                  : 'border-red-200 dark:border-red-700 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20'
+                              )}
+                            >
+                              Send Back
+                              {isExpanded ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+                            </button>
+                          </div>
+                        )}
                         {showAssignBtn && (
                           <button
                             onClick={() => onExpand?.(isExpanded ? null : s.id)}
@@ -683,7 +1003,18 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                       </td>
                     )}
                   </tr>
-                  {isExpanded && proUsers && (
+                  {isExpanded && showReviewBtn && (
+                    <tr key={`${s.id}-sendback`}>
+                      <td colSpan={colSpan} className="p-0">
+                        <InlineSendBackPanel
+                          shipmentId={s.id}
+                          blNumber={s.bl_number}
+                          onDone={() => onExpand?.(null)}
+                        />
+                      </td>
+                    </tr>
+                  )}
+                  {isExpanded && showAssignBtn && proUsers && (
                     <tr key={`${s.id}-panel`}>
                       <td colSpan={colSpan} className="p-0">
                         <InlineAssignPanel
@@ -703,6 +1034,62 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
       <div className="px-5 py-3">
         <Pagination page={page} totalPages={totalPages} total={total} onPage={onPage} />
       </div>
+
+      {isCustomer && selectedIds.size > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none">
+          <div className="flex items-center gap-3 bg-gray-900 dark:bg-gray-700 text-white px-5 py-3 rounded-2xl shadow-xl border border-gray-700 dark:border-gray-600 pointer-events-auto">
+            <span className="text-sm">
+              <span className="font-semibold text-blue-400">{selectedIds.size}</span>
+              {' '}shipment{selectedIds.size !== 1 ? 's' : ''} selected
+            </span>
+            <input
+              type="date"
+              value={bulkDate}
+              onChange={e => setBulkDate(e.target.value)}
+              className="text-xs border border-gray-600 rounded px-2 py-1.5 bg-gray-800 text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+            />
+            <button
+              onClick={saveBulkDate}
+              disabled={!bulkDate || savingBulk}
+              className="flex items-center gap-1.5 text-xs bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-4 py-1.5 rounded-lg font-medium"
+            >
+              <CheckCircle size={13} />
+              {savingBulk ? 'Saving…' : 'Set Pull-out Date'}
+            </button>
+            <button
+              onClick={() => { setSelectedIds(new Set()); setBulkDate('') }}
+              className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-200 px-2 py-1 rounded hover:bg-gray-800 dark:hover:bg-gray-600"
+            >
+              <X size={13} /> Clear
+            </button>
+          </div>
+        </div>
+      )}
+
+      {isPRO && selectedProIds.size > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none">
+          <div className="flex items-center gap-3 bg-gray-900 dark:bg-gray-700 text-white px-5 py-3 rounded-2xl shadow-xl border border-gray-700 dark:border-gray-600 pointer-events-auto">
+            <span className="text-sm">
+              <span className="font-semibold text-blue-400">{selectedProIds.size}</span>
+              {' '}shipment{selectedProIds.size !== 1 ? 's' : ''} selected
+            </span>
+            <button
+              onClick={submitBulkBayanPayment}
+              disabled={savingBulkPayment}
+              className="flex items-center gap-1.5 text-xs bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white px-4 py-1.5 rounded-lg font-medium"
+            >
+              <DollarSign size={13} />
+              {savingBulkPayment ? 'Sending…' : 'Request Bayan Payment'}
+            </button>
+            <button
+              onClick={() => setSelectedProIds(new Set())}
+              className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-200 px-2 py-1 rounded hover:bg-gray-800 dark:hover:bg-gray-600"
+            >
+              <X size={13} /> Clear
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -734,46 +1121,63 @@ export function ShipmentList() {
   const [amlsSearch, setAmlsSearch] = useState('')
   const [debouncedAmlsSearch, setDebouncedAmlsSearch] = useState('')
   const [missingAmls, setMissingAmls] = useState(false)
-  const [pendingDates, setPendingDates] = useState<Record<string, string>>({})
-  const [savingDates, setSavingDates] = useState(false)
+  const [pullOutFrom, setPullOutFrom] = useState('')
+  const [pullOutTo, setPullOutTo] = useState('')
   const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [showBulkBayan, setShowBulkBayan] = useState(false)
+  const [showBulkPermit, setShowBulkPermit] = useState(false)
+  const [showBulkDO, setShowBulkDO] = useState(false)
+  const [showBulkCcro, setShowBulkCcro] = useState(false)
+  const [sort, setSort] = useState<SortState>({ column: null, dir: 'asc' })
+  const toggleSort = useCallback((column: string) => {
+    setSort(s => ({ column, dir: s.column === column && s.dir === 'asc' ? 'desc' : 'asc' }))
+    setPage(1)
+  }, [])
+
+  const [hiddenCols, setHiddenCols] = useState<Set<string>>(new Set())
+  const [showColPicker, setShowColPicker] = useState(false)
+  const colPickerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!user?.id) return
+    try {
+      const stored = localStorage.getItem(`col_prefs_${user.id}`)
+      if (stored) setHiddenCols(new Set(JSON.parse(stored) as string[]))
+    } catch { /* ignore */ }
+  }, [user?.id])
+
+  useEffect(() => {
+    if (!showColPicker) return
+    function handleOutside(e: MouseEvent) {
+      if (colPickerRef.current && !colPickerRef.current.contains(e.target as Node)) {
+        setShowColPicker(false)
+      }
+    }
+    document.addEventListener('mousedown', handleOutside)
+    return () => document.removeEventListener('mousedown', handleOutside)
+  }, [showColPicker])
+
+  function toggleCol(key: string) {
+    setHiddenCols(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      try { localStorage.setItem(`col_prefs_${user!.id}`, JSON.stringify([...next])) } catch { /* ignore */ }
+      return next
+    })
+  }
+
+  function colCls(key: string, whenVisible: string): string {
+    return hiddenCols.has(key) ? 'hidden' : whenVisible
+  }
 
   // PRO users list — only needed for FFD inline assignment
+
   const { data: proUsers = [] } = useQuery({
     queryKey: ['team-members', 'PRO'],
     queryFn: () => authApi.listTeamMembers('PRO').then(r => r.data),
     enabled: isFFD,
   })
-
-  const pendingCount = Object.keys(pendingDates).length
-
-  function handleDateChange(id: string, date: string) {
-    setPendingDates(prev => {
-      const item = items.find(s => s.id === id)
-      if (date === (item?.pull_out_date ?? '')) {
-        const { [id]: _, ...rest } = prev
-        return rest
-      }
-      return { ...prev, [id]: date }
-    })
-  }
-
-  async function saveAllDates() {
-    setSavingDates(true)
-    const entries = Object.entries(pendingDates)
-    const results = await Promise.allSettled(
-      entries.map(([id, date]) => shipmentsApi.update(id, { pull_out_date: date }))
-    )
-    const failed    = results.filter(r => r.status === 'rejected').length
-    const succeeded = results.filter(r => r.status === 'fulfilled').length
-    if (succeeded > 0) {
-      qc.invalidateQueries({ queryKey: ['shipments'] })
-      setPendingDates({})
-      toast.success(`${succeeded} pull-out date${succeeded !== 1 ? 's' : ''} updated`)
-    }
-    if (failed > 0) toast.error(`${failed} update${failed !== 1 ? 's' : ''} failed`)
-    setSavingDates(false)
-  }
 
   async function handleBlExport() {
     try {
@@ -784,6 +1188,8 @@ export function ShipmentList() {
         missing_date: missingDate || undefined,
         amls_search: debouncedAmlsSearch || undefined,
         missing_amls: missingAmls || undefined,
+        pull_out_from: pullOutFrom || undefined,
+        pull_out_to: pullOutTo || undefined,
       })
       const url = URL.createObjectURL(new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
       const a = document.createElement('a')
@@ -810,13 +1216,13 @@ export function ShipmentList() {
   useEffect(() => {
     if (isFirstRender.current) { isFirstRender.current = false; return }
     setPage(1)
-  }, [debouncedSearch, stageFilter, missingDate, debouncedAmlsSearch, missingAmls])
+  }, [debouncedSearch, stageFilter, missingDate, debouncedAmlsSearch, missingAmls, pullOutFrom, pullOutTo])
 
   const skip = (page - 1) * PAGE_SIZE
   const isMyQueue = stageFilter === 'my_queue'
 
   const { data, isLoading } = useQuery({
-    queryKey: ['shipments', skip, debouncedSearch, stageFilter, missingDate, debouncedAmlsSearch, missingAmls],
+    queryKey: ['shipments', skip, debouncedSearch, stageFilter, missingDate, debouncedAmlsSearch, missingAmls, pullOutFrom, pullOutTo, sort.column, sort.dir],
     queryFn: () => shipmentsApi.list({
       skip,
       limit: PAGE_SIZE,
@@ -826,6 +1232,10 @@ export function ShipmentList() {
       missing_date: missingDate || undefined,
       amls_search: debouncedAmlsSearch || undefined,
       missing_amls: missingAmls || undefined,
+      pull_out_from: pullOutFrom || undefined,
+      pull_out_to: pullOutTo || undefined,
+      sort_by: sort.column || undefined,
+      sort_dir: sort.column ? sort.dir : undefined,
     }).then(r => r.data),
     placeholderData: prev => prev,
   })
@@ -838,12 +1248,71 @@ export function ShipmentList() {
     <div>
       <div className="flex items-center justify-between mb-5">
         <h1 className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white">All Shipments</h1>
-        {user?.team === 'CUSTOMER' && (
-          <Link to="/shipments/new" className="flex items-center gap-2 bg-blue-600 text-white px-3 sm:px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 whitespace-nowrap">
-            <Plus size={16} /> <span className="hidden sm:inline">New Shipment</span><span className="sm:hidden">New</span>
-          </Link>
-        )}
+        <div className="flex items-center gap-2">
+          {isPRO && (
+            <button
+              onClick={() => setShowBulkPermit(true)}
+              className="flex items-center gap-2 bg-green-600 text-white px-3 sm:px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-700 whitespace-nowrap"
+            >
+              <Files size={16} /> <span className="hidden sm:inline">Bulk Upload Permits</span><span className="sm:hidden">Permits</span>
+            </button>
+          )}
+          {isPRO && (
+            <button
+              onClick={() => setShowBulkBayan(true)}
+              className="flex items-center gap-2 bg-blue-600 text-white px-3 sm:px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 whitespace-nowrap"
+            >
+              <Files size={16} /> <span className="hidden sm:inline">Bulk Upload Bayans</span><span className="sm:hidden">Bayans</span>
+            </button>
+          )}
+          {isFFD && (
+            <>
+              <button
+                onClick={() => setShowBulkDO(true)}
+                className="flex items-center gap-2 bg-purple-600 text-white px-3 sm:px-4 py-2 rounded-lg text-sm font-medium hover:bg-purple-700 whitespace-nowrap"
+              >
+                <Files size={16} /> <span className="hidden sm:inline">Bulk Upload DOs</span><span className="sm:hidden">DOs</span>
+              </button>
+              <button
+                onClick={() => setShowBulkCcro(true)}
+                className="flex items-center gap-2 bg-teal-600 text-white px-3 sm:px-4 py-2 rounded-lg text-sm font-medium hover:bg-teal-700 whitespace-nowrap"
+              >
+                <Files size={16} /> <span className="hidden sm:inline">Bulk Upload CCROs</span><span className="sm:hidden">CCROs</span>
+              </button>
+            </>
+          )}
+          {user?.team === 'CUSTOMER' && (
+            <Link to="/shipments/new" className="flex items-center gap-2 bg-blue-600 text-white px-3 sm:px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 whitespace-nowrap">
+              <Plus size={16} /> <span className="hidden sm:inline">New Shipment</span><span className="sm:hidden">New</span>
+            </Link>
+          )}
+        </div>
       </div>
+
+      {showBulkBayan && (
+        <BulkBayanUploadModal
+          onClose={() => setShowBulkBayan(false)}
+          onDone={() => qc.invalidateQueries({ queryKey: ['shipments'] })}
+        />
+      )}
+      {showBulkPermit && (
+        <BulkPermitUploadModal
+          onClose={() => setShowBulkPermit(false)}
+          onDone={() => qc.invalidateQueries({ queryKey: ['shipments'] })}
+        />
+      )}
+      {showBulkDO && (
+        <BulkDOUploadModal
+          onClose={() => setShowBulkDO(false)}
+          onDone={() => qc.invalidateQueries({ queryKey: ['shipments'] })}
+        />
+      )}
+      {showBulkCcro && (
+        <BulkCcroUploadModal
+          onClose={() => setShowBulkCcro(false)}
+          onDone={() => qc.invalidateQueries({ queryKey: ['shipments'] })}
+        />
+      )}
 
       {/* PRO: My Tasks / All quick-filter chips */}
       {isPRO && (
@@ -941,6 +1410,28 @@ export function ShipmentList() {
             No date
           </button>
 
+          <div className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
+            <span>Pull-out from</span>
+            <input
+              type="date"
+              value={pullOutFrom}
+              onChange={e => setPullOutFrom(e.target.value)}
+              className="border dark:border-gray-600 rounded px-2 py-1.5 bg-white dark:bg-gray-800 dark:text-white text-xs"
+            />
+            <span>to</span>
+            <input
+              type="date"
+              value={pullOutTo}
+              onChange={e => setPullOutTo(e.target.value)}
+              className="border dark:border-gray-600 rounded px-2 py-1.5 bg-white dark:bg-gray-800 dark:text-white text-xs"
+            />
+            {(pullOutFrom || pullOutTo) && (
+              <button onClick={() => { setPullOutFrom(''); setPullOutTo('') }} className="text-gray-400 hover:text-red-500">
+                <X size={13} />
+              </button>
+            )}
+          </div>
+
           <div className="relative">
             <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
             <input
@@ -960,16 +1451,65 @@ export function ShipmentList() {
                 : 'border-gray-300 dark:border-gray-600 text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700'
             )}
           >
-            No AMLS
+            No Job#
           </button>
 
-          <button
-            onClick={handleBlExport}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-green-300 dark:border-green-700 text-green-700 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors whitespace-nowrap ml-auto"
-          >
-            <FileSpreadsheet size={14} />
-            Export to Excel
-          </button>
+          <div className="flex items-center gap-2 ml-auto">
+            <div className="relative" ref={colPickerRef}>
+              <button
+                onClick={() => setShowColPicker(v => !v)}
+                className={clsx(
+                  'flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border transition-colors whitespace-nowrap',
+                  showColPicker || hiddenCols.size > 0
+                    ? 'bg-blue-50 border-blue-300 text-blue-700 dark:bg-blue-900/20 dark:border-blue-600 dark:text-blue-400'
+                    : 'border-gray-300 dark:border-gray-600 text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700'
+                )}
+              >
+                <SlidersHorizontal size={14} />
+                Columns
+                {hiddenCols.size > 0 && (
+                  <span className="ml-0.5 bg-blue-600 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center font-medium leading-none">
+                    {hiddenCols.size}
+                  </span>
+                )}
+              </button>
+              {showColPicker && (
+                <div className="absolute right-0 top-full mt-1 z-20 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg p-3 min-w-[190px]">
+                  <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-2 uppercase tracking-wide">Visible columns</p>
+                  {ALL_COLUMNS.map(col => (
+                    <label key={col.key} className="flex items-center gap-2 py-1 cursor-pointer hover:text-gray-900 dark:hover:text-white">
+                      <input
+                        type="checkbox"
+                        checked={!hiddenCols.has(col.key)}
+                        onChange={() => toggleCol(col.key)}
+                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      <span className="text-sm text-gray-700 dark:text-gray-300">{col.label}</span>
+                    </label>
+                  ))}
+                  {hiddenCols.size > 0 && (
+                    <button
+                      onClick={() => {
+                        setHiddenCols(new Set())
+                        try { localStorage.removeItem(`col_prefs_${user!.id}`) } catch { /* ignore */ }
+                      }}
+                      className="mt-2 w-full text-xs text-center text-blue-600 dark:text-blue-400 hover:underline"
+                    >
+                      Reset to default
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <button
+              onClick={handleBlExport}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-green-300 dark:border-green-700 text-green-700 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors whitespace-nowrap"
+            >
+              <FileSpreadsheet size={14} />
+              Export to Excel
+            </button>
+          </div>
         </div>
       )}
 
@@ -1012,27 +1552,12 @@ export function ShipmentList() {
           onExpand={setExpandedId}
           proUsers={proUsers as { id: string; full_name: string }[]}
           onRefresh={() => qc.invalidateQueries({ queryKey: ['shipments'] })}
+          sort={sort}
+          onSort={toggleSort}
+          hiddenCols={hiddenCols}
         />
       )}
 
-      {/* Sticky save bar for customer pull-out date edits */}
-      {pendingCount > 0 && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50">
-          <div className="flex items-center gap-3 bg-gray-900 dark:bg-gray-700 text-white px-5 py-3 rounded-2xl shadow-xl border border-gray-700 dark:border-gray-600">
-            <span className="text-sm">
-              <span className="font-semibold text-blue-400">{pendingCount}</span>
-              {' '}pull-out date{pendingCount !== 1 ? 's' : ''} edited
-            </span>
-            <button onClick={() => setPendingDates({})} className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-200 px-2 py-1 rounded hover:bg-gray-800 dark:hover:bg-gray-600">
-              <X size={13} /> Discard
-            </button>
-            <button onClick={saveAllDates} disabled={savingDates} className="flex items-center gap-1.5 text-xs bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-4 py-1.5 rounded-lg font-medium">
-              <Save size={13} />
-              {savingDates ? 'Saving…' : `Save ${pendingCount > 1 ? `${pendingCount} changes` : 'change'}`}
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

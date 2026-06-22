@@ -18,5 +18,52 @@ class DocumentOut(BaseModel):
     uploaded_at: datetime
 
 
+class DocumentUploadOut(DocumentOut):
+    bl_warning: str | None = None
+
+
 class DocumentUrlOut(BaseModel):
     url: str
+
+
+class BayanAnalysisItem(BaseModel):
+    filename: str
+    detected_bl: str | None
+    shipment_id: UUID | None
+    bl_number: str | None
+    bayan_type_name: str | None
+    matched: bool
+    has_existing_doc: bool = False
+
+
+class PermitAnalysisItem(BaseModel):
+    filename: str
+    detected_permit: str | None
+    shipment_id: UUID | None
+    bl_number: str | None
+    permit_ref: str | None
+    matched: bool
+    has_existing_doc: bool = False
+
+
+class DOAnalysisItem(BaseModel):
+    filename: str
+    detected_bl: str | None
+    detected_date: str | None  # ISO date YYYY-MM-DD or None
+    shipment_id: UUID | None
+    bl_number: str | None
+    matched: bool
+    has_existing_doc: bool = False
+
+
+class CcroAnalysisItem(BaseModel):
+    filename: str
+    detected_bl: str | None
+    detected_container: str | None
+    shipment_id: UUID | None
+    bl_number: str | None
+    container_count: int | None
+    matched: bool
+    has_existing_doc: bool = False
+    conflict_bl: str | None = None
+    has_active_ccro_task: bool = False

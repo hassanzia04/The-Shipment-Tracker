@@ -119,12 +119,15 @@ export interface Shipment {
   pull_out_date: string | null
   product_type_id: string | null
   loading_port_id: string | null
+  shipping_line_id: string | null
   rop_inspection_type_id: string | null
   offloading_point_id: string | null
   created_at: string
   updated_at: string
   completed_at: string | null
   do_validity_date: string | null
+  permit_ref: string | null
+  permit_not_required: boolean
   container_count: number | null
   amls_job_number: string | null
   offloading_point_name: string | null
@@ -166,9 +169,12 @@ export interface ShipmentListItem {
   dc_health_cert_missing: boolean
   dn_missing: boolean
   amls_job_number: string | null
+  permit_ref: string | null
   do_validity_date: string | null
   eta_at_port: string | null
   consignee_name: string | null
+  loading_port_name: string | null
+  bayan_type_name: string | null
 }
 
 export interface ContainerViewItem {
@@ -201,6 +207,8 @@ export interface ContainerViewItem {
   outsourced_expected_arrival_at: string | null
   outsourced_plate_number: string | null
   outsourced_driver_name: string | null
+  loading_port_name: string | null
+  bayan_type_name: string | null
 }
 
 export interface OutsourcedTruck {

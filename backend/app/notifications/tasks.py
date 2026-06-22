@@ -23,6 +23,32 @@ def send_email_task(self, to: str | list[str], subject: str, html_body: str, cc:
         raise self.retry(exc=exc)
 
 
+@celery_app.task(
+    bind=True,
+    name="notifications.send_email_with_attachments",
+    max_retries=3,
+    default_retry_delay=60,
+)
+def send_email_with_attachments_task(
+    self,
+    to: str | list[str],
+    subject: str,
+    html_body: str,
+    attachment_specs: list[dict],
+    cc: list[str] | None = None,
+) -> None:
+    """Send an email with pre-fetched PDF attachments. attachment_specs is a list of {filename, data_b64}."""
+    import base64
+    try:
+        from app.notifications.providers.gmail import get_email_provider
+        attachments = [(s["filename"], base64.b64decode(s["data_b64"])) for s in attachment_specs if s.get("data_b64")]
+        provider = get_email_provider()
+        asyncio.run(provider.send(to, subject, html_body, cc=cc or None, attachments=attachments or None))
+    except Exception as exc:
+        logger.error("Email with attachments failed to %s: %s", to, exc, exc_info=True)
+        raise self.retry(exc=exc)
+
+
 @celery_app.task(name="notifications.check_daily_report")
 def check_and_send_daily_report() -> None:
     """Runs every 5 minutes via Celery Beat. Sends the daily report once per day at the configured time."""

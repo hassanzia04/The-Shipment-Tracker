@@ -129,7 +129,7 @@ export function Layout({ children }: Props) {
   )
 
   return (
-    <div className="min-h-screen flex bg-gray-50 dark:bg-gray-900">
+    <div className="h-screen flex bg-gray-50 dark:bg-gray-900">
 
       {/* Mobile backdrop */}
       {open && (
@@ -167,7 +167,7 @@ export function Layout({ children }: Props) {
         </header>
 
         <main className="flex-1 overflow-auto">
-          <div className="max-w-[1600px] mx-auto px-4 sm:px-6 py-6 sm:py-8 pb-24 lg:pb-8">
+          <div className="max-w-[1920px] mx-auto px-4 sm:px-6 py-6 sm:py-8 pb-24 lg:pb-8">
             {children}
           </div>
         </main>

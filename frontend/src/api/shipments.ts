@@ -8,8 +8,15 @@ export interface PaginatedShipments {
   limit: number
 }
 
+export interface PaginatedContainerView {
+  items: ContainerViewItem[]
+  total: number
+  skip: number
+  limit: number
+}
+
 export const shipmentsApi = {
-  list: (params?: { skip?: number; limit?: number; search?: string; stage?: string; my_queue?: boolean; missing_date?: boolean; amls_search?: string; missing_amls?: boolean }) =>
+  list: (params?: { skip?: number; limit?: number; search?: string; stage?: string; my_queue?: boolean; task_type_filter?: string; missing_date?: boolean; amls_search?: string; missing_amls?: boolean; pull_out_from?: string; pull_out_to?: string; sort_by?: string; sort_dir?: string }) =>
     api.get<PaginatedShipments>('/shipments', { params }),
 
   get: (id: string) => api.get<Shipment>(`/shipments/${id}`),
@@ -30,11 +37,18 @@ export const shipmentsApi = {
   }) => api.post<Shipment>('/shipments', data),
 
   update: (id: string, data: Partial<{
+    bl_number: string
+    invoice_number: string
+    container_count: number
     pull_out_date: string
     product_type_id: string
     loading_port_id: string
+    shipping_line_id: string
     rop_inspection_type_id: string
     offloading_point_id: string
+    bayan_type_id: string
+    eta_at_port: string
+    consignee_id: string
   }>) => api.patch<Shipment>(`/shipments/${id}`, data),
 
   // Customer
@@ -68,8 +82,14 @@ export const shipmentsApi = {
   recallFromTransport: (id: string, remark: string) =>
     api.post<Shipment>(`/shipments/${id}/recall-from-transport`, { remark }),
 
+  setPermitRef: (id: string, permit_ref: string | null) =>
+    api.post<Shipment>(`/shipments/${id}/permit-ref`, { permit_ref }),
+
   setDoValidity: (id: string, do_validity_date: string) =>
     api.post<Shipment>(`/shipments/${id}/do-validity`, { do_validity_date }),
+
+  completeTaskByType: (shipmentId: string, taskType: string) =>
+    api.post(`/shipments/${shipmentId}/complete-task-by-type`, null, { params: { task_type: taskType } }),
 
   // Task assignment (FFD → PRO)
   assignTask: (shipmentId: string, taskId: string, assigneeId: string, remark?: string) =>
@@ -85,8 +105,8 @@ export const shipmentsApi = {
   releaseHold: (shipmentId: string, taskId: string, release_remark: string) =>
     api.post<Task>(`/shipments/${shipmentId}/tasks/${taskId}/release-hold`, { release_remark }),
 
-  completeTask: (shipmentId: string, taskId: string, remark?: string) =>
-    api.post<Shipment>(`/shipments/${shipmentId}/tasks/${taskId}/complete`, { remark }),
+  completeTask: (shipmentId: string, taskId: string, remark?: string, permitNotRequired?: boolean) =>
+    api.post<Shipment>(`/shipments/${shipmentId}/tasks/${taskId}/complete`, { remark, permit_not_required: permitNotRequired ?? false }),
 
   // Transport
   assignTruck: (id: string, data: {
@@ -94,6 +114,7 @@ export const shipmentsApi = {
     truck_id: string
     expected_arrival_at: string
     offloading_point_id?: string
+    driver_name?: string
   }) => api.post<Shipment>(`/shipments/${id}/assign-truck`, data),
 
   markBreakdown: (id: string, container_id: string, remark: string) =>
@@ -133,8 +154,8 @@ export const shipmentsApi = {
   markOffloaded: (id: string, container_id: string) =>
     api.post<Shipment>(`/shipments/${id}/mark-offloaded`, { container_id }),
 
-  containerView: (historical = false) =>
-    api.get<ContainerViewItem[]>('/shipments/container-view', { params: { historical } }),
+  containerView: (params?: { historical?: boolean; skip?: number; limit?: number; search?: string; status?: string; from_date?: string; to_date?: string; amls_only?: boolean; sort_by?: string; sort_dir?: string }) =>
+    api.get<PaginatedContainerView>('/shipments/container-view', { params }),
 
   bulkCcroUpload: (shipmentId: string, files: File[]) => {
     const form = new FormData()
@@ -158,11 +179,20 @@ export const shipmentsApi = {
   exportContainerBilling: (id: string, params?: { search?: string; from_date?: string; to_date?: string }) =>
     api.get(`/shipments/${id}/container-billing-export`, { params, responseType: 'blob' }),
 
-  containerViewExport: (params?: { search?: string; from_date?: string; to_date?: string; status?: string; historical?: boolean }) =>
+  containerViewExport: (params?: { search?: string; from_date?: string; to_date?: string; status?: string; historical?: boolean; amls_only?: boolean }) =>
     api.get('/shipments/container-view-export', { params, responseType: 'blob' }),
 
-  blExport: (params?: { search?: string; stage?: string; my_queue?: boolean; missing_date?: boolean; amls_search?: string; missing_amls?: boolean }) =>
+  blExport: (params?: { search?: string; stage?: string; my_queue?: boolean; missing_date?: boolean; amls_search?: string; missing_amls?: boolean; pull_out_from?: string; pull_out_to?: string }) =>
     api.get('/shipments/bl-export', { params, responseType: 'blob' }),
+
+  bulkUpdatePullOutDate: (shipment_ids: string[], pull_out_date: string) =>
+    api.post('/shipments/bulk-pull-out-date', { shipment_ids, pull_out_date }),
+
+  bulkRequestBayanPayment: (shipment_ids: string[], remark?: string) =>
+    api.post('/shipments/bulk-bayan-payment-request', { shipment_ids, remark }),
+
+  bulkConfirmCcro: (shipment_ids: string[]) =>
+    api.post<{ confirmed: number; skipped: string[] }>('/shipments/bulk-confirm-ccro', { shipment_ids }),
 
   setAmlsJob: (id: string, amls_job_number: string | null) =>
     api.patch(`/shipments/${id}/amls-job`, { amls_job_number }),

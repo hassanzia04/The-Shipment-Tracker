@@ -1,4 +1,5 @@
 import uuid
+from datetime import date
 from typing import Optional
 from fastapi import APIRouter, Body, Depends, File, Query, UploadFile
 from fastapi.responses import Response
@@ -8,7 +9,7 @@ from app.database import get_db
 from app.auth.dependencies import get_current_user
 from app.auth.models import User
 from app.shipments import service, schemas
-from app.enums import ShipmentStage
+from app.enums import ShipmentStage, TaskType
 
 router = APIRouter(prefix="/shipments", tags=["shipments"])
 
@@ -25,16 +26,24 @@ async def list_shipments(
     search: Optional[str] = Query(None),
     stage: Optional[ShipmentStage] = Query(None),
     my_queue: bool = Query(False),
+    task_type_filter: Optional[TaskType] = Query(None),
     missing_date: bool = Query(False),
     amls_search: Optional[str] = Query(None),
     missing_amls: bool = Query(False),
+    pull_out_from: Optional[date] = Query(None),
+    pull_out_to: Optional[date] = Query(None),
+    sort_by: Optional[str] = Query(None),
+    sort_dir: str = Query('asc'),
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ):
     items, total = await service.list_shipments(
         db, actor, skip=skip, limit=limit, search=search or None, stage=stage,
-        my_queue=my_queue, missing_date=missing_date,
+        my_queue=my_queue, task_type_filter=task_type_filter,
+        missing_date=missing_date,
         amls_search=amls_search or None, missing_amls=missing_amls,
+        pull_out_from=pull_out_from, pull_out_to=pull_out_to,
+        sort_by=sort_by, sort_dir=sort_dir,
     )
     return {"items": items, "total": total, "skip": skip, "limit": limit}
 
@@ -68,16 +77,56 @@ async def bulk_ccro_upload(
     return await service.bulk_upload_ccros(db, shipment_id, actor, files)
 
 
-# Must be defined BEFORE /{shipment_id} so FastAPI doesn't try to parse the path segment as a UUID
-@router.get("/container-view", response_model=list[schemas.ContainerViewItem])
-async def container_view(
-    historical: bool = Query(False),
-    skip: int = Query(0, ge=0),
-    limit: int = Query(200, ge=1, le=500),
+@router.post("/bulk-pull-out-date", status_code=204)
+async def bulk_update_pull_out_date(
+    body: schemas.BulkPullOutDateUpdate,
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ):
-    return await service.get_container_view(db, actor, historical=historical, skip=skip, limit=limit)
+    await service.bulk_update_pull_out_date(db, actor, body.shipment_ids, body.pull_out_date)
+
+
+@router.post("/bulk-bayan-payment-request", status_code=204)
+async def bulk_request_bayan_payment(
+    body: schemas.BulkBayanPaymentRequest,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+):
+    await service.bulk_request_bayan_payment(db, actor, body.shipment_ids, body.remark)
+
+
+@router.post("/bulk-confirm-ccro")
+async def bulk_confirm_ccro(
+    body: schemas.BulkConfirmCcroRequest,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+):
+    return await service.bulk_confirm_ccro_and_notify(db, body.shipment_ids, actor)
+
+
+# Must be defined BEFORE /{shipment_id} so FastAPI doesn't try to parse the path segment as a UUID
+@router.get("/container-view", response_model=schemas.PaginatedContainerView)
+async def container_view(
+    historical: bool = Query(False),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(500, ge=1, le=500),
+    search: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    from_date: Optional[str] = Query(None),
+    to_date: Optional[str] = Query(None),
+    amls_only: bool = Query(False),
+    sort_by: Optional[str] = Query(None),
+    sort_dir: str = Query('asc'),
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+):
+    rows, total = await service.get_container_view(
+        db, actor, historical=historical, skip=skip, limit=limit,
+        search=search or None, status_filter=status or None,
+        from_date=from_date or None, to_date=to_date or None,
+        amls_only=amls_only, sort_by=sort_by, sort_dir=sort_dir,
+    )
+    return {"items": rows, "total": total, "skip": skip, "limit": limit}
 
 
 @router.get("/container-view-export")
@@ -87,10 +136,11 @@ async def container_view_export(
     to_date: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
     historical: bool = Query(False),
+    amls_only: bool = Query(False),
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ):
-    content = await service.export_container_view(db, actor, search=search, from_date=from_date, to_date=to_date, status=status, historical=historical)
+    content = await service.export_container_view(db, actor, search=search, from_date=from_date, to_date=to_date, status=status, historical=historical, amls_only=amls_only)
     return Response(
         content=content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -106,10 +156,12 @@ async def bl_export(
     missing_date: bool = Query(False),
     amls_search: Optional[str] = Query(None),
     missing_amls: bool = Query(False),
+    pull_out_from: Optional[date] = Query(None),
+    pull_out_to: Optional[date] = Query(None),
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ):
-    content = await service.export_shipments_list(db, actor, search=search, stage=stage, my_queue=my_queue, missing_date=missing_date, amls_search=amls_search or None, missing_amls=missing_amls)
+    content = await service.export_shipments_list(db, actor, search=search, stage=stage, my_queue=my_queue, missing_date=missing_date, amls_search=amls_search or None, missing_amls=missing_amls, pull_out_from=pull_out_from, pull_out_to=pull_out_to)
     return Response(
         content=content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -214,6 +266,11 @@ async def recall_from_transport(shipment_id: uuid.UUID, body: schemas.RecallFrom
 
 # ── Task actions (PRO / FFD) ──────────────────────────────────────────────────
 
+@router.post("/{shipment_id}/permit-ref", response_model=schemas.ShipmentOut)
+async def set_permit_ref(shipment_id: uuid.UUID, body: schemas.PermitRefRequest, db: AsyncSession = Depends(get_db), actor: User = Depends(get_current_user)):
+    return await service.set_permit_ref(db, shipment_id, actor, body.permit_ref)
+
+
 @router.post("/{shipment_id}/do-validity", response_model=schemas.ShipmentOut)
 async def set_do_validity(shipment_id: uuid.UUID, body: schemas.DoValidityRequest, db: AsyncSession = Depends(get_db), actor: User = Depends(get_current_user)):
     return await service.set_do_validity_date(db, shipment_id, actor, body.do_validity_date)
@@ -236,14 +293,24 @@ async def release_hold(shipment_id: uuid.UUID, task_id: uuid.UUID, body: schemas
 
 @router.post("/{shipment_id}/tasks/{task_id}/complete", response_model=schemas.ShipmentOut)
 async def complete_task(shipment_id: uuid.UUID, task_id: uuid.UUID, body: schemas.CompleteTaskRequest, db: AsyncSession = Depends(get_db), actor: User = Depends(get_current_user)):
-    return await service.complete_task(db, shipment_id, task_id, actor, body.remark)
+    return await service.complete_task(db, shipment_id, task_id, actor, body.remark, body.permit_not_required)
+
+
+@router.post("/{shipment_id}/complete-task-by-type", status_code=204)
+async def complete_task_by_type(
+    shipment_id: uuid.UUID,
+    task_type: TaskType = Query(...),
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+):
+    await service.complete_task_by_type(db, shipment_id, task_type, actor)
 
 
 # ── Transport actions ─────────────────────────────────────────────────────────
 
 @router.post("/{shipment_id}/assign-truck", response_model=schemas.ShipmentOut)
 async def assign_truck(shipment_id: uuid.UUID, body: schemas.AssignTruckRequest, db: AsyncSession = Depends(get_db), actor: User = Depends(get_current_user)):
-    return await service.assign_truck(db, shipment_id, actor, body.container_id, body.truck_id, body.expected_arrival_at, body.offloading_point_id)
+    return await service.assign_truck(db, shipment_id, actor, body.container_id, body.truck_id, body.expected_arrival_at, body.offloading_point_id, body.driver_name)
 
 
 @router.post("/{shipment_id}/breakdown", response_model=schemas.ShipmentOut)

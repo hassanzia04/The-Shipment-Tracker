@@ -2,6 +2,49 @@ import { api } from '@/lib/api'
 import type { Document, DocumentType } from '@/types'
 import toast from 'react-hot-toast'
 
+export interface BayanAnalysisItem {
+  filename: string
+  detected_bl: string | null
+  shipment_id: string | null
+  bl_number: string | null
+  bayan_type_name: string | null
+  matched: boolean
+  has_existing_doc: boolean
+}
+
+export interface PermitAnalysisItem {
+  filename: string
+  detected_permit: string | null
+  shipment_id: string | null
+  bl_number: string | null
+  permit_ref: string | null
+  matched: boolean
+  has_existing_doc: boolean
+}
+
+export interface DOAnalysisItem {
+  filename: string
+  detected_bl: string | null
+  detected_date: string | null  // YYYY-MM-DD or null
+  shipment_id: string | null
+  bl_number: string | null
+  matched: boolean
+  has_existing_doc: boolean
+}
+
+export interface CcroAnalysisItem {
+  filename: string
+  detected_bl: string | null
+  detected_container: string | null
+  shipment_id: string | null
+  bl_number: string | null
+  container_count: number | null
+  matched: boolean
+  has_existing_doc: boolean
+  conflict_bl: string | null
+  has_active_ccro_task: boolean
+}
+
 export const documentsApi = {
   list: (shipmentId: string) => api.get<Document[]>(`/documents/shipment/${shipmentId}`),
 
@@ -18,7 +61,7 @@ export const documentsApi = {
     form.append('file', data.file)
     if (data.task_id) form.append('task_id', data.task_id)
     if (data.container_id) form.append('container_id', data.container_id)
-    return api.post<Document>('/documents', form, {
+    return api.post<Document & { bl_warning?: string | null }>('/documents', form, {
       headers: { 'Content-Type': 'multipart/form-data' },
     })
   },
@@ -81,6 +124,38 @@ export const documentsApi = {
       form,
       { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 30000 },
     )
+  },
+
+  analyzePermits: (files: File[]) => {
+    const form = new FormData()
+    files.forEach(f => form.append('files', f))
+    return api.post<PermitAnalysisItem[]>('/documents/bulk-permit/analyze', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+  },
+
+  analyzeBayans: (files: File[]) => {
+    const form = new FormData()
+    files.forEach(f => form.append('files', f))
+    return api.post<BayanAnalysisItem[]>('/documents/bulk-bayan/analyze', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+  },
+
+  analyzeDOs: (files: File[]) => {
+    const form = new FormData()
+    files.forEach(f => form.append('files', f))
+    return api.post<DOAnalysisItem[]>('/documents/bulk-do/analyze', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+  },
+
+  analyzeCCROs: (files: File[]) => {
+    const form = new FormData()
+    files.forEach(f => form.append('files', f))
+    return api.post<CcroAnalysisItem[]>('/documents/bulk-ccro/analyze', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
   },
 
   delete: (documentId: string) => api.delete(`/documents/${documentId}`),

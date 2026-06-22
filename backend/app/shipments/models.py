@@ -32,6 +32,8 @@ class Shipment(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     do_validity_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    permit_ref: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    permit_not_required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="false")
     container_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     amls_job_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
     bayan_type_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("bayan_types.id"), nullable=True)
@@ -229,6 +231,7 @@ class Container(Base):
     container_number: Mapped[str] = mapped_column(String(50), nullable=False)
     ccro_document_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("documents.id", use_alter=True, name="fk_container_ccro_document"), nullable=True)
     truck_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("trucks.id"), nullable=True)
+    driver_name_override: Mapped[str | None] = mapped_column(String(200), nullable=True)
     expected_arrival_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     offloading_point_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("offloading_points.id"), nullable=True)
     status: Mapped[ContainerStatus] = mapped_column(

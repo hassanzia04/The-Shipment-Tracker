@@ -1,6 +1,6 @@
 import io
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -90,6 +90,40 @@ def _active_tasks(shipment: Shipment, task_type: TaskType | None = None) -> list
 
 def _task_completed(shipment: Shipment, task_type: TaskType) -> bool:
     return any(t.task_type == task_type and t.status == TaskStatus.COMPLETED for t in shipment.tasks)
+
+
+async def _maybe_auto_open_ccro(db: AsyncSession, shipment: Shipment, actor: User) -> None:
+    """Open the CCRO task automatically once Bayan, DO, and Permit are all complete."""
+    if shipment.current_stage != ShipmentStage.IN_PROGRESS:
+        return
+    if _active_tasks(shipment, TaskType.CCRO):
+        return
+    # Don't re-open if CCRO task already existed (completed or otherwise)
+    if any(t.task_type == TaskType.CCRO for t in shipment.tasks):
+        return
+    if not _task_completed(shipment, TaskType.DO):
+        return
+    if not _task_completed(shipment, TaskType.BAYAN):
+        return
+    permit_ok = shipment.permit_not_required or _task_completed(shipment, TaskType.PERMIT)
+    if not permit_ok:
+        return
+
+    ccro_task = ShipmentTask(
+        shipment_id=shipment.id,
+        task_type=TaskType.CCRO,
+        assigned_team=Team.FFD.value,
+        created_by_id=actor.id,
+    )
+    db.add(ccro_task)
+    await db.flush()
+    declared = shipment.container_count or 0
+    remark = (
+        f"CCRO task auto-opened — {declared} container{'s' if declared != 1 else ''} declared on B/L"
+        if declared else "CCRO task auto-opened"
+    )
+    await _record_event(db, shipment, EventType.TASK_CREATED, actor, task_id=ccro_task.id, remark=remark)
+    await db.commit()
 
 
 # ── Create ────────────────────────────────────────────────────────────────────
@@ -200,22 +234,232 @@ async def delete_shipment(db: AsyncSession, shipment_id: uuid.UUID, actor: User)
     await db.commit()
 
 
+_DETAIL_FIELD_LABELS: dict[str, str] = {
+    'bl_number': 'BL Number',
+    'invoice_number': 'Invoice Number',
+    'container_count': 'Container Count',
+    'shipping_line_id': 'Shipping Line',
+    'bayan_type_id': 'Bayan Type',
+    'product_type_id': 'Product Type',
+    'loading_port_id': 'Loading Port',
+    'offloading_point_id': 'Offloading Location',
+    'eta_at_port': 'ETA at Port',
+    'consignee_id': 'Consignee',
+}
+
+_ID_FIELD_MODEL = {
+    'shipping_line_id': ShippingLine,
+    'bayan_type_id': BayanType,
+    'product_type_id': ProductType,
+    'loading_port_id': LoadingPort,
+    'offloading_point_id': OffloadingPoint,
+    'consignee_id': Consignee,
+}
+
+
+def _old_display_name(shipment: Shipment, field: str) -> str | None:
+    """Return the human-readable current value for an ID-based field using already-loaded relationships."""
+    return {
+        'shipping_line_id': shipment.shipping_line_name,
+        'bayan_type_id': shipment.bayan_type_name,
+        'product_type_id': shipment.product_type_name,
+        'loading_port_id': shipment.loading_port_name,
+        'offloading_point_id': shipment.offloading_point_name,
+        'consignee_id': shipment.consignee_name,
+    }.get(field)
+
+
 async def update_shipment(db: AsyncSession, shipment_id: uuid.UUID, actor: User, **fields) -> Shipment:
     shipment = await _get_shipment(db, shipment_id)
     _assert_customer_owns(shipment, actor)
 
+    # Stage gate and detail guards apply only when detail fields (non-pull_out_date) are being changed.
+    # pull_out_date is allowed at any stage — customers update it throughout the workflow.
+    requested_detail_fields = {k for k in fields if k in _DETAIL_FIELD_LABELS}
+    if requested_detail_fields:
+        _assert_stage(shipment, ShipmentStage.CUSTOMER)
+        if any(t.task_type == TaskType.BAYAN_PAYMENT and t.status != TaskStatus.COMPLETED for t in shipment.tasks):
+            raise HTTPException(status_code=400, detail="Cannot edit shipment details while a Bayan payment request is pending")
+
+    # Uniqueness checks (only needed when value actually changes)
+    new_bl = fields.get('bl_number')
+    if new_bl is not None:
+        new_bl = new_bl.strip()
+        if not new_bl:
+            raise HTTPException(status_code=400, detail="BL number cannot be empty")
+        fields['bl_number'] = new_bl
+        if new_bl != shipment.bl_number:
+            clash = await db.execute(select(Shipment.id).where(Shipment.bl_number == new_bl, Shipment.id != shipment_id))
+            if clash.scalar_one_or_none():
+                raise HTTPException(status_code=400, detail="A shipment with this BL number already exists")
+
+    new_inv = fields.get('invoice_number')
+    if new_inv is not None:
+        new_inv = new_inv.strip()
+        if not new_inv:
+            raise HTTPException(status_code=400, detail="Invoice number cannot be empty")
+        fields['invoice_number'] = new_inv
+        if new_inv != shipment.invoice_number:
+            clash = await db.execute(select(Shipment.id).where(Shipment.invoice_number == new_inv, Shipment.id != shipment_id))
+            if clash.scalar_one_or_none():
+                raise HTTPException(status_code=400, detail="A shipment with this invoice number already exists")
+
+    # Container count cannot go below the number of containers already registered
+    new_count = fields.get('container_count')
+    if new_count is not None:
+        if new_count < 1:
+            raise HTTPException(status_code=400, detail="Container count must be at least 1")
+        actual = len(shipment.containers)
+        if new_count < actual:
+            suffix = '' if actual == 1 else 's'
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot reduce container count below {actual} — {actual} container{suffix} already registered on this shipment",
+            )
+
     old_pull_out = shipment.pull_out_date
+    detail_changes: list[str] = []
 
     for key, val in fields.items():
-        if val is not None:
-            setattr(shipment, key, val)
+        if val is None:
+            continue
+        old_raw = getattr(shipment, key, None)
+        if val == old_raw:
+            continue
 
+        if key == 'pull_out_date':
+            setattr(shipment, key, val)
+            continue  # has its own event below
+
+        label = _DETAIL_FIELD_LABELS.get(key, key)
+
+        if key in _ID_FIELD_MODEL:
+            # Capture old name before setattr (relationship still points to old object in memory)
+            old_name = _old_display_name(shipment, key) or 'not set'
+            setattr(shipment, key, val)
+            new_row = await db.execute(select(_ID_FIELD_MODEL[key]).where(_ID_FIELD_MODEL[key].id == val))
+            new_obj = new_row.scalar_one_or_none()
+            new_name = new_obj.name if new_obj else str(val)
+            detail_changes.append(f"{label}: {old_name} → {new_name}")
+        else:
+            old_str = str(old_raw) if old_raw is not None else 'not set'
+            setattr(shipment, key, val)
+            detail_changes.append(f"{label}: {old_str} → {val}")
+
+    if detail_changes:
+        await _record_event(db, shipment, EventType.SHIPMENT_DETAILS_CHANGED, actor,
+                            remark="; ".join(detail_changes))
+
+    # Pull-out date keeps its own dedicated event + notification
     if 'pull_out_date' in fields and fields['pull_out_date'] is not None and fields['pull_out_date'] != old_pull_out:
-        old_str = old_pull_out.isoformat() if old_pull_out else 'not set'
-        new_str = shipment.pull_out_date.isoformat() if shipment.pull_out_date else 'not set'
+        old_str = old_pull_out.strftime('%d/%m/%Y') if old_pull_out else 'not set'
+        new_str = shipment.pull_out_date.strftime('%d/%m/%Y') if shipment.pull_out_date else 'not set'
         await _record_event(db, shipment, EventType.PULL_OUT_DATE_CHANGED, actor,
                             remark=f"Changed from {old_str} to {new_str}")
+        from app.notifications.service import notify_pull_out_date_changed
+        await notify_pull_out_date_changed(db, shipment, new_str, actor.full_name)
 
+    await db.commit()
+    return await _get_shipment(db, shipment_id)
+
+
+async def bulk_update_pull_out_date(
+    db: AsyncSession,
+    actor: User,
+    shipment_ids: list[uuid.UUID],
+    pull_out_date,
+) -> None:
+    from app.notifications.service import notify_team_bulk_pull_out
+    _assert_team(actor, Team.CUSTOMER)
+
+    result = await db.execute(select(Shipment).where(Shipment.id.in_(shipment_ids)))
+    shipments_by_id = {s.id: s for s in result.scalars().all()}
+
+    updated = []
+    new_str = pull_out_date.strftime('%d/%m/%Y')
+    for shipment_id in shipment_ids:
+        shipment = shipments_by_id.get(shipment_id)
+        if not shipment:
+            raise HTTPException(status_code=404, detail="Shipment not found")
+        _assert_customer_owns(shipment, actor)
+        old_pull_out = shipment.pull_out_date
+        shipment.pull_out_date = pull_out_date
+        if pull_out_date != old_pull_out:
+            old_str = old_pull_out.strftime('%d/%m/%Y') if old_pull_out else 'not set'
+            await _record_event(db, shipment, EventType.PULL_OUT_DATE_CHANGED, actor,
+                                remark=f"Changed from {old_str} to {new_str}")
+            updated.append(shipment)
+
+    await db.commit()
+
+    if updated:
+        await notify_team_bulk_pull_out(db, updated, new_str, actor.full_name)
+
+
+async def bulk_request_bayan_payment(
+    db: AsyncSession,
+    actor: User,
+    shipment_ids: list[uuid.UUID],
+    remark: str | None,
+) -> None:
+    from app.documents.models import Document
+    from app.enums import DocumentType
+    from app.notifications.service import notify_bulk_bayan_payment_requested
+
+    _assert_team(actor, Team.PRO)
+
+    # Load all shipments in one query
+    result = await db.execute(select(Shipment).where(Shipment.id.in_(shipment_ids)))
+    shipments_by_id = {s.id: s for s in result.scalars().all()}
+
+    # Load latest BAYAN doc per shipment in one query, pick latest per shipment in Python
+    bayan_docs_result = await db.execute(
+        select(Document).where(
+            Document.shipment_id.in_(shipment_ids),
+            Document.doc_type == DocumentType.BAYAN,
+        ).order_by(Document.uploaded_at.desc())
+    )
+    latest_bayan: dict[uuid.UUID, Document] = {}
+    for doc in bayan_docs_result.scalars().all():
+        if doc.shipment_id not in latest_bayan:
+            latest_bayan[doc.shipment_id] = doc
+
+    shipments = []
+    attachment_specs: list[dict] = []
+
+    for shipment_id in shipment_ids:
+        shipment = shipments_by_id.get(shipment_id)
+        if not shipment:
+            raise HTTPException(status_code=404, detail="Shipment not found")
+
+        await _record_event(
+            db, shipment, EventType.TASK_CREATED, actor,
+            remark=remark or "Bulk Bayan payment requested from customer"
+        )
+        shipments.append(shipment)
+
+        bayan_doc = latest_bayan.get(shipment_id)
+        if bayan_doc and bayan_doc.oci_path:
+            attachment_specs.append({
+                "filename": bayan_doc.original_filename,
+                "oci_path": bayan_doc.oci_path,
+            })
+
+    await db.commit()
+    await notify_bulk_bayan_payment_requested(db, shipments, attachment_specs)
+
+
+async def set_permit_ref(
+    db: AsyncSession,
+    shipment_id: uuid.UUID,
+    actor: User,
+    permit_ref: str | None,
+) -> Shipment:
+    _assert_team(actor, Team.PRO)
+    shipment = await _get_shipment(db, shipment_id)
+    shipment.permit_ref = permit_ref or None
+    remark = f"Permit ref set to {permit_ref}" if permit_ref else "Permit ref cleared"
+    await _record_event(db, shipment, EventType.PERMIT_REF_UPDATED, actor, remark=remark)
     await db.commit()
     return await _get_shipment(db, shipment_id)
 
@@ -231,9 +475,10 @@ async def set_do_validity_date(
     shipment = await _get_shipment(db, shipment_id)
     old = shipment.do_validity_date
     shipment.do_validity_date = do_validity_date
-    remark = f"DO validity set to {do_validity_date}"
+    fmt = lambda d: d.strftime('%d/%m/%Y') if d else 'not set'
+    remark = f"DO validity set to {fmt(do_validity_date)}"
     if old:
-        remark = f"DO validity changed from {old} to {do_validity_date}"
+        remark = f"DO validity changed from {fmt(old)} to {fmt(do_validity_date)}"
     await _record_event(db, shipment, EventType.DO_VALIDITY_UPDATED, actor, remark=remark)
     await db.commit()
     return await _get_shipment(db, shipment_id)
@@ -311,9 +556,14 @@ async def list_shipments(
     search: str | None = None,
     stage: ShipmentStage | None = None,
     my_queue: bool = False,
+    task_type_filter: "TaskType | None" = None,
     missing_date: bool = False,
     amls_search: str | None = None,
     missing_amls: bool = False,
+    pull_out_from=None,
+    pull_out_to=None,
+    sort_by: str | None = None,
+    sort_dir: str = 'asc',
 ) -> tuple[list[Shipment], int]:
     from sqlalchemy import func as sa_func
 
@@ -325,15 +575,14 @@ async def list_shipments(
     if my_queue:
         if actor.team == Team.PRO:
             from sqlalchemy import exists
-            base_where.append(
-                exists(
-                    select(ShipmentTask.id).where(
-                        ShipmentTask.shipment_id == Shipment.id,
-                        ShipmentTask.assigned_to_id == actor.id,
-                        ShipmentTask.status.in_([TaskStatus.IN_PROGRESS, TaskStatus.ON_HOLD]),
-                    )
-                )
-            )
+            task_conditions = [
+                ShipmentTask.shipment_id == Shipment.id,
+                ShipmentTask.assigned_to_id == actor.id,
+                ShipmentTask.status.in_([TaskStatus.IN_PROGRESS, TaskStatus.ON_HOLD]),
+            ]
+            if task_type_filter:
+                task_conditions.append(ShipmentTask.task_type == task_type_filter)
+            base_where.append(exists(select(ShipmentTask.id).where(*task_conditions)))
         elif actor.team == Team.FFD:
             from sqlalchemy import or_, exists as sa_exists
             revalidation_cond = sa_exists(
@@ -353,6 +602,15 @@ async def list_shipments(
                 (Shipment.current_stage == ShipmentStage.DC_TRANSPORT) & ccro_returned_cond,
                 (Shipment.current_stage == ShipmentStage.TRANSPORT) & (revalidation_cond | ccro_returned_cond),
             ))
+            if task_type_filter:
+                from sqlalchemy import exists as sa_exists2
+                base_where.append(sa_exists2(
+                    select(ShipmentTask.id).where(
+                        ShipmentTask.shipment_id == Shipment.id,
+                        ShipmentTask.task_type == task_type_filter,
+                        ShipmentTask.status.in_([TaskStatus.IN_PROGRESS, TaskStatus.ON_HOLD]),
+                    )
+                ))
         elif actor.team == Team.DC:
             from sqlalchemy import or_
             from app.documents.models import Document as Doc
@@ -411,6 +669,22 @@ async def list_shipments(
         base_where.append(Shipment.amls_job_number.ilike(f"%{amls_search}%"))
     if missing_amls:
         base_where.append(Shipment.amls_job_number == None)
+    if pull_out_from:
+        from_dt = datetime(pull_out_from.year, pull_out_from.month, pull_out_from.day, tzinfo=timezone.utc)
+        base_where.append(
+            select(Container.id).where(
+                Container.shipment_id == Shipment.id,
+                Container.actual_pull_out_date >= from_dt,
+            ).correlate(Shipment).exists()
+        )
+    if pull_out_to:
+        to_dt = datetime(pull_out_to.year, pull_out_to.month, pull_out_to.day, tzinfo=timezone.utc) + timedelta(days=1)
+        base_where.append(
+            select(Container.id).where(
+                Container.shipment_id == Shipment.id,
+                Container.actual_pull_out_date < to_dt,
+            ).correlate(Shipment).exists()
+        )
 
     count_q = select(sa_func.count(Shipment.id))
     for clause in base_where:
@@ -423,10 +697,25 @@ async def list_shipments(
         selectinload(Shipment.containers),
         selectinload(Shipment.offloading_point),
         selectinload(Shipment.consignee),
+        selectinload(Shipment.loading_port),
+        selectinload(Shipment.bayan_type),
+        selectinload(Shipment.shipping_line),
     )
     for clause in base_where:
         q = q.where(clause)
-    q = q.order_by(Shipment.pull_out_date.asc().nullslast(), Shipment.created_at.desc())
+    _bl_sort_cols = {
+        'bl':       Shipment.bl_number,
+        'invoice':  Shipment.invoice_number,
+        'stage':    Shipment.current_stage,
+        'pull_out': Shipment.pull_out_date,
+        'time':     Shipment.pull_out_date,
+    }
+    if sort_by and sort_by in _bl_sort_cols:
+        col = _bl_sort_cols[sort_by]
+        order_expr = col.asc().nullslast() if sort_dir == 'asc' else col.desc().nullslast()
+        q = q.order_by(order_expr, Shipment.created_at.desc())
+    else:
+        q = q.order_by(Shipment.pull_out_date.asc().nullslast(), Shipment.created_at.desc())
     q = q.offset(skip).limit(limit)
     result = await db.execute(q)
     shipments = list(result.scalars().unique().all())
@@ -664,9 +953,48 @@ async def release_hold(
 
 # ── Task: Complete ────────────────────────────────────────────────────────────
 
+async def complete_task_by_type(
+    db: AsyncSession,
+    shipment_id: uuid.UUID,
+    task_type: TaskType,
+    actor: User,
+) -> None:
+    """Find and complete the active task of the given type. Silently skips if no active task."""
+    result = await db.execute(
+        select(ShipmentTask).where(
+            ShipmentTask.shipment_id == shipment_id,
+            ShipmentTask.task_type == task_type,
+            ShipmentTask.status.in_([TaskStatus.IN_PROGRESS, TaskStatus.ON_HOLD]),
+        )
+    )
+    task = result.scalar_one_or_none()
+    if not task:
+        return
+    if task.status == TaskStatus.ON_HOLD:
+        raise HTTPException(status_code=400, detail="Task is on hold — release it before completing")
+
+    task.status = TaskStatus.COMPLETED
+    task.completed_at = datetime.now(timezone.utc)
+    task.completed_by_id = actor.id
+
+    shipment = await _get_shipment(db, shipment_id)
+    await _record_event(db, shipment, EventType.TASK_COMPLETED, actor, task_id=task.id)
+    await db.commit()
+
+    from app.notifications.service import notify_team
+    if task_type == TaskType.PERMIT:
+        await notify_team(db, shipment, Team.FFD, "permit_completed", in_app_only=True)
+    elif task_type == TaskType.BAYAN:
+        await notify_team(db, shipment, Team.FFD, "bayan_completed", in_app_only=True)
+
+    if task_type in (TaskType.DO, TaskType.BAYAN, TaskType.PERMIT):
+        fresh = await _get_shipment(db, shipment_id)
+        await _maybe_auto_open_ccro(db, fresh, actor)
+
+
 async def complete_task(
     db: AsyncSession, shipment_id: uuid.UUID, task_id: uuid.UUID,
-    actor: User, remark: str | None = None,
+    actor: User, remark: str | None = None, permit_not_required: bool = False,
 ) -> Shipment:
     result = await db.execute(select(ShipmentTask).where(ShipmentTask.id == task_id, ShipmentTask.shipment_id == shipment_id))
     task = result.scalar_one_or_none()
@@ -681,6 +1009,11 @@ async def complete_task(
     task_type = task.task_type
 
     shipment = await _get_shipment(db, shipment_id)
+
+    if permit_not_required and task_type == TaskType.PERMIT:
+        shipment.permit_not_required = True
+        remark = "Permit not required for this shipment"
+
     await _record_event(db, shipment, EventType.TASK_COMPLETED, actor, task_id=task_id, remark=remark)
     await db.commit()
 
@@ -691,10 +1024,15 @@ async def complete_task(
         await notify_team(db, shipment, Team.FFD, "permit_completed", in_app_only=True)
     elif task_type == TaskType.BAYAN:
         await notify_team(db, shipment, Team.FFD, "bayan_completed", in_app_only=True)
+
+    if task_type in (TaskType.DO, TaskType.BAYAN, TaskType.PERMIT):
+        fresh = await _get_shipment(db, shipment_id)
+        await _maybe_auto_open_ccro(db, fresh, actor)
+
     return await _get_shipment(db, shipment_id)
 
 
-# ── FFD: Open CCRO task (when DO + Bayan both done) ───────────────────────────
+# ── FFD: Open CCRO task (when DO + Bayan + Permit all done) ──────────────────
 
 async def open_ccro_task(db: AsyncSession, shipment_id: uuid.UUID, actor: User) -> Shipment:
     shipment = await _get_shipment(db, shipment_id)
@@ -704,6 +1042,8 @@ async def open_ccro_task(db: AsyncSession, shipment_id: uuid.UUID, actor: User) 
         raise HTTPException(status_code=400, detail="DO must be completed first")
     if not _task_completed(shipment, TaskType.BAYAN):
         raise HTTPException(status_code=400, detail="Bayan must be completed first")
+    if not shipment.permit_not_required and not _task_completed(shipment, TaskType.PERMIT):
+        raise HTTPException(status_code=400, detail="Permit must be completed first")
     if _active_tasks(shipment, TaskType.CCRO):
         raise HTTPException(status_code=400, detail="CCRO task already open")
 
@@ -742,8 +1082,24 @@ async def request_bayan_payment(db: AsyncSession, shipment_id: uuid.UUID, actor:
                         remark=remark or "Bayan payment requested from customer")
     await db.commit()
 
+    from app.documents.models import Document
+    from app.enums import DocumentType
+    from app.documents.service import generate_par_url
+    bayan_doc_result = await db.execute(
+        select(Document).where(
+            Document.shipment_id == shipment.id,
+            Document.doc_type == DocumentType.BAYAN,
+        ).order_by(Document.uploaded_at.desc()).limit(1)
+    )
+    bayan_doc = bayan_doc_result.scalars().first()
+    doc_links = None
+    if bayan_doc:
+        url = generate_par_url(bayan_doc.oci_path)
+        if url:
+            doc_links = [{"filename": bayan_doc.original_filename, "url": url}]
+
     from app.notifications.service import notify_team
-    await notify_team(db, shipment, Team.CUSTOMER, "bayan_payment_requested")
+    await notify_team(db, shipment, Team.CUSTOMER, "bayan_payment_requested", doc_links=doc_links)
     return await _get_shipment(db, shipment_id)
 
 
@@ -838,6 +1194,7 @@ async def confirm_ccro_and_send_to_transport(db: AsyncSession, shipment_id: uuid
 
     from app.documents.models import Document
     from app.enums import DocumentType
+    ccro_docs = []
     for container in shipment.containers:
         doc_result = await db.execute(
             select(Document).where(
@@ -852,6 +1209,7 @@ async def confirm_ccro_and_send_to_transport(db: AsyncSession, shipment_id: uuid
                 detail=f"Container {container.container_number} is missing a CCRO document"
             )
         container.ccro_document_id = ccro_doc.id
+        ccro_docs.append((container.container_number, ccro_doc))
     await db.flush()
 
     prev_stage = shipment.current_stage
@@ -860,10 +1218,17 @@ async def confirm_ccro_and_send_to_transport(db: AsyncSession, shipment_id: uuid
                         stage_from=prev_stage, stage_to=ShipmentStage.TRANSPORT, remark="CCROs confirmed, sent to Transport")
     await db.commit()
 
+    from app.documents.service import generate_par_url
+    doc_links = []
+    for container_number, doc in ccro_docs:
+        url = generate_par_url(doc.oci_path)
+        if url:
+            doc_links.append({"filename": f"CCRO — {container_number}.pdf", "url": url})
+
     from app.notifications.service import notify_team
-    await notify_team(db, shipment, Team.TRANSPORT, "ccro_received")
+    await notify_team(db, shipment, Team.TRANSPORT, "ccro_received", doc_links=doc_links or None)
     container_numbers = ", ".join(c.container_number for c in shipment.containers)
-    await notify_team(db, shipment, Team.DC, "ccro_sent_to_dc", container_numbers=container_numbers)
+    await notify_team(db, shipment, Team.DC, "ccro_sent_to_dc", doc_links=doc_links or None, container_numbers=container_numbers)
     return await _get_shipment(db, shipment_id)
 
 
@@ -938,6 +1303,7 @@ async def assign_truck(
     db: AsyncSession, shipment_id: uuid.UUID, actor: User,
     container_id: uuid.UUID, truck_id: uuid.UUID,
     expected_arrival_at: datetime, offloading_point_id: uuid.UUID | None = None,
+    driver_name_override: str | None = None,
 ) -> Shipment:
     shipment = await _get_shipment(db, shipment_id)
     _assert_team(actor, Team.TRANSPORT)
@@ -950,6 +1316,8 @@ async def assign_truck(
         raise HTTPException(status_code=400, detail="Container has already arrived at DC — delay cannot be reported")
 
     container.truck_id = truck_id
+    if driver_name_override is not None:
+        container.driver_name_override = driver_name_override
     container.expected_arrival_at = expected_arrival_at
     container.offloading_point_id = offloading_point_id
     container.status = ContainerStatus.ASSIGNED
@@ -988,6 +1356,7 @@ async def unassign_truck(
         raise HTTPException(status_code=400, detail="Truck can only be unassigned from containers that are Assigned, In Transit, or Breakdown")
 
     container.truck_id = None
+    container.driver_name_override = None
     container.expected_arrival_at = None
     container.actual_pull_out_date = None
     container.status = ContainerStatus.PENDING
@@ -1135,6 +1504,19 @@ async def _complete_shipment_if_done(db: AsyncSession, shipment: Shipment, actor
     if all_containers and all(c.status in _TERMINAL_STATUSES for c in all_containers):
         shipment.current_stage = ShipmentStage.COMPLETED
         shipment.completed_at = datetime.now(timezone.utc)
+
+        # Auto-complete any pending Bayan payment tasks — containers cannot be
+        # released without payment, so if all containers are resolved the payment
+        # has happened regardless of whether the customer clicked confirm.
+        for task in shipment.tasks:
+            if task.task_type == TaskType.BAYAN_PAYMENT and task.status != TaskStatus.COMPLETED:
+                task.status = TaskStatus.COMPLETED
+                task.completed_at = datetime.now(timezone.utc)
+                task.completed_by_id = actor.id
+                await _record_event(db, shipment, EventType.TASK_COMPLETED, actor,
+                                    task_id=task.id,
+                                    remark="Auto-confirmed at shipment completion — payment verified by container release")
+
         await _record_event(db, shipment, EventType.STAGE_CHANGED, actor,
                             stage_from=stage_from, stage_to=ShipmentStage.COMPLETED,
                             remark="All containers resolved")
@@ -1219,7 +1601,7 @@ async def mark_offloaded(db: AsyncSession, shipment_id: uuid.UUID, actor: User, 
 
     from app.notifications.service import notify_team
     if not is_outsourced:
-        await notify_team(db, shipment, Team.TRANSPORT, "container_offloaded")
+        await notify_team(db, shipment, Team.TRANSPORT, "container_offloaded", in_app_only=True)
     return await _get_shipment(db, shipment_id)
 
 
@@ -1593,11 +1975,13 @@ async def bulk_upload_ccros(
     # Cache IDs before the loop — _upload_doc calls db.commit() internally which expires
     # the shipment object, making relationship access (shipment.containers) fail on later iterations.
     ccro_task_id = ccro_task.id
+    shipment_bl = shipment.bl_number
     container_map: dict[str, uuid.UUID] = {c.container_number: c.id for c in shipment.containers}
 
     import io as _io
     from fastapi import UploadFile as _UF
     from starlette.datastructures import Headers as _Headers
+    from app.documents.service import extract_bl_from_ccro as _extract_bl
 
     results = []
     for file in files:
@@ -1609,6 +1993,11 @@ async def bulk_upload_ccros(
         )
 
         container_number = _extract_container_number(raw)
+
+        extracted_bl = _extract_bl(raw)
+        bl_warning: str | None = None
+        if extracted_bl and extracted_bl != shipment_bl.upper().strip():
+            bl_warning = f"BL mismatch: document says {extracted_bl} but shipment is {shipment_bl}"
 
         if not container_number:
             results.append({
@@ -1623,6 +2012,22 @@ async def bulk_upload_ccros(
         if container_number in container_map:
             container_id = container_map[container_number]
             was_created = False
+            # If this container already has a CCRO doc, treat as duplicate (don't re-upload)
+            existing_ccro = (await db.execute(
+                select(Document).where(
+                    Document.container_id == container_id,
+                    Document.doc_type == DocumentType.CCRO,
+                )
+            )).scalars().first()
+            if existing_ccro:
+                results.append({
+                    "filename": file.filename,
+                    "container_number": container_number,
+                    "status": "duplicate",
+                    "container_id": str(container_id),
+                    "conflict_bl": None,
+                })
+                continue
         else:
             # Check if this container is already active on another shipment before creating
             conflict_q = (
@@ -1678,6 +2083,7 @@ async def bulk_upload_ccros(
             "container_number": container_number,
             "status": "created" if was_created else "matched",
             "container_id": str(container_id),
+            "bl_warning": bl_warning,
         })
 
     matched    = sum(1 for r in results if r["status"] == "matched")
@@ -1776,7 +2182,7 @@ async def export_container_billing(
             _fmt(c.actual_pull_out_date),
             _fmt(c.offloaded_at),
             truck.plate_number if truck else "",
-            truck.driver_name if truck else "",
+            c.driver_name_override or (truck.driver_name if truck else ""),
             truck.contractor if truck else "",
             op_name,
             c.status.value,
@@ -1795,39 +2201,15 @@ async def export_container_view(
     to_date: str | None = None,
     status: str | None = None,
     historical: bool = False,
+    amls_only: bool = False,
 ) -> bytes:
     from datetime import date as date_type
 
-    rows = await get_container_view(db, actor, historical=historical, skip=0, limit=None)
-
-    # Apply extra filters client-side (data already team-scoped by get_container_view)
-    from_dt = None
-    to_dt = None
-    if from_date:
-        try:
-            from_dt = datetime.fromisoformat(from_date).replace(tzinfo=timezone.utc)
-        except ValueError:
-            pass
-    if to_date:
-        try:
-            to_dt = datetime.fromisoformat(to_date).replace(hour=23, minute=59, second=59, tzinfo=timezone.utc)
-        except ValueError:
-            pass
-
-    def _matches(r: dict) -> bool:
-        if search:
-            term = search.lower()
-            if term not in r["container_number"].lower() and term not in r["bl_number"].lower():
-                return False
-        if status and r["status"].value != status:
-            return False
-        if from_dt and (not r["offloaded_at"] or r["offloaded_at"] < from_dt):
-            return False
-        if to_dt and (not r["offloaded_at"] or r["offloaded_at"] > to_dt):
-            return False
-        return True
-
-    rows = [r for r in rows if _matches(r)]
+    rows, _ = await get_container_view(
+        db, actor, historical=historical, skip=0, limit=None,
+        search=search, status_filter=status, from_date=from_date, to_date=to_date,
+        amls_only=amls_only,
+    )
 
     def _fmt(val) -> str:
         if val is None:
@@ -1844,19 +2226,21 @@ async def export_container_view(
     ws = wb.active
     ws.title = "Containers"
     headers = [
-        "Container Number", "BL Number", "Status",
-        "Planned Pull Out Date", "Actual Pull Out Date", "Offloading Date",
+        "SR#", "Container Number", "BL Number", "Status",
+        "Port of Loading", "Planned Pull Out Date", "Actual Pull Out Date", "Offloading Date",
         "Truck Plate", "Driver", "Contractor", "Offloading Point", "ETA / Arrived",
     ]
     ws.append(headers)
     for col_idx, _ in enumerate(headers, 1):
         ws.column_dimensions[ws.cell(1, col_idx).column_letter].width = 22
 
-    for r in rows:
+    for idx, r in enumerate(rows, 1):
         ws.append([
+            idx,
             r["container_number"],
             r["bl_number"],
             _fmt(r["status"]),
+            r.get("loading_port_name") or "",
             _fmt(r.get("pull_out_date")),
             _fmt(r.get("actual_pull_out_date")),
             _fmt(r.get("offloaded_at")),
@@ -1881,6 +2265,8 @@ async def export_shipments_list(
     missing_date: bool = False,
     amls_search: str | None = None,
     missing_amls: bool = False,
+    pull_out_from=None,
+    pull_out_to=None,
 ) -> bytes:
     from datetime import date as date_type
 
@@ -1899,6 +2285,8 @@ async def export_shipments_list(
         missing_date=missing_date,
         amls_search=amls_search or None,
         missing_amls=missing_amls,
+        pull_out_from=pull_out_from,
+        pull_out_to=pull_out_to,
     )
 
     def _fmt(val) -> str:
@@ -1920,19 +2308,29 @@ async def export_shipments_list(
     ws = wb.active
     ws.title = "Shipments"
     headers = [
-        "BL Number", "Invoice Number", "Stage", "Pull Out Date",
+        "SR#", "BL Number", "Invoice Number", "Stage", "Shipping Line", "Port of Loading",
+        "Bayan Type", "Planned Pull out", "Actual Pull out",
         "Offloading Point", "AMLS Job#", "Permit", "DO", "Bayan", "Created At",
     ]
     ws.append(headers)
     for col_idx, _ in enumerate(headers, 1):
         ws.column_dimensions[ws.cell(1, col_idx).column_letter].width = 20
 
-    for s in shipments:
+    for idx, s in enumerate(shipments, 1):
+        actual_pull_out = min(
+            (c.actual_pull_out_date for c in s.containers if c.actual_pull_out_date),
+            default=None,
+        )
         ws.append([
+            idx,
             s.bl_number,
             s.invoice_number,
             s.current_stage.value,
+            s.shipping_line.name if s.shipping_line else "",
+            s.loading_port.name if s.loading_port else "",
+            s.bayan_type.name if s.bayan_type else "",
             _fmt(s.pull_out_date),
+            _fmt(actual_pull_out),
             s.offloading_point.name if s.offloading_point else "",
             s.amls_job_number or "",
             _task_status(s, "PERMIT"),
@@ -2001,9 +2399,117 @@ async def mark_container_arrived(
     return await _get_shipment(db, shipment_id)
 
 
+# ── FFD: Bulk confirm CCROs → Transport (one email per team) ─────────────────
+
+async def bulk_confirm_ccro_and_notify(
+    db: AsyncSession,
+    shipment_ids: list[uuid.UUID],
+    actor: User,
+) -> dict:
+    """Confirm CCROs for multiple shipments and send ONE email each to Transport + DC."""
+    from app.documents.models import Document
+    from app.enums import DocumentType
+    from app.documents.service import generate_par_url
+
+    _assert_team(actor, Team.FFD)
+
+    confirmed = []
+    skipped = []
+
+    for shipment_id in shipment_ids:
+        try:
+            shipment = await _get_shipment(db, shipment_id)
+        except HTTPException:
+            skipped.append(str(shipment_id))
+            continue
+
+        if shipment.current_stage != ShipmentStage.IN_PROGRESS:
+            skipped.append(shipment.bl_number)
+            continue
+
+        if not shipment.containers:
+            skipped.append(shipment.bl_number)
+            continue
+
+        if not shipment.do_validity_date:
+            skipped.append(shipment.bl_number)
+            continue
+
+        # Verify all containers have a CCRO doc
+        ccro_docs = []
+        missing = False
+        for container in shipment.containers:
+            doc_result = await db.execute(
+                select(Document).where(
+                    Document.container_id == container.id,
+                    Document.doc_type == DocumentType.CCRO,
+                )
+            )
+            ccro_doc = doc_result.scalars().first()
+            if not ccro_doc:
+                missing = True
+                break
+            container.ccro_document_id = ccro_doc.id
+            ccro_docs.append((container.container_number, ccro_doc))
+
+        if missing:
+            skipped.append(shipment.bl_number)
+            continue
+
+        await db.flush()
+
+        # Complete the active CCRO task
+        for task in shipment.tasks:
+            if task.task_type == TaskType.CCRO and task.status != TaskStatus.COMPLETED:
+                task.status = TaskStatus.COMPLETED
+                task.completed_at = datetime.now(timezone.utc)
+                task.completed_by_id = actor.id
+
+        prev_stage = shipment.current_stage
+        shipment.current_stage = ShipmentStage.TRANSPORT
+        await _record_event(db, shipment, EventType.STAGE_CHANGED, actor,
+                            stage_from=prev_stage, stage_to=ShipmentStage.TRANSPORT,
+                            remark="CCROs confirmed via bulk upload, sent to Transport")
+        await db.commit()
+
+        doc_links = []
+        for container_number, doc in ccro_docs:
+            url = generate_par_url(doc.oci_path)
+            if url:
+                doc_links.append({"filename": f"CCRO — {container_number}.pdf", "url": url})
+
+        confirmed.append({
+            "shipment": await _get_shipment(db, shipment_id),
+            "container_numbers": [c for c, _ in ccro_docs],
+            "doc_links": doc_links,
+        })
+
+    if confirmed:
+        from app.notifications.service import notify_bulk_ccro_confirmed
+        await notify_bulk_ccro_confirmed(db, confirmed)
+
+    return {
+        "confirmed": len(confirmed),
+        "skipped": skipped,
+    }
+
+
 # ── Transport / DC: Container list view ──────────────────────────────────────
 
-async def get_container_view(db: AsyncSession, actor: User, historical: bool = False, skip: int = 0, limit: int | None = 200) -> list[dict]:
+async def get_container_view(
+    db: AsyncSession,
+    actor: User,
+    historical: bool = False,
+    skip: int = 0,
+    limit: int | None = 200,
+    search: str | None = None,
+    status_filter: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    amls_only: bool = False,
+    sort_by: str | None = None,
+    sort_dir: str = 'asc',
+) -> tuple[list[dict], int]:
     from app.masters.models import Truck, OffloadingPoint as OffloadingPointModel
     from sqlalchemy import exists as sa_exists
     from sqlalchemy.orm import aliased
@@ -2050,6 +2556,46 @@ async def get_container_view(db: AsyncSession, actor: User, historical: bool = F
         else:
             filters.append(Shipment.current_stage != ShipmentStage.COMPLETED)
 
+    # ── User-applied filters ──────────────────────────────────────────────────
+    if search:
+        from sqlalchemy import or_
+        term = f"%{search}%"
+        filters.append(or_(
+            Container.container_number.ilike(term),
+            Shipment.bl_number.ilike(term),
+        ))
+    if status_filter:
+        try:
+            filters.append(Container.status == ContainerStatus(status_filter))
+        except ValueError:
+            pass
+    if from_date:
+        try:
+            from_dt = datetime.fromisoformat(from_date).replace(tzinfo=timezone.utc)
+            filters.append(Container.offloaded_at != None)
+            filters.append(Container.offloaded_at >= from_dt)
+        except ValueError:
+            pass
+    if to_date:
+        try:
+            to_dt = datetime.fromisoformat(to_date).replace(hour=23, minute=59, second=59, tzinfo=timezone.utc)
+            filters.append(Container.offloaded_at != None)
+            filters.append(Container.offloaded_at <= to_dt)
+        except ValueError:
+            pass
+    if amls_only and actor.team == Team.DC:
+        filters.append(func.coalesce(ContainerOP.is_amls, ShipmentOP.is_amls, False) == True)
+
+    # ── Count total matching rows (efficient: no subquery columns) ────────────
+    count_q = (
+        select(func.count(Container.id))
+        .join(Shipment, Shipment.id == Container.shipment_id)
+        .outerjoin(ContainerOP, ContainerOP.id == Container.offloading_point_id)
+        .outerjoin(ShipmentOP, ShipmentOP.id == Shipment.offloading_point_id)
+        .where(*filters)
+    )
+    total = (await db.execute(count_q)).scalar() or 0
+
     from app.documents.models import Document as Doc
 
     # Subquery: was this container ever reset back to Transport by FFD, or had its truck unassigned
@@ -2094,7 +2640,7 @@ async def get_container_view(db: AsyncSession, actor: User, historical: bool = F
             Shipment.do_validity_date,
             Shipment.container_count,
             Truck.plate_number,
-            Truck.driver_name,
+            func.coalesce(Container.driver_name_override, Truck.driver_name).label("driver_name"),
             Truck.contractor,
             func.coalesce(ContainerOP.name, ShipmentOP.name).label("offloading_point_name"),
             was_requeued_sq.label("was_requeued"),
@@ -2106,16 +2652,33 @@ async def get_container_view(db: AsyncSession, actor: User, historical: bool = F
             func.coalesce(ContainerOP.is_amls, ShipmentOP.is_amls, False).label("offloading_is_amls"),
             OTruck.plate_number.label("outsourced_plate_number"),
             OTruck.driver_name.label("outsourced_driver_name"),
+            LoadingPort.name.label("loading_port_name"),
+            BayanType.name.label("bayan_type_name"),
         )
         .join(Shipment, Shipment.id == Container.shipment_id)
         .outerjoin(Truck, Truck.id == Container.truck_id)
         .outerjoin(ContainerOP, ContainerOP.id == Container.offloading_point_id)
         .outerjoin(ShipmentOP, ShipmentOP.id == Shipment.offloading_point_id)
         .outerjoin(OTruck, OTruck.id == Container.outsourced_truck_id)
+        .outerjoin(LoadingPort, LoadingPort.id == Shipment.loading_port_id)
+        .outerjoin(BayanType, BayanType.id == Shipment.bayan_type_id)
         .where(*filters)
-        .order_by(Container.expected_arrival_at.asc().nullslast(), Container.created_at.asc())
         .offset(skip)
     )
+    _cv_sort_cols = {
+        'bl':        Shipment.bl_number,
+        'container': Container.container_number,
+        'do':        Shipment.do_validity_date,
+        'truck':     Truck.plate_number,
+        'location':  func.coalesce(ContainerOP.name, ShipmentOP.name),
+        'eta':       func.coalesce(Container.arrived_at, Container.expected_arrival_at, Container.outsourced_expected_arrival_at),
+    }
+    if sort_by and sort_by in _cv_sort_cols:
+        col = _cv_sort_cols[sort_by]
+        order_expr = col.asc().nullslast() if sort_dir == 'asc' else col.desc().nullslast()
+        q = q.order_by(order_expr, Container.created_at.asc())
+    else:
+        q = q.order_by(Container.expected_arrival_at.asc().nullslast(), Container.created_at.asc())
     if limit is not None:
         q = q.limit(limit)
     rows = await db.execute(q)
@@ -2151,6 +2714,8 @@ async def get_container_view(db: AsyncSession, actor: User, historical: bool = F
             "outsourced_expected_arrival_at": row[0].outsourced_expected_arrival_at,
             "outsourced_plate_number": row[16],
             "outsourced_driver_name": row[17],
+            "loading_port_name": row[18],
+            "bayan_type_name": row[19],
         }
         for row in rows.all()
-    ]
+    ], total
