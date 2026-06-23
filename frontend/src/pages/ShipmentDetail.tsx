@@ -10,6 +10,7 @@ import { DocumentUploadPanel } from '@/components/DocumentUploadPanel'
 import { CreatableSelect } from '@/components/CreatableSelect'
 import { StageTimeline } from '@/components/StageTimeline'
 import { HoldPanel } from '@/components/HoldPanel'
+import { SalalahConfirmPanel } from '@/components/SalalahConfirmPanel'
 import { useAuth } from '@/hooks/useAuth'
 import { STAGE_LABELS, TASK_TYPE_LABELS, DOC_TYPE_LABELS, ENTITY_LABELS, HOLD_REASON_LABELS, CUSTOMER_REQUIRED_DOCS } from '@/types'
 import type { Task, Document as ShipmentDoc, Container, Truck, Shipment, ShipmentStage, DocumentType } from '@/types'
@@ -427,6 +428,15 @@ export function ShipmentDetail() {
 
   const customerDocs = documents.filter(d => ['COMMERCIAL_INVOICE','PACKING_LIST','CERT_OF_ORIGIN','HALAL_CERT','BL','HEALTH_CERT','MISCELLANEOUS'].includes(d.doc_type))
   const processDocs = documents.filter(d => !['COMMERCIAL_INVOICE','PACKING_LIST','CERT_OF_ORIGIN','HALAL_CERT','BL','HEALTH_CERT'].includes(d.doc_type))
+
+  const isSalalahPort = shipment.loading_port_name?.trim().toLowerCase() === 'salalah'
+
+  const allThreeTasksDone =
+    shipment.tasks.some(t => t.task_type === 'DO' && t.status === 'COMPLETED') &&
+    shipment.tasks.some(t => t.task_type === 'BAYAN' && t.status === 'COMPLETED') &&
+    (shipment.permit_not_required || shipment.tasks.some(t => t.task_type === 'PERMIT' && t.status === 'COMPLETED'))
+
+  const showSalalahPanel = team === 'FFD' && stage === 'IN_PROGRESS' && isSalalahPort && allThreeTasksDone
 
   const ccroTask = shipment.tasks.find(t => t.task_type === 'CCRO' && t.status !== 'COMPLETED')
   const containersMissingCcro = shipment.containers.filter(
@@ -1090,8 +1100,19 @@ export function ShipmentDetail() {
             </div>
           )}
 
-          {/* FFD: confirm CCROs — blocked with reason until all conditions met */}
-          {team === 'FFD' && stage === 'IN_PROGRESS' && shipment.containers.length > 0 && (
+          {/* FFD: Salalah — confirm panel (replaces CCRO confirm for Salalah port) */}
+          {showSalalahPanel && (
+            <div className="pt-2 border-t dark:border-gray-700">
+              <SalalahConfirmPanel
+                shipmentId={id!}
+                existingContainers={shipment.containers}
+                onConfirmed={refresh}
+              />
+            </div>
+          )}
+
+          {/* FFD: confirm CCROs — blocked with reason until all conditions met (non-Salalah only) */}
+          {team === 'FFD' && stage === 'IN_PROGRESS' && !isSalalahPort && shipment.containers.length > 0 && (
             <div className="pt-2 border-t dark:border-gray-700 space-y-1">
               <button
                 onClick={() => action(() => shipmentsApi.confirmCcro(id!), 'Sent to Transport')}
@@ -1124,7 +1145,9 @@ export function ShipmentDetail() {
               <div>
                 <p className="text-sm font-semibold text-gray-800 dark:text-gray-100">Recall from Transport</p>
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                  The shipment returns to IN_PROGRESS so you can upload missing CCROs and re-confirm. This is only allowed if Transport has not yet assigned any trucks.
+                  {isSalalahPort
+                    ? 'The shipment returns to IN_PROGRESS so you can re-confirm via the Salalah transport panel. Only allowed if Transport has not yet assigned any trucks.'
+                    : 'The shipment returns to IN_PROGRESS so you can upload missing CCROs and re-confirm. This is only allowed if Transport has not yet assigned any trucks.'}
                 </p>
               </div>
               <textarea

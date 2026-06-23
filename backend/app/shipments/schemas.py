@@ -60,6 +60,10 @@ class BulkConfirmCcroRequest(BaseModel):
     shipment_ids: list[UUID]
 
 
+class ConfirmSalalahTransportRequest(BaseModel):
+    container_numbers: list[str]
+
+
 class TaskOut(BaseModel):
     model_config = {"from_attributes": True}
     id: UUID

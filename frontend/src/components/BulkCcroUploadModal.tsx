@@ -17,6 +17,7 @@ interface RowState {
   blNumber: string | null
   containerCount: number | null
   detectedContainer: string | null
+  containerNumber: string
   hasExistingDoc: boolean
   conflictBl: string | null
   hasActiveCcroTask: boolean
@@ -50,6 +51,7 @@ export function BulkCcroUploadModal({ onClose, onDone }: Props) {
       blNumber: null,
       containerCount: null,
       detectedContainer: null,
+      containerNumber: '',
       hasExistingDoc: false,
       conflictBl: null,
       hasActiveCcroTask: false,
@@ -74,6 +76,7 @@ export function BulkCcroUploadModal({ onClose, onDone }: Props) {
               blNumber: item.bl_number,
               containerCount: item.container_count,
               detectedContainer: item.detected_container,
+              containerNumber: item.detected_container ?? '',
               hasExistingDoc: item.has_existing_doc,
               conflictBl: item.conflict_bl,
               hasActiveCcroTask: item.has_active_ccro_task,
@@ -98,12 +101,13 @@ export function BulkCcroUploadModal({ onClose, onDone }: Props) {
     setUploading(true)
 
     // Group idle+matched rows by shipment_id
-    const grouped = new Map<string, { rowIndexes: number[]; files: File[] }>()
+    const grouped = new Map<string, { rowIndexes: number[]; files: File[]; containerNumbers: (string | null)[] }>()
     rows.forEach((row, idx) => {
       if (!row.shipmentId || row.uploadStatus !== 'idle' || row.hasExistingDoc || row.conflictBl || !row.hasActiveCcroTask) return
-      if (!grouped.has(row.shipmentId)) grouped.set(row.shipmentId, { rowIndexes: [], files: [] })
+      if (!grouped.has(row.shipmentId)) grouped.set(row.shipmentId, { rowIndexes: [], files: [], containerNumbers: [] })
       grouped.get(row.shipmentId)!.rowIndexes.push(idx)
       grouped.get(row.shipmentId)!.files.push(row.file)
+      grouped.get(row.shipmentId)!.containerNumbers.push(row.containerNumber || null)
     })
 
     // Mark all as uploading
@@ -119,9 +123,9 @@ export function BulkCcroUploadModal({ onClose, onDone }: Props) {
     let totalFailed = 0
     let totalDuplicates = 0
 
-    for (const [shipmentId, { rowIndexes, files }] of grouped) {
+    for (const [shipmentId, { rowIndexes, files, containerNumbers }] of grouped) {
       try {
-        const { data } = await shipmentsApi.bulkCcroUpload(shipmentId, files)
+        const { data } = await shipmentsApi.bulkCcroUpload(shipmentId, files, containerNumbers)
 
         // Compute flags directly from response data — NOT inside the setRows updater,
         // because React calls updaters lazily.
@@ -212,6 +216,14 @@ export function BulkCcroUploadModal({ onClose, onDone }: Props) {
 
   function removeRow(idx: number) {
     setRows(prev => prev.filter((_, i) => i !== idx))
+  }
+
+  function setContainerNumber(idx: number, value: string) {
+    setRows(prev => {
+      const updated = [...prev]
+      updated[idx] = { ...updated[idx], containerNumber: value }
+      return updated
+    })
   }
 
   function setManualMatch(idx: number, shipmentId: string, blNumber: string, containerCount: number | null) {
@@ -343,6 +355,7 @@ export function BulkCcroUploadModal({ onClose, onDone }: Props) {
                     row={row}
                     onRemove={() => removeRow(idx)}
                     onMatch={(sid, bl, cc) => setManualMatch(idx, sid, bl, cc)}
+                    onContainerChange={v => setContainerNumber(idx, v)}
                   />
                 ))}
               </div>
@@ -414,10 +427,12 @@ function CcroFileRow({
   row,
   onRemove,
   onMatch,
+  onContainerChange,
 }: {
   row: RowState
   onRemove: () => void
   onMatch: (shipmentId: string, blNumber: string, containerCount: number | null) => void
+  onContainerChange: (value: string) => void
 }) {
   const [searching, setSearching] = useState(false)
   const [query, setQuery] = useState('')
@@ -518,11 +533,13 @@ function CcroFileRow({
               <span className="text-xs font-medium text-green-700 dark:text-green-400 bg-green-100 dark:bg-green-900/30 px-2 py-0.5 rounded-full">
                 {row.blNumber}
               </span>
-              {row.detectedContainer && (
-                <span className="text-xs font-mono text-gray-600 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 px-2 py-0.5 rounded-full">
-                  {row.detectedContainer}
-                </span>
-              )}
+              <input
+                type="text"
+                value={row.containerNumber}
+                onChange={e => onContainerChange(e.target.value.toUpperCase())}
+                placeholder="Container no."
+                className="text-xs font-mono border rounded px-2 py-0.5 w-36 bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              />
               <button
                 onClick={startSearching}
                 className="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 underline"

@@ -1,7 +1,7 @@
 import uuid
 from datetime import date
 from typing import Optional
-from fastapi import APIRouter, Body, Depends, File, Query, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, Query, UploadFile
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -71,10 +71,11 @@ async def import_shipments(
 async def bulk_ccro_upload(
     shipment_id: uuid.UUID,
     files: list[UploadFile] = File(...),
+    container_numbers: list[str] = Form(default=[]),
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ):
-    return await service.bulk_upload_ccros(db, shipment_id, actor, files)
+    return await service.bulk_upload_ccros(db, shipment_id, actor, files, container_numbers)
 
 
 @router.post("/bulk-pull-out-date", status_code=204)
@@ -252,6 +253,17 @@ async def delete_container(shipment_id: uuid.UUID, container_id: uuid.UUID, db: 
 @router.post("/{shipment_id}/confirm-ccro", response_model=schemas.ShipmentOut)
 async def confirm_ccro(shipment_id: uuid.UUID, db: AsyncSession = Depends(get_db), actor: User = Depends(get_current_user)):
     return await service.confirm_ccro_and_send_to_transport(db, shipment_id, actor)
+
+
+@router.get("/{shipment_id}/bayan-containers")
+async def get_bayan_containers(shipment_id: uuid.UUID, db: AsyncSession = Depends(get_db), actor: User = Depends(get_current_user)):
+    suggestions = await service.get_bayan_container_suggestions(db, shipment_id, actor)
+    return {"container_numbers": suggestions}
+
+
+@router.post("/{shipment_id}/confirm-salalah-transport", response_model=schemas.ShipmentOut)
+async def confirm_salalah_transport(shipment_id: uuid.UUID, body: schemas.ConfirmSalalahTransportRequest, db: AsyncSession = Depends(get_db), actor: User = Depends(get_current_user)):
+    return await service.confirm_salalah_transport(db, shipment_id, actor, body.container_numbers)
 
 
 @router.post("/{shipment_id}/send-back-to-transport", response_model=schemas.ShipmentOut)

@@ -79,6 +79,12 @@ export const shipmentsApi = {
 
   confirmCcro: (id: string) => api.post<Shipment>(`/shipments/${id}/confirm-ccro`),
 
+  getBayanContainers: (id: string) =>
+    api.get<{ container_numbers: string[] }>(`/shipments/${id}/bayan-containers`),
+
+  confirmSalalahTransport: (id: string, container_numbers: string[]) =>
+    api.post<Shipment>(`/shipments/${id}/confirm-salalah-transport`, { container_numbers }),
+
   recallFromTransport: (id: string, remark: string) =>
     api.post<Shipment>(`/shipments/${id}/recall-from-transport`, { remark }),
 
@@ -157,9 +163,10 @@ export const shipmentsApi = {
   containerView: (params?: { historical?: boolean; skip?: number; limit?: number; search?: string; status?: string; from_date?: string; to_date?: string; amls_only?: boolean; sort_by?: string; sort_dir?: string }) =>
     api.get<PaginatedContainerView>('/shipments/container-view', { params }),
 
-  bulkCcroUpload: (shipmentId: string, files: File[]) => {
+  bulkCcroUpload: (shipmentId: string, files: File[], containerNumbers?: (string | null)[]) => {
     const form = new FormData()
     files.forEach(f => form.append('files', f))
+    if (containerNumbers) containerNumbers.forEach(cn => form.append('container_numbers', cn ?? ''))
     return api.post<{
       results: { filename: string; container_number: string | null; status: 'created' | 'matched' | 'not_detected' | 'duplicate'; container_id: string | null; conflict_bl?: string }[]
       matched: number

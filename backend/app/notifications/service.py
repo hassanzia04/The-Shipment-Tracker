@@ -37,6 +37,10 @@ TEMPLATES: dict[str, dict] = {
         "subject": "FFD Tracker — CCROs ready, please arrange transport",
         "body": "CCROs for BL: {bl_number} have been confirmed. Please assign trucks to the containers.",
     },
+    "salalah_ready_for_transport": {
+        "subject": "FFD Tracker — Salalah shipment ready for transport, BL: {bl_number}",
+        "body": "Bayan and DO are complete for BL: {bl_number} loading from Salalah Port. Please coordinate with the FFD team to book port appointments and arrange trucks.",
+    },
     "ccro_sent_to_dc": {
         "subject": "FFD Tracker — Shipments incoming, CCROs sent to Transport",
         "body": "CCROs for BL: {bl_number} have been sent to the Transport team. Containers: {container_numbers}. Please coordinate with Transport regarding expected arrival.",

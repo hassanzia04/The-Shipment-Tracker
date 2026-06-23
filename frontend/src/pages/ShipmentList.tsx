@@ -39,6 +39,9 @@ const ALL_COLUMNS = [
   { key: 'amls',       label: 'AMLS Job# / Permit No' },
 ] as const
 
+// Columns hidden on mobile by default (previously handled by Tailwind responsive classes)
+const MOBILE_DEFAULT_HIDDEN = new Set(['invoice', 'consignee', 'port', 'bayan_type', 'pull_out', 'eta', 'do_validity', 'amls'])
+
 // ── Progress status indicator ─────────────────────────────────────────────────
 
 function StatusDot({ status }: { status: TaskStatus | boolean | null | undefined }) {
@@ -382,7 +385,7 @@ function InlineAssignPanel({ shipmentId, proUsers, onDone }: {
 
 // ── Priority table (with optional FFD inline assign) ─────────────────────────
 
-function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCustomer, isPRO, isDC, expandedId, onExpand, proUsers, onRefresh, sort, onSort, hiddenCols = new Set() }: {
+function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCustomer, isPRO, isDC, expandedId, onExpand, proUsers, onRefresh, sort, onSort, hiddenCols = new Set(), isMobile = false }: {
   shipments: ShipmentListItem[]
   page: number
   totalPages: number
@@ -399,13 +402,17 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
   sort: SortState
   onSort: (col: string) => void
   hiddenCols?: Set<string>
+  isMobile?: boolean
 }) {
   const qc = useQueryClient()
   const offset = (page - 1) * PAGE_SIZE
   const colSpan = isFFD ? 13 : (isCustomer || isPRO) ? 14 : 13
 
   function colCls(key: string, whenVisible: string): string {
-    return hiddenCols.has(key) ? 'hidden' : whenVisible
+    if (hiddenCols.has(key)) return 'hidden'
+    // On mobile, strip Tailwind responsive hiding prefixes so hiddenCols controls visibility
+    if (isMobile) return whenVisible.replace(/hidden (?:sm|md|lg|xl|2xl):table-cell\s*/g, '')
+    return whenVisible
   }
   const [editingDateId, setEditingDateId] = useState<string | null>(null)
   const [dateValue, setDateValue] = useState('')
@@ -1132,17 +1139,22 @@ export function ShipmentList() {
     setPage(1)
   }, [])
 
-  const [hiddenCols, setHiddenCols] = useState<Set<string>>(new Set())
+  const [isMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768)
+  const [hiddenCols, setHiddenCols] = useState<Set<string>>(() =>
+    typeof window !== 'undefined' && window.innerWidth < 768 ? new Set(MOBILE_DEFAULT_HIDDEN) : new Set()
+  )
   const [showColPicker, setShowColPicker] = useState(false)
   const colPickerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!user?.id) return
     try {
-      const stored = localStorage.getItem(`col_prefs_${user.id}`)
+      const key = isMobile ? `col_prefs_mobile_${user.id}` : `col_prefs_${user.id}`
+      const stored = localStorage.getItem(key)
       if (stored) setHiddenCols(new Set(JSON.parse(stored) as string[]))
+      else if (isMobile) setHiddenCols(new Set(MOBILE_DEFAULT_HIDDEN))
     } catch { /* ignore */ }
-  }, [user?.id])
+  }, [user?.id, isMobile])
 
   useEffect(() => {
     if (!showColPicker) return
@@ -1160,10 +1172,20 @@ export function ShipmentList() {
       const next = new Set(prev)
       if (next.has(key)) next.delete(key)
       else next.add(key)
-      try { localStorage.setItem(`col_prefs_${user!.id}`, JSON.stringify([...next])) } catch { /* ignore */ }
+      const storageKey = isMobile ? `col_prefs_mobile_${user!.id}` : `col_prefs_${user!.id}`
+      try { localStorage.setItem(storageKey, JSON.stringify([...next])) } catch { /* ignore */ }
       return next
     })
   }
+
+  // On mobile: badge counts extra-visible columns (added beyond default). On desktop: hidden count.
+  const colBadgeCount = isMobile
+    ? [...MOBILE_DEFAULT_HIDDEN].filter(k => !hiddenCols.has(k)).length
+    : hiddenCols.size
+  // Customized if state differs from the breakpoint default
+  const hasCustomCols = isMobile
+    ? hiddenCols.size !== MOBILE_DEFAULT_HIDDEN.size || [...hiddenCols].some(k => !MOBILE_DEFAULT_HIDDEN.has(k))
+    : hiddenCols.size > 0
 
   function colCls(key: string, whenVisible: string): string {
     return hiddenCols.has(key) ? 'hidden' : whenVisible
@@ -1458,16 +1480,16 @@ export function ShipmentList() {
                 onClick={() => setShowColPicker(v => !v)}
                 className={clsx(
                   'flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border transition-colors whitespace-nowrap',
-                  showColPicker || hiddenCols.size > 0
+                  showColPicker || hasCustomCols
                     ? 'bg-blue-50 border-blue-300 text-blue-700 dark:bg-blue-900/20 dark:border-blue-600 dark:text-blue-400'
                     : 'border-gray-300 dark:border-gray-600 text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700'
                 )}
               >
                 <SlidersHorizontal size={14} />
                 Columns
-                {hiddenCols.size > 0 && (
+                {colBadgeCount > 0 && (
                   <span className="ml-0.5 bg-blue-600 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center font-medium leading-none">
-                    {hiddenCols.size}
+                    {colBadgeCount}
                   </span>
                 )}
               </button>
@@ -1485,11 +1507,13 @@ export function ShipmentList() {
                       <span className="text-sm text-gray-700 dark:text-gray-300">{col.label}</span>
                     </label>
                   ))}
-                  {hiddenCols.size > 0 && (
+                  {hasCustomCols && (
                     <button
                       onClick={() => {
-                        setHiddenCols(new Set())
-                        try { localStorage.removeItem(`col_prefs_${user!.id}`) } catch { /* ignore */ }
+                        const defaults = isMobile ? new Set(MOBILE_DEFAULT_HIDDEN) : new Set<string>()
+                        setHiddenCols(defaults)
+                        const storageKey = isMobile ? `col_prefs_mobile_${user!.id}` : `col_prefs_${user!.id}`
+                        try { localStorage.removeItem(storageKey) } catch { /* ignore */ }
                       }}
                       className="mt-2 w-full text-xs text-center text-blue-600 dark:text-blue-400 hover:underline"
                     >
@@ -1553,6 +1577,7 @@ export function ShipmentList() {
           sort={sort}
           onSort={toggleSort}
           hiddenCols={hiddenCols}
+          isMobile={isMobile}
         />
       )}
 

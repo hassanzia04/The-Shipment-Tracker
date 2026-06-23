@@ -687,6 +687,31 @@ def _extract_bl_from_pdf(filename: str, raw: bytes) -> str | None:
         return m.group(1)
     return None
 
+def extract_container_numbers_from_bayan(raw: bytes) -> list[str]:
+    """Extract all ISO 6346 container numbers from a Bayan PDF.
+
+    Scans all pages for the standard 4-letter owner code + 6-digit serial + check digit
+    pattern and returns de-duplicated, validated container numbers in order of appearance.
+    """
+    import re
+    results: list[str] = []
+    seen: set[str] = set()
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(raw))
+        text = "\n".join(page.extract_text() or "" for page in reader.pages)
+        for match in re.finditer(r'\b([A-Z]{3}[UJZ])[ -]?(\d{6})(\d)\b', text):
+            candidate = match.group(1) + match.group(2) + match.group(3)
+            if candidate not in seen:
+                from app.shipments.service import _iso6346_check_digit_valid
+                if _iso6346_check_digit_valid(candidate):
+                    results.append(candidate)
+                    seen.add(candidate)
+    except Exception:
+        pass
+    return results
+
+
 def _extract_permit_from_pdf(filename: str, raw: bytes) -> str | None:
     """Last-resort: scan PDF text for permit number near PERMIT/LICENSE label."""
     import re

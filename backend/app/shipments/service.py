@@ -92,9 +92,18 @@ def _task_completed(shipment: Shipment, task_type: TaskType) -> bool:
     return any(t.task_type == task_type and t.status == TaskStatus.COMPLETED for t in shipment.tasks)
 
 
+def _is_salalah_port(shipment: Shipment) -> bool:
+    """Salalah port does not issue CCROs; those shipments follow the direct-to-transport flow."""
+    return bool(shipment.loading_port_name and shipment.loading_port_name.strip().lower() == "salalah")
+
+
 async def _maybe_auto_open_ccro(db: AsyncSession, shipment: Shipment, actor: User) -> None:
-    """Open the CCRO task automatically once Bayan, DO, and Permit are all complete."""
+    """Open the CCRO task automatically once Bayan, DO, and Permit are all complete.
+    Salalah port shipments skip CCRO entirely — FFD confirms via the Salalah panel instead."""
     if shipment.current_stage != ShipmentStage.IN_PROGRESS:
+        return
+    # Salalah does not issue CCROs — the confirmation panel handles the Transport transition
+    if _is_salalah_port(shipment):
         return
     if _active_tasks(shipment, TaskType.CCRO):
         return
@@ -1055,6 +1064,8 @@ async def open_ccro_task(db: AsyncSession, shipment_id: uuid.UUID, actor: User) 
     shipment = await _get_shipment(db, shipment_id)
     _assert_team(actor, Team.FFD)
     _assert_stage(shipment, ShipmentStage.IN_PROGRESS)
+    if _is_salalah_port(shipment):
+        raise HTTPException(status_code=400, detail="Salalah port does not issue CCROs — use the Salalah transport confirmation instead")
     if not _task_completed(shipment, TaskType.DO):
         raise HTTPException(status_code=400, detail="DO must be completed first")
     if not _task_completed(shipment, TaskType.BAYAN):
@@ -1249,6 +1260,90 @@ async def confirm_ccro_and_send_to_transport(db: AsyncSession, shipment_id: uuid
     return await _get_shipment(db, shipment_id)
 
 
+# ── FFD: Salalah — extract container numbers from uploaded Bayan ──────────────
+
+async def get_bayan_container_suggestions(db: AsyncSession, shipment_id: uuid.UUID, actor: User) -> list[str]:
+    """Return ISO 6346 container numbers extracted from the latest uploaded Bayan PDF.
+    Returns an empty list if no Bayan is uploaded or extraction finds nothing."""
+    from app.documents.models import Document
+    from app.enums import DocumentType
+    from app.documents.service import extract_container_numbers_from_bayan, fetch_oci_bytes
+
+    _assert_team(actor, Team.FFD)
+    result = await db.execute(
+        select(Document).where(
+            Document.shipment_id == shipment_id,
+            Document.doc_type == DocumentType.BAYAN,
+        ).order_by(Document.uploaded_at.desc()).limit(1)
+    )
+    bayan_doc = result.scalars().first()
+    if not bayan_doc or not bayan_doc.oci_path:
+        return []
+
+    raw = fetch_oci_bytes(bayan_doc.oci_path)
+    if not raw:
+        return []
+    return extract_container_numbers_from_bayan(raw)
+
+
+# ── FFD: Salalah — confirm Bayan/DO/Permit complete, send to Transport ────────
+
+async def confirm_salalah_transport(
+    db: AsyncSession,
+    shipment_id: uuid.UUID,
+    actor: User,
+    container_numbers: list[str],
+) -> Shipment:
+    """For Salalah port shipments: validate all 3 tasks are done, register any new
+    container numbers, advance to TRANSPORT, and notify Transport + DC."""
+    shipment = await _get_shipment(db, shipment_id)
+    _assert_team(actor, Team.FFD)
+    _assert_stage(shipment, ShipmentStage.IN_PROGRESS)
+
+    if not _is_salalah_port(shipment):
+        raise HTTPException(status_code=400, detail="This action is only available for Salalah port shipments")
+
+    if not _task_completed(shipment, TaskType.DO):
+        raise HTTPException(status_code=400, detail="DO task must be completed first")
+    if not _task_completed(shipment, TaskType.BAYAN):
+        raise HTTPException(status_code=400, detail="Bayan task must be completed first")
+    permit_ok = shipment.permit_not_required or _task_completed(shipment, TaskType.PERMIT)
+    if not permit_ok:
+        raise HTTPException(status_code=400, detail="Permit task must be completed first")
+    if not container_numbers:
+        raise HTTPException(status_code=400, detail="At least one container number is required")
+
+    # Register any container numbers not already on this shipment
+    existing_numbers = {c.container_number.upper() for c in shipment.containers}
+    for raw_number in container_numbers:
+        number = raw_number.strip().upper()
+        if not number:
+            continue
+        if number in existing_numbers:
+            continue
+        await _assert_container_not_active(db, number, exclude_shipment_id=shipment_id)
+        container = Container(shipment_id=shipment.id, container_number=number)
+        db.add(container)
+        await db.flush()
+        await _record_event(db, shipment, EventType.CONTAINER_ADDED, actor, remark=number)
+        existing_numbers.add(number)
+
+    prev_stage = shipment.current_stage
+    shipment.current_stage = ShipmentStage.TRANSPORT
+    container_list = ", ".join(sorted(existing_numbers))
+    await _record_event(
+        db, shipment, EventType.STAGE_CHANGED, actor,
+        stage_from=prev_stage, stage_to=ShipmentStage.TRANSPORT,
+        remark=f"Salalah — Bayan, DO, and Permit complete. Containers: {container_list}",
+    )
+    await db.commit()
+
+    from app.notifications.service import notify_team
+    await notify_team(db, shipment, Team.TRANSPORT, "salalah_ready_for_transport")
+    await notify_team(db, shipment, Team.DC, "ccro_sent_to_dc", container_numbers=container_list)
+    return await _get_shipment(db, shipment_id)
+
+
 # ── FFD: Recall from Transport (before any truck assigned) ───────────────────
 
 async def recall_from_transport(db: AsyncSession, shipment_id: uuid.UUID, actor: User, remark: str) -> Shipment:
@@ -1284,6 +1379,9 @@ async def send_back_to_transport(db: AsyncSession, shipment_id: uuid.UUID, actor
     shipment = await _get_shipment(db, shipment_id)
     _assert_team(actor, Team.FFD)
     _assert_stage(shipment, ShipmentStage.IN_PROGRESS)
+
+    if _is_salalah_port(shipment):
+        raise HTTPException(status_code=400, detail="Salalah port shipments do not use CCROs — use the Salalah transport confirmation panel to re-send to Transport")
 
     if not shipment.containers:
         raise HTTPException(status_code=400, detail="No containers on this shipment")
@@ -1973,6 +2071,7 @@ async def bulk_upload_ccros(
     shipment_id: uuid.UUID,
     actor: User,
     files: list,
+    container_numbers: list[str] | None = None,
 ) -> dict:
     from app.documents.service import upload_document as _upload_doc
     from app.documents.models import Document
@@ -2009,7 +2108,8 @@ async def bulk_upload_ccros(
             headers=_Headers({"content-type": file.content_type or "application/pdf"}),
         )
 
-        container_number = _extract_container_number(raw)
+        override = (container_numbers[len(results)].strip() if container_numbers and len(results) < len(container_numbers) else None)
+        container_number = override or _extract_container_number(raw)
 
         extracted_bl = _extract_bl(raw)
         bl_warning: str | None = None
@@ -2441,6 +2541,10 @@ async def bulk_confirm_ccro_and_notify(
             continue
 
         if shipment.current_stage != ShipmentStage.IN_PROGRESS:
+            skipped.append(shipment.bl_number)
+            continue
+
+        if _is_salalah_port(shipment):
             skipped.append(shipment.bl_number)
             continue
 
