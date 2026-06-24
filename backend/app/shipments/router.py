@@ -34,6 +34,9 @@ async def list_shipments(
     pull_out_to: Optional[date] = Query(None),
     sort_by: Optional[str] = Query(None),
     sort_dir: str = Query('asc'),
+    historical: bool = Query(False),
+    completed_from: Optional[date] = Query(None),
+    completed_to: Optional[date] = Query(None),
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ):
@@ -44,6 +47,7 @@ async def list_shipments(
         amls_search=amls_search or None, missing_amls=missing_amls,
         pull_out_from=pull_out_from, pull_out_to=pull_out_to,
         sort_by=sort_by, sort_dir=sort_dir,
+        historical=historical, completed_from=completed_from, completed_to=completed_to,
     )
     return {"items": items, "total": total, "skip": skip, "limit": limit}
 
@@ -159,10 +163,13 @@ async def bl_export(
     missing_amls: bool = Query(False),
     pull_out_from: Optional[date] = Query(None),
     pull_out_to: Optional[date] = Query(None),
+    historical: bool = Query(False),
+    completed_from: Optional[date] = Query(None),
+    completed_to: Optional[date] = Query(None),
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ):
-    content = await service.export_shipments_list(db, actor, search=search, stage=stage, my_queue=my_queue, missing_date=missing_date, amls_search=amls_search or None, missing_amls=missing_amls, pull_out_from=pull_out_from, pull_out_to=pull_out_to)
+    content = await service.export_shipments_list(db, actor, search=search, stage=stage, my_queue=my_queue, missing_date=missing_date, amls_search=amls_search or None, missing_amls=missing_amls, pull_out_from=pull_out_from, pull_out_to=pull_out_to, historical=historical, completed_from=completed_from, completed_to=completed_to)
     return Response(
         content=content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

@@ -157,6 +157,11 @@ class Shipment(Base):
     def offloading_is_amls(self) -> bool:
         return bool(self.offloading_point and self.offloading_point.is_amls)
 
+    @property
+    def offloading_date(self) -> "datetime | None":
+        dates = [c.offloaded_at for c in (self.containers or []) if c.offloaded_at]
+        return max(dates) if dates else None
+
 
 class ShipmentTask(Base):
     __tablename__ = "shipment_tasks"

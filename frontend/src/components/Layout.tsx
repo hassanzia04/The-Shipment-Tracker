@@ -159,7 +159,7 @@ export function Layout({ children }: Props) {
           >
             <Menu size={20} />
           </button>
-          <span className="font-semibold text-gray-900 dark:text-white text-sm">Shipment Tracker</span>
+          <span className="font-semibold text-gray-900 dark:text-white text-sm truncate min-w-0 flex-1">Shipment Tracker</span>
           <div className="ml-auto flex items-center gap-2">
             <NotificationBell />
             <span className="text-xs text-gray-500 dark:text-gray-400">{user ? TEAM_LABELS[user.team] : ''}</span>

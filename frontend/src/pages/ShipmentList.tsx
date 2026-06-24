@@ -22,7 +22,7 @@ import {
 import { STAGE_LABELS, TASK_TYPE_LABELS } from '@/types'
 import type { ShipmentListItem, ShipmentStage, TaskType, TaskStatus } from '@/types'
 import type { SortState } from '@/lib/sort'
-import { formatDate } from '@/lib/dates'
+import { formatDate, formatDateTime } from '@/lib/dates'
 import { SortableHeader } from '@/components/SortableHeader'
 import clsx from 'clsx'
 
@@ -385,7 +385,7 @@ function InlineAssignPanel({ shipmentId, proUsers, onDone }: {
 
 // ── Priority table (with optional FFD inline assign) ─────────────────────────
 
-function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCustomer, isPRO, isDC, expandedId, onExpand, proUsers, onRefresh, sort, onSort, hiddenCols = new Set(), isMobile = false }: {
+function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCustomer, isPRO, isDC, expandedId, onExpand, proUsers, onRefresh, sort, onSort, hiddenCols = new Set(), isMobile = false, historical = false }: {
   shipments: ShipmentListItem[]
   page: number
   totalPages: number
@@ -403,6 +403,7 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
   onSort: (col: string) => void
   hiddenCols?: Set<string>
   isMobile?: boolean
+  historical?: boolean
 }) {
   const qc = useQueryClient()
   const offset = (page - 1) * PAGE_SIZE
@@ -617,11 +618,11 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
         </div>
       )}
 
-      <div className="overflow-x-auto">
+      <div className="overflow-x-auto md:overflow-auto md:max-h-[calc(100vh-280px)]">
         <table className="w-full text-sm">
-          <thead className="bg-gray-50 dark:bg-gray-700 border-b dark:border-gray-600">
+          <thead className="bg-gray-50 dark:bg-gray-700 border-b dark:border-gray-600 sticky top-0 z-20">
             <tr>
-              {isCustomer && (
+              {isCustomer && !historical && (
                 <th className="px-3 py-3 w-10">
                   <input
                     type="checkbox"
@@ -631,7 +632,7 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                   />
                 </th>
               )}
-              {isPRO && (
+              {isPRO && !historical && (
                 <th className="px-3 py-3 w-10">
                   <input
                     type="checkbox"
@@ -649,7 +650,7 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
               <th className={colCls('bayan_type', 'hidden xl:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>Bayan Type</th>
               <SortableHeader label={isPRO ? 'My Task' : 'Stage'} column="stage" sort={sort} onSort={onSort} className={colCls('stage', 'px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide')} />
               <th className={colCls('progress', 'text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>Progress</th>
-              <SortableHeader label="Planned Pull out" column="pull_out" sort={sort} onSort={onSort} className={colCls('pull_out', 'hidden md:table-cell px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide')} />
+              <SortableHeader label={historical ? 'Offloading Date' : 'Planned Pull out'} column="pull_out" sort={sort} onSort={onSort} className={colCls('pull_out', 'hidden md:table-cell px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide')} />
               <SortableHeader label="ETA to Port"  column="eta"         sort={sort} onSort={onSort} className={colCls('eta',         'hidden xl:table-cell px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide')} />
               <SortableHeader label="DO Validity"  column="do_validity" sort={sort} onSort={onSort} className={colCls('do_validity', 'hidden xl:table-cell px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide')} />
               <th className={colCls('amls', 'hidden lg:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>{isPRO ? 'Permit No' : 'AMLS Job#'}</th>
@@ -662,13 +663,13 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
               <tr><td colSpan={colSpan} className="text-center text-gray-400 py-10 text-sm">No shipments found</td></tr>
             )}
             {displaySorted.map((s, idx) => {
-              const u = urgency(s.pull_out_date)
-              const isUrgent = u.days !== null && u.days <= 3
-              const isOverdue = u.days !== null && u.days < 0
+              const u = historical ? { days: null } : urgency(s.pull_out_date)
+              const isUrgent = !historical && u.days !== null && u.days <= 3
+              const isOverdue = !historical && u.days !== null && u.days < 0
               const isExpanded = expandedId === s.id
-              const showAssignBtn = isFFD && s.current_stage === 'IN_PROGRESS'
-              const showReviewBtn = isFFD && s.current_stage === 'FFD_REVIEW'
-              const showPaymentBtn = isCustomer && s.bayan_payment_pending && s.bayan_payment_task_id
+              const showAssignBtn = !historical && isFFD && s.current_stage === 'IN_PROGRESS'
+              const showReviewBtn = !historical && isFFD && s.current_stage === 'FFD_REVIEW'
+              const showPaymentBtn = !historical && isCustomer && s.bayan_payment_pending && s.bayan_payment_task_id
 
               return (
                 <>
@@ -681,7 +682,7 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                       isExpanded && '!bg-blue-50 dark:!bg-blue-900/10',
                     )}
                   >
-                    {isCustomer && (
+                    {isCustomer && !historical && (
                       <td className="px-3 py-3">
                         <input
                           type="checkbox"
@@ -691,7 +692,7 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                         />
                       </td>
                     )}
-                    {isPRO && (
+                    {isPRO && !historical && (
                       <td className="px-3 py-3">
                         <input
                           type="checkbox"
@@ -790,7 +791,9 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                       <ProgressCell s={s} />
                     </td>
                     <td className={colCls('pull_out', 'hidden md:table-cell px-3 py-3 text-gray-600 dark:text-gray-300')}>
-                      {isCustomer && editingDateId === s.id ? (
+                      {historical ? (
+                        <span className="text-xs text-gray-600 dark:text-gray-300">{formatDateTime(s.offloading_date)}</span>
+                      ) : isCustomer && editingDateId === s.id ? (
                         <div className="flex items-center gap-1">
                           <input
                             type="date"
@@ -1040,8 +1043,8 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
         <Pagination page={page} totalPages={totalPages} total={total} onPage={onPage} />
       </div>
 
-      {isCustomer && selectedIds.size > 0 && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none">
+      {isCustomer && !historical && selectedIds.size > 0 && (
+        <div className="fixed bottom-20 lg:bottom-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none">
           <div className="flex items-center gap-3 bg-gray-900 dark:bg-gray-700 text-white px-5 py-3 rounded-2xl shadow-xl border border-gray-700 dark:border-gray-600 pointer-events-auto">
             <span className="text-sm">
               <span className="font-semibold text-blue-400">{selectedIds.size}</span>
@@ -1071,8 +1074,8 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
         </div>
       )}
 
-      {isPRO && selectedProIds.size > 0 && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none">
+      {isPRO && !historical && selectedProIds.size > 0 && (
+        <div className="fixed bottom-20 lg:bottom-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none">
           <div className="flex items-center gap-3 bg-gray-900 dark:bg-gray-700 text-white px-5 py-3 rounded-2xl shadow-xl border border-gray-700 dark:border-gray-600 pointer-events-auto">
             <span className="text-sm">
               <span className="font-semibold text-blue-400">{selectedProIds.size}</span>
@@ -1122,12 +1125,16 @@ export function ShipmentList() {
   const defaultStage: ShipmentStage | '' | 'my_queue' = (user?.team === 'MANAGEMENT' || user?.is_admin) ? '' : 'my_queue'
   const stageFilter = (searchParams.get('stage') as ShipmentStage | '' | 'my_queue' | null) ?? defaultStage
   const setStageFilter = (s: ShipmentStage | '' | 'my_queue') => setSearchParams(p => { p.set('stage', s); return p })
+  const historical = searchParams.get('historical') === 'true'
+  const setHistorical = (v: boolean) => setSearchParams(p => { p.set('historical', String(v)); p.set('page', '1'); if (v) p.delete('stage'); return p })
   const [missingDate, setMissingDate] = useState(false)
   const [amlsSearch, setAmlsSearch] = useState('')
   const [debouncedAmlsSearch, setDebouncedAmlsSearch] = useState('')
   const [missingAmls, setMissingAmls] = useState(false)
   const [pullOutFrom, setPullOutFrom] = useState('')
   const [pullOutTo, setPullOutTo] = useState('')
+  const [completedFrom, setCompletedFrom] = useState('')
+  const [completedTo, setCompletedTo] = useState('')
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [showBulkBayan, setShowBulkBayan] = useState(false)
   const [showBulkPermit, setShowBulkPermit] = useState(false)
@@ -1203,13 +1210,16 @@ export function ShipmentList() {
     try {
       const { data } = await shipmentsApi.blExport({
         search: debouncedSearch || undefined,
-        stage: isMyQueue ? undefined : (stageFilter || undefined),
+        stage: (!historical && !isMyQueue) ? (stageFilter || undefined) : undefined,
         my_queue: isMyQueue || undefined,
-        missing_date: missingDate || undefined,
+        missing_date: (!historical && missingDate) || undefined,
         amls_search: debouncedAmlsSearch || undefined,
         missing_amls: missingAmls || undefined,
-        pull_out_from: pullOutFrom || undefined,
-        pull_out_to: pullOutTo || undefined,
+        pull_out_from: (!historical && pullOutFrom) || undefined,
+        pull_out_to: (!historical && pullOutTo) || undefined,
+        historical: historical || undefined,
+        completed_from: (historical && completedFrom) || undefined,
+        completed_to: (historical && completedTo) || undefined,
       })
       const url = URL.createObjectURL(new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
       const a = document.createElement('a')
@@ -1236,26 +1246,29 @@ export function ShipmentList() {
   useEffect(() => {
     if (isFirstRender.current) { isFirstRender.current = false; return }
     setPage(1)
-  }, [debouncedSearch, stageFilter, missingDate, debouncedAmlsSearch, missingAmls, pullOutFrom, pullOutTo])
+  }, [debouncedSearch, stageFilter, missingDate, debouncedAmlsSearch, missingAmls, pullOutFrom, pullOutTo, completedFrom, completedTo])
 
   const skip = (page - 1) * PAGE_SIZE
-  const isMyQueue = stageFilter === 'my_queue'
+  const isMyQueue = !historical && stageFilter === 'my_queue'
 
   const { data, isLoading } = useQuery({
-    queryKey: ['shipments', skip, debouncedSearch, stageFilter, missingDate, debouncedAmlsSearch, missingAmls, pullOutFrom, pullOutTo, sort.column, sort.dir],
+    queryKey: ['shipments', skip, debouncedSearch, stageFilter, missingDate, debouncedAmlsSearch, missingAmls, pullOutFrom, pullOutTo, sort.column, sort.dir, historical, completedFrom, completedTo],
     queryFn: () => shipmentsApi.list({
       skip,
       limit: PAGE_SIZE,
       search: debouncedSearch || undefined,
-      stage: isMyQueue ? undefined : (stageFilter || undefined),
+      stage: (!historical && !isMyQueue) ? (stageFilter || undefined) : undefined,
       my_queue: isMyQueue || undefined,
-      missing_date: missingDate || undefined,
+      missing_date: (!historical && missingDate) || undefined,
       amls_search: debouncedAmlsSearch || undefined,
       missing_amls: missingAmls || undefined,
-      pull_out_from: pullOutFrom || undefined,
-      pull_out_to: pullOutTo || undefined,
+      pull_out_from: (!historical && pullOutFrom) || undefined,
+      pull_out_to: (!historical && pullOutTo) || undefined,
       sort_by: sort.column || undefined,
       sort_dir: sort.column ? sort.dir : undefined,
+      historical: historical || undefined,
+      completed_from: (historical && completedFrom) || undefined,
+      completed_to: (historical && completedTo) || undefined,
     }).then(r => r.data),
     placeholderData: prev => prev,
   })
@@ -1334,8 +1347,26 @@ export function ShipmentList() {
         />
       )}
 
-      {/* PRO: My Tasks / All quick-filter chips */}
-      {isPRO && (
+      {/* Active / History toggle */}
+      <div className="flex items-center gap-1 mb-3 border dark:border-gray-600 rounded-lg overflow-hidden w-fit">
+        <button
+          onClick={() => setHistorical(false)}
+          className={clsx('px-4 py-1.5 text-sm font-medium transition-colors',
+            !historical ? 'bg-blue-600 text-white' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700')}
+        >
+          Active
+        </button>
+        <button
+          onClick={() => setHistorical(true)}
+          className={clsx('px-4 py-1.5 text-sm font-medium transition-colors',
+            historical ? 'bg-blue-600 text-white' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700')}
+        >
+          History
+        </button>
+      </div>
+
+      {/* PRO: My Tasks / All quick-filter chips (active view only) */}
+      {isPRO && !historical && (
         <div className="flex items-center gap-2 mb-3">
           <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">Show:</span>
           <button
@@ -1377,8 +1408,8 @@ export function ShipmentList() {
           </div>
         )}
 
-        {/* Stage dropdown — only in B/L table view */}
-        {!isPRO && view !== 'containers' && (
+        {/* Stage dropdown — only in active B/L table view */}
+        {!isPRO && !historical && view !== 'containers' && (
           <select
             value={stageFilter}
             onChange={e => setStageFilter(e.target.value as ShipmentStage | '' | 'my_queue')}
@@ -1388,7 +1419,7 @@ export function ShipmentList() {
               <option value="my_queue">My Queue</option>
             )}
             <option value="">All stages</option>
-            {Object.entries(STAGE_LABELS).map(([val, label]) => (
+            {Object.entries(STAGE_LABELS).filter(([val]) => val !== 'COMPLETED').map(([val, label]) => (
               <option key={val} value={val}>{label}</option>
             ))}
           </select>
@@ -1417,48 +1448,76 @@ export function ShipmentList() {
       {/* Controls — row 2: filters + export (B/L table only) */}
       {view !== 'containers' && (
         <div className="flex flex-wrap gap-2 mb-4">
-          <button
-            onClick={() => setMissingDate(v => !v)}
-            className={clsx(
-              'flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border transition-colors whitespace-nowrap',
-              missingDate
-                ? 'bg-amber-500 text-white border-amber-500'
-                : 'border-gray-300 dark:border-gray-600 text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700'
-            )}
-          >
-            <Calendar size={14} />
-            No date
-          </button>
+          {!historical && (
+            <button
+              onClick={() => setMissingDate(v => !v)}
+              className={clsx(
+                'flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border transition-colors whitespace-nowrap',
+                missingDate
+                  ? 'bg-amber-500 text-white border-amber-500'
+                  : 'border-gray-300 dark:border-gray-600 text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700'
+              )}
+            >
+              <Calendar size={14} />
+              No date
+            </button>
+          )}
 
-          <div className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
-            <span>Pull-out from</span>
-            <input
-              type="date"
-              value={pullOutFrom}
-              onChange={e => setPullOutFrom(e.target.value)}
-              className="border dark:border-gray-600 rounded px-2 py-1.5 bg-white dark:bg-gray-800 dark:text-white text-xs"
-            />
-            <span>to</span>
-            <input
-              type="date"
-              value={pullOutTo}
-              onChange={e => setPullOutTo(e.target.value)}
-              className="border dark:border-gray-600 rounded px-2 py-1.5 bg-white dark:bg-gray-800 dark:text-white text-xs"
-            />
-            {(pullOutFrom || pullOutTo) && (
-              <button onClick={() => { setPullOutFrom(''); setPullOutTo('') }} className="text-gray-400 hover:text-red-500">
-                <X size={13} />
-              </button>
-            )}
-          </div>
+          {!historical && (
+            <div className="flex flex-wrap items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
+              <span>Pull-out from</span>
+              <input
+                type="date"
+                value={pullOutFrom}
+                onChange={e => setPullOutFrom(e.target.value)}
+                className="border dark:border-gray-600 rounded px-2 py-1.5 bg-white dark:bg-gray-800 dark:text-white text-xs"
+              />
+              <span>to</span>
+              <input
+                type="date"
+                value={pullOutTo}
+                onChange={e => setPullOutTo(e.target.value)}
+                className="border dark:border-gray-600 rounded px-2 py-1.5 bg-white dark:bg-gray-800 dark:text-white text-xs"
+              />
+              {(pullOutFrom || pullOutTo) && (
+                <button onClick={() => { setPullOutFrom(''); setPullOutTo('') }} className="text-gray-400 hover:text-red-500">
+                  <X size={13} />
+                </button>
+              )}
+            </div>
+          )}
 
-          <div className="relative">
+          {historical && (
+            <div className="flex flex-wrap items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
+              <span>Offloading from</span>
+              <input
+                type="date"
+                value={completedFrom}
+                onChange={e => setCompletedFrom(e.target.value)}
+                className="border dark:border-gray-600 rounded px-2 py-1.5 bg-white dark:bg-gray-800 dark:text-white text-xs"
+              />
+              <span>to</span>
+              <input
+                type="date"
+                value={completedTo}
+                onChange={e => setCompletedTo(e.target.value)}
+                className="border dark:border-gray-600 rounded px-2 py-1.5 bg-white dark:bg-gray-800 dark:text-white text-xs"
+              />
+              {(completedFrom || completedTo) && (
+                <button onClick={() => { setCompletedFrom(''); setCompletedTo('') }} className="text-gray-400 hover:text-red-500">
+                  <X size={13} />
+                </button>
+              )}
+            </div>
+          )}
+
+          <div className="relative flex-1 sm:flex-none">
             <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
             <input
               value={amlsSearch}
               onChange={e => setAmlsSearch(e.target.value)}
               placeholder="AMLS Job#…"
-              className="w-36 border dark:border-gray-600 dark:bg-gray-800 dark:text-white rounded-lg pl-7 pr-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full sm:w-36 border dark:border-gray-600 dark:bg-gray-800 dark:text-white rounded-lg pl-7 pr-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
 
@@ -1558,7 +1617,7 @@ export function ShipmentList() {
           {[...Array(4)].map((_, i) => <div key={i} className="h-16 bg-gray-100 dark:bg-gray-700 animate-pulse rounded-xl" />)}
         </div>
       ) : view === 'containers' ? (
-        <ContainerView team={user!.team} />
+        <ContainerView team={user!.team} historical={historical} />
       ) : (
         <PriorityTable
           shipments={items}
@@ -1578,6 +1637,7 @@ export function ShipmentList() {
           onSort={toggleSort}
           hiddenCols={hiddenCols}
           isMobile={isMobile}
+          historical={historical}
         />
       )}
 

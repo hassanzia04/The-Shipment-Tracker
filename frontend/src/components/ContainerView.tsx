@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { differenceInCalendarDays, parseISO, isValid } from 'date-fns'
 import { shipmentsApi } from '@/api/shipments'
@@ -20,6 +21,7 @@ const HISTORICAL_PAGE_SIZE = 25
 
 interface Props {
   team: string   // any non-PRO team; action buttons guard themselves to TRANSPORT/DC
+  historical?: boolean
 }
 
 // ── DO validity urgency ───────────────────────────────────────────────────────
@@ -320,7 +322,7 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
       <tr className="hover:bg-gray-50 dark:hover:bg-gray-700/40 transition-colors">
         {/* B/L */}
         <td className="px-3 py-3">
-          <p className="text-sm font-semibold text-gray-900 dark:text-white">{c.bl_number}</p>
+          <Link to={`/shipments/${c.shipment_id}`} className="text-sm font-semibold text-blue-600 dark:text-blue-400 hover:underline">{c.bl_number}</Link>
           <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
             {c.container_count ? `${c.container_count} containers on B/L` : ''}
           </p>
@@ -346,9 +348,15 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
           {c.status === 'DO_REVALIDATION' && c.revalidation_remark && (
             <p className="text-xs text-rose-600 dark:text-rose-400 mt-1 italic">{c.revalidation_remark}</p>
           )}
+          <div className="md:hidden mt-1 space-y-0.5">
+            <p className={clsx('text-xs', validity.color)}>DO: {validity.label}</p>
+            {c.offloading_point_name && (
+              <p className="text-xs text-gray-500 dark:text-gray-400">{c.offloading_point_name}</p>
+            )}
+          </div>
         </td>
         {/* DO Validity */}
-        <td className={clsx('px-3 py-3 text-sm', validity.color)}>{validity.label}</td>
+        <td className={clsx('px-3 py-3 text-sm hidden md:table-cell', validity.color)}>{validity.label}</td>
         {/* Truck / Driver */}
         <td className="px-3 py-3 text-sm">
           {isOutsourced && c.outsourced_plate_number ? (
@@ -367,15 +375,15 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
           )}
         </td>
         {/* Port of Loading */}
-        <td className="px-3 py-3 text-xs text-gray-600 dark:text-gray-300 whitespace-nowrap">
+        <td className="px-3 py-3 text-xs text-gray-600 dark:text-gray-300 whitespace-nowrap hidden md:table-cell">
           {c.loading_port_name ?? <span className="text-gray-400 italic">—</span>}
         </td>
         {/* Bayan Type */}
-        <td className="px-3 py-3 text-xs text-gray-600 dark:text-gray-300 whitespace-nowrap">
+        <td className="px-3 py-3 text-xs text-gray-600 dark:text-gray-300 whitespace-nowrap hidden md:table-cell">
           {c.bayan_type_name ?? <span className="text-gray-400 italic">—</span>}
         </td>
         {/* Offloading Location */}
-        <td className="px-3 py-3 text-sm text-gray-600 dark:text-gray-300">
+        <td className="px-3 py-3 text-sm text-gray-600 dark:text-gray-300 hidden md:table-cell">
           {c.offloading_point_name ?? <span className="text-gray-400 italic text-xs">—</span>}
         </td>
         {/* ETA / Arrived */}
@@ -392,7 +400,7 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
           )}
         </td>
         {/* Offloading Date */}
-        <td className="px-3 py-3 text-sm text-gray-600 dark:text-gray-300">
+        <td className="px-3 py-3 text-sm text-gray-600 dark:text-gray-300 hidden md:table-cell">
           {c.offloaded_at
             ? <span className="text-green-600 dark:text-green-400 text-xs">{formatDateTime(c.offloaded_at)}</span>
             : <span className="text-gray-400 text-xs italic">—</span>
@@ -707,10 +715,9 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export function ContainerView({ team }: Props) {
+export function ContainerView({ team, historical = false }: Props) {
   const qc = useQueryClient()
   const [downloadingCcros, setDownloadingCcros] = useState(false)
-  const [historical, setHistorical] = useState(false)
   const [amlsOnly, setAmlsOnly] = useState(team === 'DC')
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
@@ -915,27 +922,12 @@ export function ContainerView({ team }: Props) {
               </button>
             </div>
           )}
-          {/* Active / History toggle */}
-          <div className="flex border dark:border-gray-600 rounded-lg overflow-hidden">
-            <button
-              onClick={() => setHistorical(false)}
-              className={clsx('px-3 py-2 text-sm transition-colors', !historical ? 'bg-blue-600 text-white' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700')}
-            >
-              Active
-            </button>
-            <button
-              onClick={() => setHistorical(true)}
-              className={clsx('px-3 py-2 text-sm transition-colors', historical ? 'bg-blue-600 text-white' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700')}
-            >
-              History
-            </button>
-          </div>
         </div>
       </div>
 
       {/* Search / filter / export bar */}
-      <div className="flex flex-wrap gap-2 items-center">
-        <div className="relative flex-1 min-w-[180px]">
+      <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 sm:items-center">
+        <div className="relative w-full sm:flex-1 sm:min-w-[180px]">
           <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
           <input
             value={search}
@@ -944,17 +936,19 @@ export function ContainerView({ team }: Props) {
             className="w-full pl-7 pr-2 py-1.5 text-xs border dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-500"
           />
         </div>
-        <select
-          value={statusFilter}
-          onChange={e => setStatusFilter(e.target.value)}
-          className="text-xs border dark:border-gray-600 rounded-lg px-2 py-1.5 bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
-        >
-          <option value="">All statuses</option>
-          {Object.entries(STATUS_LABEL).map(([val, label]) => (
-            <option key={val} value={val}>{label}</option>
-          ))}
-        </select>
-        <div className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
+        {!historical && (
+          <select
+            value={statusFilter}
+            onChange={e => setStatusFilter(e.target.value)}
+            className="w-full sm:w-auto text-xs border dark:border-gray-600 rounded-lg px-2 py-1.5 bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+          >
+            <option value="">All statuses</option>
+            {Object.entries(STATUS_LABEL).map(([val, label]) => (
+              <option key={val} value={val}>{label}</option>
+            ))}
+          </select>
+        )}
+        <div className="flex flex-wrap items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
           <span>Offloaded from</span>
           <input type="date" value={filterFrom} onChange={e => setFilterFrom(e.target.value)} className="border dark:border-gray-600 rounded px-2 py-1.5 bg-white dark:bg-gray-800 dark:text-white text-xs" />
           <span>to</span>
@@ -966,7 +960,7 @@ export function ContainerView({ team }: Props) {
         <button
           onClick={handleExport}
           disabled={exporting}
-          className="flex items-center gap-1.5 text-xs border border-green-300 dark:border-green-700 text-green-700 dark:text-green-400 px-3 py-1.5 rounded-lg hover:bg-green-50 dark:hover:bg-green-900/20 disabled:opacity-50 whitespace-nowrap"
+          className="flex items-center justify-center gap-1.5 text-xs border border-green-300 dark:border-green-700 text-green-700 dark:text-green-400 px-3 py-1.5 rounded-lg hover:bg-green-50 dark:hover:bg-green-900/20 disabled:opacity-50 w-full sm:w-auto"
         >
           <FileSpreadsheet size={13} /> {exporting ? 'Exporting…' : 'Export Excel'}
         </button>
@@ -982,19 +976,19 @@ export function ContainerView({ team }: Props) {
       )}
       {filteredContainers.length > 0 && (
         <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-xl overflow-hidden">
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto md:overflow-auto md:max-h-[calc(100vh-310px)]">
             <table className="w-full text-sm">
-              <thead className="bg-gray-50 dark:bg-gray-700 border-b dark:border-gray-600">
+              <thead className="bg-gray-50 dark:bg-gray-700 border-b dark:border-gray-600 sticky top-0 z-20">
                 <tr>
                   <SortableHeader label="B/L Number"        column="bl"        sort={sort} onSort={toggleSort} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
                   <SortableHeader label="Container"          column="container" sort={sort} onSort={toggleSort} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
-                  <SortableHeader label="DO Validity"        column="do"        sort={sort} onSort={toggleSort} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
+                  <SortableHeader label="DO Validity"        column="do"        sort={sort} onSort={toggleSort} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide hidden md:table-cell" />
                   <SortableHeader label="Truck / Driver"     column="truck"     sort={sort} onSort={toggleSort} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
-                  <th className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap">Port of Loading</th>
-                  <th className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap">Bayan Type</th>
-                  <SortableHeader label="Offloading Location" column="location" sort={sort} onSort={toggleSort} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
+                  <th className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap hidden md:table-cell">Port of Loading</th>
+                  <th className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap hidden md:table-cell">Bayan Type</th>
+                  <SortableHeader label="Offloading Location" column="location" sort={sort} onSort={toggleSort} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide hidden md:table-cell" />
                   <SortableHeader label="ETA / Arrived"      column="eta"       sort={sort} onSort={toggleSort} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
-                  <th className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap">Offloading Date</th>
+                  <th className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap hidden md:table-cell">Offloading Date</th>
                   <th className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Actions</th>
                 </tr>
               </thead>

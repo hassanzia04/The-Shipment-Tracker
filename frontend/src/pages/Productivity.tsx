@@ -100,6 +100,16 @@ function UserRow({ user, rank }: { user: UserStat; rank: number }) {
             <p className="text-xs text-gray-400 dark:text-gray-500">{user.email}</p>
           </div>
         </div>
+        {breakdown.length > 0 && (
+          <div className="md:hidden mt-2 flex flex-wrap gap-1.5">
+            {breakdown.map(([type, entry]) => (
+              <div key={type} className={clsx('flex items-center gap-1 text-xs px-2 py-1 rounded-lg font-medium', TASK_COLORS[type] || 'bg-gray-100 text-gray-600')}>
+                <span>{TASK_LABELS[type] || type}</span>
+                <span className="font-bold">{entry.count}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </td>
       <td className="px-4 py-3">
         <span className={clsx(
@@ -111,7 +121,7 @@ function UserRow({ user, rank }: { user: UserStat; rank: number }) {
           {user.tasks_completed}
         </span>
       </td>
-      <td className="px-4 py-3">
+      <td className="px-4 py-3 hidden md:table-cell">
         <div className="flex flex-wrap gap-2">
           {breakdown.length === 0 ? (
             <span className="text-xs text-gray-400 dark:text-gray-500">—</span>
@@ -149,7 +159,7 @@ function TeamSection({ team }: { team: TeamData }) {
   return (
     <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-xl overflow-hidden">
       {/* Team header */}
-      <div className="px-5 py-4 border-b dark:border-gray-700 flex items-center justify-between">
+      <div className="px-5 py-4 border-b dark:border-gray-700 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div className="flex items-center gap-3">
           <div className="p-2 bg-blue-50 dark:bg-blue-900/30 rounded-lg">
             <Users size={16} className="text-blue-600 dark:text-blue-400" />
@@ -159,7 +169,7 @@ function TeamSection({ team }: { team: TeamData }) {
             <p className="text-xs text-gray-500 dark:text-gray-400">{team.users.length} member{team.users.length !== 1 ? 's' : ''}</p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <StatChip
             icon={<CheckCircle size={14} />}
             label="active"
@@ -186,7 +196,7 @@ function TeamSection({ team }: { team: TeamData }) {
             <tr>
               <SortableHeader label="Member"    column="member"    sort={sort} onSort={toggle} className="px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
               <SortableHeader label="Completed" column="completed" sort={sort} onSort={toggle} className="px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
-              <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Task Breakdown (count · avg time)</th>
+              <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide hidden md:table-cell">Task Breakdown (count · avg time)</th>
             </tr>
           </thead>
           <tbody>
@@ -217,7 +227,7 @@ export function Productivity() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-start justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
             {isSelfView ? 'My Productivity' : 'Team Productivity'}
@@ -248,7 +258,7 @@ export function Productivity() {
 
       {/* Summary strip */}
       {!isLoading && data && (
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-xl p-4">
             <p className="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wide font-semibold">Tasks completed</p>
             <p className="text-3xl font-bold text-gray-900 dark:text-white mt-1">{totalCompleted}</p>
@@ -279,7 +289,7 @@ export function Productivity() {
       {/* Loading skeleton */}
       {isLoading && (
         <div className="space-y-4 animate-pulse">
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             {[...Array(3)].map((_, i) => <div key={i} className="h-24 bg-gray-100 dark:bg-gray-800 rounded-xl" />)}
           </div>
           <div className="h-64 bg-gray-100 dark:bg-gray-800 rounded-xl" />

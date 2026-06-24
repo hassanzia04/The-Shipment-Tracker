@@ -14,6 +14,7 @@ interface ProTask {
   hold_remark: string | null
   created_at: string
   bl_number: string
+  shipment_id: string
   shipment_stage: string
   pull_out_date: string | null
   pro_user_id: string | null
@@ -148,12 +149,12 @@ export function ProTasks() {
                             ? 'bg-amber-50/60 dark:bg-amber-900/10 hover:bg-amber-50 dark:hover:bg-amber-900/20'
                             : 'hover:bg-gray-50 dark:hover:bg-gray-700/40'
                         )}
-                        onClick={() => navigate(`/shipments?search=${encodeURIComponent(task.bl_number)}`)}
+                        onClick={() => navigate(`/shipments/${task.shipment_id}`)}
                       >
                         {/* BL Number */}
                         <span
                           className="font-semibold text-blue-600 dark:text-blue-400 text-sm w-36 shrink-0 hover:underline"
-                          onClick={e => { e.stopPropagation(); navigate(`/shipments?search=${encodeURIComponent(task.bl_number)}`) }}
+                          onClick={e => { e.stopPropagation(); navigate(`/shipments/${task.shipment_id}`) }}
                         >
                           {task.bl_number}
                         </span>

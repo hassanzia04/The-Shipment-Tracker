@@ -16,7 +16,7 @@ export interface PaginatedContainerView {
 }
 
 export const shipmentsApi = {
-  list: (params?: { skip?: number; limit?: number; search?: string; stage?: string; my_queue?: boolean; task_type_filter?: string; missing_date?: boolean; amls_search?: string; missing_amls?: boolean; pull_out_from?: string; pull_out_to?: string; sort_by?: string; sort_dir?: string }) =>
+  list: (params?: { skip?: number; limit?: number; search?: string; stage?: string; my_queue?: boolean; task_type_filter?: string; missing_date?: boolean; amls_search?: string; missing_amls?: boolean; pull_out_from?: string; pull_out_to?: string; sort_by?: string; sort_dir?: string; historical?: boolean; completed_from?: string; completed_to?: string }) =>
     api.get<PaginatedShipments>('/shipments', { params }),
 
   get: (id: string) => api.get<Shipment>(`/shipments/${id}`),
@@ -189,7 +189,7 @@ export const shipmentsApi = {
   containerViewExport: (params?: { search?: string; from_date?: string; to_date?: string; status?: string; historical?: boolean; amls_only?: boolean }) =>
     api.get('/shipments/container-view-export', { params, responseType: 'blob' }),
 
-  blExport: (params?: { search?: string; stage?: string; my_queue?: boolean; missing_date?: boolean; amls_search?: string; missing_amls?: boolean; pull_out_from?: string; pull_out_to?: string }) =>
+  blExport: (params?: { search?: string; stage?: string; my_queue?: boolean; missing_date?: boolean; amls_search?: string; missing_amls?: boolean; pull_out_from?: string; pull_out_to?: string; historical?: boolean; completed_from?: string; completed_to?: string }) =>
     api.get('/shipments/bl-export', { params, responseType: 'blob' }),
 
   bulkUpdatePullOutDate: (shipment_ids: string[], pull_out_date: string) =>

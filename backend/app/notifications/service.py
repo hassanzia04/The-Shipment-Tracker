@@ -30,7 +30,7 @@ TEMPLATES: dict[str, dict] = {
         "body": "FFD has delegated a CCRO ROP issue to the PRO team. BL: {bl_number}. Please log in to review.",
     },
     "task_assigned_pro": {
-        "subject": "FFD Tracker — Task assigned to you",
+        "subject": "FFD Tracker — {task_type} task assigned to you",
         "body": "A {task_type} task for BL: {bl_number} has been assigned to you. Please log in to review.",
     },
     "ccro_received": {
@@ -115,11 +115,11 @@ TEMPLATES: dict[str, dict] = {
     },
     "pull_out_date_changed": {
         "subject": "FFD Tracker — Pull-out date updated",
-        "body": "The pull-out date for BL: {bl_number} has been updated to {new_date} by {customer_name}.",
+        "body": "The pull-out date for BL: {bl_number} has been updated from {old_date} to {new_date} by {customer_name}.",
     },
     "pull_out_dates_bulk_changed": {
         "subject": "FFD Tracker — Pull-out dates updated ({count} shipments)",
-        "body": "Pull-out dates for {count} shipments have been set to {new_date} by {customer_name}.",
+        "body": "Pull-out dates for {count} shipments have been updated to {new_date} by {customer_name}.",
     },
     "bayan_payment_bulk_requested": {
         "subject": "FFD Tracker — Bayan payment required ({count} shipment{plural})",
@@ -306,9 +306,14 @@ async def notify_user(db: AsyncSession, shipment, user: User, template_key: str,
     ))
     shipment_url = f"{settings.FRONTEND_URL}/shipments/{shipment.id}"
     try:
+        raw_subject = template.get("subject", "FFD Tracker").format(
+            bl_number=_html.escape(shipment.bl_number),
+            full_name=_html.escape(user.full_name),
+            **escaped_extra,
+        )
         send_email_task.delay(
             user.email,
-            f"{template.get('subject', 'FFD Tracker')} — BL: {shipment.bl_number}",
+            f"{raw_subject} — BL: {shipment.bl_number}",
             _render_alert_email(body, shipment_url),
             cc_emails or None,
         )
@@ -331,6 +336,7 @@ async def _get_pull_out_notif_users(db: AsyncSession) -> list[User]:
 async def notify_pull_out_date_changed(
     db: AsyncSession,
     shipment,
+    old_date: str,
     new_date: str,
     customer_name: str,
 ) -> None:
@@ -343,11 +349,13 @@ async def notify_pull_out_date_changed(
 
     body = template["body"].format(
         bl_number=_html.escape(shipment.bl_number),
+        old_date=_html.escape(old_date),
         new_date=_html.escape(new_date),
         customer_name=_html.escape(customer_name),
     )
     subject = f"FFD Tracker — Pull-out date updated — BL: {shipment.bl_number}"
-    email_html = f"<p>{body}</p>"
+    shipment_url = f"{settings.FRONTEND_URL}/shipments/{shipment.id}"
+    email_html = _render_alert_email(body, shipment_url)
 
     for user in users:
         db.add(Notification(
@@ -370,7 +378,7 @@ async def notify_pull_out_date_changed(
 
 async def notify_team_bulk_pull_out(
     db: AsyncSession,
-    shipments: list,
+    shipment_changes: list[tuple],
     new_date: str,
     customer_name: str,
 ) -> None:
@@ -380,28 +388,47 @@ async def notify_team_bulk_pull_out(
     template = TEMPLATES["pull_out_dates_bulk_changed"]
     users = await _get_pull_out_notif_users(db)
     cc_emails = await _get_cc_emails_for_team(db, Team.FFD)
-    count = len(shipments)
-    bl_list = ", ".join(s.bl_number for s in shipments)
+    count = len(shipment_changes)
 
     body = template["body"].format(
         count=count,
         new_date=_html.escape(new_date),
         customer_name=_html.escape(customer_name),
     )
-    subject = f"FFD Tracker — Pull-out dates updated ({count} shipment{'s' if count != 1 else ''})"
-    email_html = (
-        f"<p>{body}</p>"
-        f"<br><p><strong>BL Numbers:</strong> {_html.escape(bl_list)}</p>"
+
+    table_rows = "".join(
+        f'<tr style="border-top:1px solid #e2e8f0;">'
+        f'<td style="padding:7px 10px;font-family:Arial,sans-serif;font-size:13px;font-weight:600;color:#111827;">{_html.escape(s.bl_number)}</td>'
+        f'<td style="padding:7px 10px;font-family:Arial,sans-serif;font-size:13px;color:#374151;">{_html.escape(old)}</td>'
+        f'<td style="padding:7px 10px;font-family:Arial,sans-serif;font-size:13px;color:#374151;">{_html.escape(new_date)}</td>'
+        f'</tr>'
+        for s, old in shipment_changes
     )
+    table = (
+        '<table cellpadding="0" cellspacing="0" style="margin-top:16px;border:1px solid #e2e8f0;border-radius:6px;width:100%;border-collapse:collapse;">'
+        '<tr style="background-color:#f8fafc;">'
+        '<th style="padding:8px 10px;font-family:Arial,sans-serif;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;text-align:left;">BL Number</th>'
+        '<th style="padding:8px 10px;font-family:Arial,sans-serif;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;text-align:left;">Previous Date</th>'
+        '<th style="padding:8px 10px;font-family:Arial,sans-serif;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;text-align:left;">New Date</th>'
+        '</tr>'
+        f'{table_rows}'
+        '</table>'
+    )
+    body_with_table = f'{body}{table}'
+
+    subject = f"FFD Tracker — Pull-out dates updated ({count} shipment{'s' if count != 1 else ''})"
+    tracker_url = f"{settings.FRONTEND_URL}/shipments"
+    email_html = _render_alert_email(body_with_table, tracker_url)
 
     for user in users:
-        db.add(Notification(
-            shipment_id=None,
-            recipient_id=user.id,
-            channel="IN_APP",
-            template="pull_out_dates_bulk_changed",
-            payload={"subject": subject, "body": body},
-        ))
+        for shipment, _ in shipment_changes:
+            db.add(Notification(
+                shipment_id=shipment.id,
+                recipient_id=user.id,
+                channel="IN_APP",
+                template="pull_out_dates_bulk_changed",
+                payload={"subject": subject, "body": body},
+            ))
 
     if users:
         all_emails = [u.email for u in users]

@@ -130,7 +130,7 @@ export function AdminUsers() {
               <p className="text-xs text-gray-500 dark:text-gray-400">
                 The user can log in immediately with the credentials you set here.
               </p>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Full name <span className="text-red-500">*</span></label>
                   <input
@@ -194,7 +194,7 @@ export function AdminUsers() {
               <p className="text-xs text-gray-500 dark:text-gray-400">
                 An invitation link is sent to the user's email. They set their own name and password.
               </p>
-              <div className="flex gap-2">
+              <div className="flex flex-col sm:flex-row gap-2">
                 <input
                   value={email}
                   onChange={e => setEmail(e.target.value)}
@@ -205,14 +205,14 @@ export function AdminUsers() {
                 <select
                   value={inviteTeam}
                   onChange={e => setInviteTeam(e.target.value as Team)}
-                  className="border dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full sm:w-auto border dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                 >
                   {TEAMS.map(t => <option key={t} value={t}>{TEAM_LABELS[t]}</option>)}
                 </select>
                 <button
                   onClick={invite}
                   disabled={inviting || !email.trim()}
-                  className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-700 disabled:opacity-50 whitespace-nowrap"
+                  className="w-full sm:w-auto bg-blue-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-700 disabled:opacity-50 whitespace-nowrap"
                 >
                   {inviting ? 'Sending…' : 'Send Invite'}
                 </button>
@@ -228,10 +228,10 @@ export function AdminUsers() {
           <thead className="bg-gray-50 dark:bg-gray-700/50 border-b dark:border-gray-700">
             <tr>
               <SortableHeader label="Name"   column="name"   sort={sort} onSort={toggle} className="px-4 py-3 text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide" />
-              <SortableHeader label="Email"  column="email"  sort={sort} onSort={toggle} className="px-4 py-3 text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide" />
+              <SortableHeader label="Email"  column="email"  sort={sort} onSort={toggle} className="px-4 py-3 text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide hidden sm:table-cell" />
               <SortableHeader label="Team"   column="team"   sort={sort} onSort={toggle} className="px-4 py-3 text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide" />
               <SortableHeader label="Status" column="status" sort={sort} onSort={toggle} className="px-4 py-3 text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide" />
-              <SortableHeader label="Joined" column="joined" sort={sort} onSort={toggle} className="px-4 py-3 text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide" />
+              <SortableHeader label="Joined" column="joined" sort={sort} onSort={toggle} className="px-4 py-3 text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide hidden sm:table-cell" />
               <th />
             </tr>
           </thead>
@@ -239,7 +239,7 @@ export function AdminUsers() {
             {users.map(u => (
               <tr key={u.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
                 <td className="px-4 py-3 font-medium dark:text-gray-100">{u.full_name}</td>
-                <td className="px-4 py-3 text-gray-500 dark:text-gray-400">{u.email}</td>
+                <td className="px-4 py-3 text-gray-500 dark:text-gray-400 hidden sm:table-cell">{u.email}</td>
                 <td className="px-4 py-3">
                   <select
                     value={u.team}
@@ -254,7 +254,7 @@ export function AdminUsers() {
                     {u.is_active ? 'Active' : 'Inactive'}
                   </span>
                 </td>
-                <td className="px-4 py-3 text-gray-400 dark:text-gray-500">{formatDate(u.created_at)}</td>
+                <td className="px-4 py-3 text-gray-400 dark:text-gray-500 hidden sm:table-cell">{formatDate(u.created_at)}</td>
                 <td className="px-4 py-3">
                   <button
                     onClick={() => toggleActive(u.id, !u.is_active)}

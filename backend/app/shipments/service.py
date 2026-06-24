@@ -366,7 +366,7 @@ async def update_shipment(db: AsyncSession, shipment_id: uuid.UUID, actor: User,
         await _record_event(db, shipment, EventType.PULL_OUT_DATE_CHANGED, actor,
                             remark=f"Changed from {old_str} to {new_str}")
         from app.notifications.service import notify_pull_out_date_changed
-        await notify_pull_out_date_changed(db, shipment, new_str, actor.full_name)
+        await notify_pull_out_date_changed(db, shipment, old_str, new_str, actor.full_name)
 
     await db.commit()
     return await _get_shipment(db, shipment_id)
@@ -397,7 +397,7 @@ async def bulk_update_pull_out_date(
             old_str = old_pull_out.strftime('%d/%m/%Y') if old_pull_out else 'not set'
             await _record_event(db, shipment, EventType.PULL_OUT_DATE_CHANGED, actor,
                                 remark=f"Changed from {old_str} to {new_str}")
-            updated.append(shipment)
+            updated.append((shipment, old_str))
 
     await db.commit()
 
@@ -575,15 +575,41 @@ async def list_shipments(
     pull_out_to=None,
     sort_by: str | None = None,
     sort_dir: str = 'asc',
+    historical: bool = False,
+    completed_from=None,
+    completed_to=None,
 ) -> tuple[list[Shipment], int]:
     from sqlalchemy import func as sa_func
 
     base_where = []
+
+    # Active vs historic split — mutually exclusive
+    if historical:
+        base_where.append(Shipment.current_stage == ShipmentStage.COMPLETED)
+        if completed_from:
+            from_dt = datetime(completed_from.year, completed_from.month, completed_from.day, tzinfo=timezone.utc)
+            base_where.append(
+                select(Container.id).where(
+                    Container.shipment_id == Shipment.id,
+                    Container.offloaded_at >= from_dt,
+                ).correlate(Shipment).exists()
+            )
+        if completed_to:
+            to_dt = datetime(completed_to.year, completed_to.month, completed_to.day, tzinfo=timezone.utc) + timedelta(days=1)
+            base_where.append(
+                select(Container.id).where(
+                    Container.shipment_id == Shipment.id,
+                    Container.offloaded_at < to_dt,
+                ).correlate(Shipment).exists()
+            )
+    else:
+        base_where.append(Shipment.current_stage != ShipmentStage.COMPLETED)
+
     if search:
         term = f"%{search}%"
         from sqlalchemy import or_
         base_where.append(or_(Shipment.bl_number.ilike(term), Shipment.invoice_number.ilike(term)))
-    if my_queue:
+    if my_queue and not historical:
         if actor.team == Team.PRO:
             from sqlalchemy import exists
             task_conditions = [
@@ -672,9 +698,9 @@ async def list_shipments(
             queue_stages = TEAM_QUEUE_STAGES.get(actor.team, [])
             if queue_stages:
                 base_where.append(Shipment.current_stage.in_(queue_stages))
-    elif stage:
+    elif stage and not historical:
         base_where.append(Shipment.current_stage == stage)
-    if missing_date:
+    if missing_date and not historical:
         base_where.append(Shipment.pull_out_date == None)
     if amls_search:
         base_where.append(Shipment.amls_job_number.ilike(f"%{amls_search}%"))
@@ -727,6 +753,8 @@ async def list_shipments(
         col = _bl_sort_cols[sort_by]
         order_expr = col.asc().nullslast() if sort_dir == 'asc' else col.desc().nullslast()
         q = q.order_by(order_expr, Shipment.created_at.desc())
+    elif historical:
+        q = q.order_by(Shipment.completed_at.desc().nullslast())
     else:
         q = q.order_by(Shipment.pull_out_date.asc().nullslast(), Shipment.created_at.desc())
     q = q.offset(skip).limit(limit)
@@ -2384,11 +2412,14 @@ async def export_shipments_list(
     missing_amls: bool = False,
     pull_out_from=None,
     pull_out_to=None,
+    historical: bool = False,
+    completed_from=None,
+    completed_to=None,
 ) -> bytes:
     from datetime import date as date_type
 
     stage_enum: ShipmentStage | None = None
-    if stage:
+    if stage and not historical:
         try:
             stage_enum = ShipmentStage(stage)
         except ValueError:
@@ -2404,6 +2435,9 @@ async def export_shipments_list(
         missing_amls=missing_amls,
         pull_out_from=pull_out_from,
         pull_out_to=pull_out_to,
+        historical=historical,
+        completed_from=completed_from,
+        completed_to=completed_to,
     )
 
     def _fmt(val) -> str:
@@ -2429,6 +2463,8 @@ async def export_shipments_list(
         "Bayan Type", "Planned Pull out", "Actual Pull out",
         "Offloading Point", "AMLS Job#", "Permit", "DO", "Bayan", "Created At",
     ]
+    if historical:
+        headers.append("Offloading Date")
     ws.append(headers)
     for col_idx, _ in enumerate(headers, 1):
         ws.column_dimensions[ws.cell(1, col_idx).column_letter].width = 20
@@ -2438,7 +2474,7 @@ async def export_shipments_list(
             (c.actual_pull_out_date for c in s.containers if c.actual_pull_out_date),
             default=None,
         )
-        ws.append([
+        row = [
             idx,
             s.bl_number,
             s.invoice_number,
@@ -2454,7 +2490,10 @@ async def export_shipments_list(
             _task_status(s, "DO"),
             _task_status(s, "BAYAN"),
             _fmt(s.created_at),
-        ])
+        ]
+        if historical:
+            row.append(_fmt(s.offloading_date))
+        ws.append(row)
 
     buf = io.BytesIO()
     wb.save(buf)
