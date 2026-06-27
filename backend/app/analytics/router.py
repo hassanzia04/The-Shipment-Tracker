@@ -363,8 +363,6 @@ async def activity_feed(
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ):
-    if actor.team not in (Team.MANAGEMENT, Team.CUSTOMER_MANAGEMENT, Team.FFD) and not actor.is_admin:
-        raise HTTPException(status_code=403, detail="Access denied")
 
     result = await db.execute(
         select(

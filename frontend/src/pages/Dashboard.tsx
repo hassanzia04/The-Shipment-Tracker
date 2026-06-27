@@ -224,7 +224,7 @@ export function Dashboard() {
 
   const { user } = useAuth()
   const canUseAi = user?.team === 'MANAGEMENT' || user?.team === 'CUSTOMER' || user?.team === 'CUSTOMER_MANAGEMENT' || user?.is_admin
-  const isManagement = user?.team === 'MANAGEMENT' || user?.team === 'CUSTOMER_MANAGEMENT' || user?.team === 'FFD' || user?.is_admin
+  const isManagement = !!user
 
   async function fetchAiSummary() {
     if (aiLoading) return
