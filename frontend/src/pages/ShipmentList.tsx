@@ -10,6 +10,9 @@ import { BulkBayanUploadModal } from '@/components/BulkBayanUploadModal'
 import { BulkPermitUploadModal } from '@/components/BulkPermitUploadModal'
 import { BulkDOUploadModal } from '@/components/BulkDOUploadModal'
 import { BulkCcroUploadModal } from '@/components/BulkCcroUploadModal'
+import { BulkAssignTaskModal } from '@/components/BulkAssignTaskModal'
+import { BulkHoldModal } from '@/components/BulkHoldModal'
+import { BulkReleaseHoldModal } from '@/components/BulkReleaseHoldModal'
 import { useAuth } from '@/hooks/useAuth'
 import toast from 'react-hot-toast'
 import {
@@ -17,30 +20,32 @@ import {
   ChevronLeft, ChevronRight, X, Calendar,
   ChevronDown, ChevronUp, UserCheck, ListTodo, Box,
   CheckCircle, DollarSign, Pencil, FileSpreadsheet, Files, Download, Loader2,
-  SlidersHorizontal,
+  SlidersHorizontal, Pause, Unlock,
 } from 'lucide-react'
-import { STAGE_LABELS, TASK_TYPE_LABELS } from '@/types'
-import type { ShipmentListItem, ShipmentStage, TaskType, TaskStatus } from '@/types'
+import { STAGE_LABELS, TASK_TYPE_LABELS, ENTITY_LABELS, HOLD_REASON_LABELS, HOLD_REASON_MAP, TEAM_HOLD_PERMISSIONS } from '@/types'
+import type { ShipmentListItem, ShipmentStage, TaskType, TaskStatus, Team, ExternalEntity, HoldReason } from '@/types'
 import type { SortState } from '@/lib/sort'
 import { formatDate, formatDateTime } from '@/lib/dates'
 import { SortableHeader } from '@/components/SortableHeader'
 import clsx from 'clsx'
 
 const ALL_COLUMNS = [
-  { key: 'invoice',    label: 'Invoice' },
-  { key: 'consignee',  label: 'Consignee' },
-  { key: 'port',       label: 'Port of Loading' },
-  { key: 'bayan_type', label: 'Bayan Type' },
+  { key: 'invoice',              label: 'Invoice' },
+  { key: 'consignee',            label: 'Consignee' },
+  { key: 'port',                 label: 'Port of Loading' },
+  { key: 'offloading_location',  label: 'Offloading Location' },
+  { key: 'bayan_type',           label: 'Bayan Type' },
   { key: 'stage',      label: 'Stage' },
   { key: 'progress',   label: 'Progress' },
   { key: 'pull_out',   label: 'Planned Pull Out' },
   { key: 'eta',        label: 'ETA to Port' },
   { key: 'do_validity',label: 'DO Validity' },
-  { key: 'amls',       label: 'AMLS Job# / Permit No' },
+  { key: 'amls',       label: 'AMLS Job#' },
+  { key: 'permit_no',  label: 'Permit No' },
 ] as const
 
 // Columns hidden on mobile by default (previously handled by Tailwind responsive classes)
-const MOBILE_DEFAULT_HIDDEN = new Set(['invoice', 'consignee', 'port', 'bayan_type', 'pull_out', 'eta', 'do_validity', 'amls'])
+const MOBILE_DEFAULT_HIDDEN = new Set(['invoice', 'consignee', 'port', 'offloading_location', 'bayan_type', 'pull_out', 'eta', 'do_validity', 'amls', 'permit_no'])
 
 // ── Progress status indicator ─────────────────────────────────────────────────
 
@@ -383,9 +388,222 @@ function InlineAssignPanel({ shipmentId, proUsers, onDone }: {
   )
 }
 
+// ── FFD / PRO: inline panel — hold management ────────────────────────────────
+
+function InlineHoldPanel({ shipmentId, userTeam, onDone }: {
+  shipmentId: string
+  userTeam: Team
+  onDone: () => void
+}) {
+  const qc = useQueryClient()
+  const { data: shipment, isLoading } = useQuery({
+    queryKey: ['shipment', shipmentId],
+    queryFn: () => shipmentsApi.get(shipmentId).then(r => r.data),
+  })
+  const [assigningTaskId, setAssigningTaskId] = useState<string | null>(null)
+  const [entity, setEntity] = useState<ExternalEntity | ''>('')
+  const [reason, setReason] = useState<HoldReason | ''>('')
+  const [remark, setRemark] = useState('')
+  const [releasingTaskId, setReleasingTaskId] = useState<string | null>(null)
+  const [releaseRemark, setReleaseRemark] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+
+  if (isLoading || !shipment) {
+    return (
+      <div className="px-5 py-4 bg-orange-50 dark:bg-orange-900/10 border-t dark:border-gray-700">
+        <div className="h-4 w-48 bg-orange-100 dark:bg-orange-800 rounded animate-pulse" />
+      </div>
+    )
+  }
+
+  const isFFD = userTeam === 'FFD'
+  const allowedEntities = TEAM_HOLD_PERMISSIONS[userTeam] ?? []
+  const TARGET_TYPES: TaskType[] = ['PERMIT', 'BAYAN', 'DO', 'CCRO']
+  const activeTasks = shipment.tasks.filter(
+    t => TARGET_TYPES.includes(t.task_type) && t.status !== 'COMPLETED'
+  )
+  const visibleTasks = isFFD
+    ? activeTasks
+    : activeTasks.filter(t => t.task_type === 'PERMIT' || t.task_type === 'BAYAN')
+
+  async function handleAssignHold(taskId: string) {
+    if (!entity || !reason) return
+    if ((entity === 'OTHER' || reason === 'OTHER') && !remark.trim()) {
+      toast.error('Remark is required when selecting Other')
+      return
+    }
+    setSubmitting(true)
+    try {
+      await shipmentsApi.assignHold(shipmentId, taskId, { hold_entity: entity, hold_reason: reason, hold_remark: remark })
+      toast.success('Hold assigned')
+      qc.invalidateQueries({ queryKey: ['shipments'] })
+      qc.invalidateQueries({ queryKey: ['shipment', shipmentId] })
+      setAssigningTaskId(null)
+      setEntity(''); setReason(''); setRemark('')
+    } catch (e: any) {
+      toast.error(e.response?.data?.detail || 'Failed to assign hold')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  async function handleReleaseHold(taskId: string) {
+    setSubmitting(true)
+    try {
+      await shipmentsApi.releaseHold(shipmentId, taskId, releaseRemark)
+      toast.success('Hold released')
+      qc.invalidateQueries({ queryKey: ['shipments'] })
+      qc.invalidateQueries({ queryKey: ['shipment', shipmentId] })
+      setReleasingTaskId(null)
+      setReleaseRemark('')
+    } catch (e: any) {
+      toast.error(e.response?.data?.detail || 'Failed to release hold')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="px-5 py-4 bg-orange-50 dark:bg-orange-900/10 border-t dark:border-gray-700 space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-semibold text-orange-700 dark:text-orange-400 flex items-center gap-1.5">
+          <Pause size={13} /> Hold Management — BL: {shipment.bl_number}
+        </p>
+        <button onClick={onDone} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
+          <X size={13} />
+        </button>
+      </div>
+
+      {visibleTasks.length === 0 && (
+        <p className="text-xs text-gray-500 dark:text-gray-400 italic">
+          No active tasks available for hold management.
+        </p>
+      )}
+
+      {visibleTasks.map(task => (
+        <div key={task.id} className="bg-white dark:bg-gray-800 border dark:border-gray-600 rounded-lg p-3 space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-gray-700 dark:text-gray-200">
+              {TASK_TYPE_LABELS[task.task_type as TaskType]}
+            </span>
+            <span className={clsx(
+              'text-xs px-2 py-0.5 rounded-full font-medium',
+              task.status === 'ON_HOLD'
+                ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400'
+                : 'bg-blue-100 text-blue-700 dark:bg-blue-900/20 dark:text-blue-400'
+            )}>
+              {task.status === 'ON_HOLD' ? 'On Hold' : 'In Progress'}
+            </span>
+          </div>
+
+          {task.status === 'ON_HOLD' && (
+            <div className="text-xs bg-amber-50 dark:bg-amber-900/10 text-amber-700 dark:text-amber-400 rounded p-2 space-y-0.5">
+              {task.hold_entity && <p>Entity: {ENTITY_LABELS[task.hold_entity]}</p>}
+              {task.hold_reason && <p>Reason: {HOLD_REASON_LABELS[task.hold_reason]}</p>}
+              {task.hold_remark && <p className="italic">"{task.hold_remark}"</p>}
+            </div>
+          )}
+
+          {task.status === 'ON_HOLD' && releasingTaskId !== task.id && (
+            <button
+              onClick={() => { setReleasingTaskId(task.id); setReleaseRemark('') }}
+              className="flex items-center gap-1 text-xs bg-green-600 text-white px-3 py-1.5 rounded hover:bg-green-700"
+            >
+              <Unlock size={11} /> Release Hold
+            </button>
+          )}
+
+          {task.status === 'ON_HOLD' && releasingTaskId === task.id && (
+            <div className="space-y-2">
+              <textarea
+                value={releaseRemark}
+                onChange={e => setReleaseRemark(e.target.value)}
+                placeholder="Describe how the hold was resolved (optional)…"
+                className="w-full text-xs border dark:border-gray-600 rounded p-2 h-16 resize-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500"
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={() => handleReleaseHold(task.id)}
+                  disabled={submitting}
+                  className="text-xs bg-green-600 text-white px-3 py-1.5 rounded hover:bg-green-700 disabled:opacity-50"
+                >
+                  {submitting ? 'Releasing…' : 'Confirm Release'}
+                </button>
+                <button
+                  onClick={() => setReleasingTaskId(null)}
+                  className="text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {task.status === 'IN_PROGRESS' && assigningTaskId !== task.id && (
+            <button
+              onClick={() => { setAssigningTaskId(task.id); setEntity(''); setReason(''); setRemark('') }}
+              className="flex items-center gap-1 text-xs border border-amber-300 dark:border-amber-600 text-amber-700 dark:text-amber-400 px-3 py-1.5 rounded hover:bg-amber-50 dark:hover:bg-amber-900/20"
+            >
+              <AlertTriangle size={11} /> Assign Hold
+            </button>
+          )}
+
+          {task.status === 'IN_PROGRESS' && assigningTaskId === task.id && (
+            <div className="space-y-2">
+              <select
+                value={entity}
+                onChange={e => { setEntity(e.target.value as ExternalEntity); setReason('') }}
+                className="w-full text-xs border dark:border-gray-600 rounded p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+              >
+                <option value="">Select entity…</option>
+                {allowedEntities.map(ent => (
+                  <option key={ent} value={ent}>{ENTITY_LABELS[ent]}</option>
+                ))}
+              </select>
+              {entity && (
+                <select
+                  value={reason}
+                  onChange={e => setReason(e.target.value as HoldReason)}
+                  className="w-full text-xs border dark:border-gray-600 rounded p-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                >
+                  <option value="">Select reason…</option>
+                  {HOLD_REASON_MAP[entity as ExternalEntity].map(r => (
+                    <option key={r} value={r}>{HOLD_REASON_LABELS[r]}</option>
+                  ))}
+                </select>
+              )}
+              <textarea
+                value={remark}
+                onChange={e => setRemark(e.target.value)}
+                placeholder={entity === 'OTHER' || reason === 'OTHER' ? 'Describe the issue (required)…' : 'Add remarks (optional)…'}
+                className="w-full text-xs border dark:border-gray-600 rounded p-2 h-16 resize-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500"
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={() => handleAssignHold(task.id)}
+                  disabled={submitting || !entity || !reason}
+                  className="text-xs bg-amber-500 text-white px-3 py-1.5 rounded hover:bg-amber-600 disabled:opacity-50"
+                >
+                  {submitting ? 'Saving…' : 'Assign Hold'}
+                </button>
+                <button
+                  onClick={() => setAssigningTaskId(null)}
+                  className="text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 // ── Priority table (with optional FFD inline assign) ─────────────────────────
 
-function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCustomer, isPRO, isDC, expandedId, onExpand, proUsers, onRefresh, sort, onSort, hiddenCols = new Set(), isMobile = false, historical = false }: {
+function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCustomer, isPRO, isDC, isAdmin, currentUserId, expandedId, onExpand, proUsers, onRefresh, sort, onSort, hiddenCols = new Set(), isMobile = false, historical = false }: {
   shipments: ShipmentListItem[]
   page: number
   totalPages: number
@@ -395,6 +613,8 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
   isCustomer?: boolean
   isPRO?: boolean
   isDC?: boolean
+  isAdmin?: boolean
+  currentUserId?: string
   expandedId?: string | null
   onExpand?: (id: string | null) => void
   proUsers?: { id: string; full_name: string }[]
@@ -407,7 +627,7 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
 }) {
   const qc = useQueryClient()
   const offset = (page - 1) * PAGE_SIZE
-  const colSpan = isFFD ? 13 : (isCustomer || isPRO) ? 14 : 13
+  const colSpan = isFFD ? 15 : (isCustomer || isPRO) ? 15 : isAdmin ? 15 : 14
 
   function colCls(key: string, whenVisible: string): string {
     if (hiddenCols.has(key)) return 'hidden'
@@ -425,6 +645,19 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
 
   const [selectedProIds, setSelectedProIds] = useState<Set<string>>(new Set())
   const [savingBulkPayment, setSavingBulkPayment] = useState(false)
+
+  const [selectedFFDIds, setSelectedFFDIds] = useState<Set<string>>(new Set())
+  const [savingBulkOpenBayan, setSavingBulkOpenBayan] = useState(false)
+  const [showBulkAssignBayan, setShowBulkAssignBayan] = useState(false)
+  const [showBulkAssignPermit, setShowBulkAssignPermit] = useState(false)
+  const [showBulkHoldFFD, setShowBulkHoldFFD] = useState(false)
+  const [showBulkReleaseHoldFFD, setShowBulkReleaseHoldFFD] = useState(false)
+  const [showBulkHoldPRO, setShowBulkHoldPRO] = useState(false)
+  const [showBulkReleaseHoldPRO, setShowBulkReleaseHoldPRO] = useState(false)
+
+  const [selectedAdminIds, setSelectedAdminIds] = useState<Set<string>>(new Set())
+  const [savingBulkDelete, setSavingBulkDelete] = useState(false)
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState(false)
 
   const [downloadingIds, setDownloadingIds] = useState<Set<string>>(new Set())
   const [approvingIds, setApprovingIds] = useState<Set<string>>(new Set())
@@ -500,6 +733,63 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
     setSelectedProIds(prev => prev.size === rows.length ? new Set() : new Set(rows.map(s => s.id)))
   }
 
+  function toggleSelectFFD(id: string) {
+    setSelectedFFDIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+
+  function toggleSelectAllFFD(rows: ShipmentListItem[]) {
+    setSelectedFFDIds(prev => prev.size === rows.length ? new Set() : new Set(rows.map(s => s.id)))
+  }
+
+  async function handleBulkOpenBayan() {
+    if (selectedFFDIds.size === 0) return
+    setSavingBulkOpenBayan(true)
+    try {
+      await shipmentsApi.bulkOpenBayan(Array.from(selectedFFDIds))
+      qc.invalidateQueries({ queryKey: ['shipments'] })
+      const count = selectedFFDIds.size
+      setSelectedFFDIds(new Set())
+      toast.success(`Bayan tasks opened for ${count} shipment${count !== 1 ? 's' : ''}`)
+    } catch (e: any) {
+      toast.error(e.response?.data?.detail || 'Failed to open Bayan tasks')
+    } finally {
+      setSavingBulkOpenBayan(false)
+    }
+  }
+
+  function toggleSelectAdmin(id: string) {
+    setSelectedAdminIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+
+  function toggleSelectAllAdmin(rows: ShipmentListItem[]) {
+    setSelectedAdminIds(prev => prev.size === rows.length ? new Set() : new Set(rows.map(s => s.id)))
+  }
+
+  async function handleBulkDelete() {
+    if (selectedAdminIds.size === 0) return
+    setSavingBulkDelete(true)
+    try {
+      await shipmentsApi.bulkDelete(Array.from(selectedAdminIds))
+      qc.invalidateQueries({ queryKey: ['shipments'] })
+      const count = selectedAdminIds.size
+      setSelectedAdminIds(new Set())
+      setConfirmBulkDelete(false)
+      toast.success(`${count} shipment${count !== 1 ? 's' : ''} deleted`)
+    } catch (e: any) {
+      toast.error(e.response?.data?.detail || 'Failed to delete shipments')
+    } finally {
+      setSavingBulkDelete(false)
+    }
+  }
+
   async function submitBulkBayanPayment() {
     if (selectedProIds.size === 0) return
     setSavingBulkPayment(true)
@@ -537,6 +827,8 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
   const [editingPermitId, setEditingPermitId] = useState<string | null>(null)
   const [permitRefValue, setPermitRefValue] = useState('')
   const [savingPermitId, setSavingPermitId] = useState<string | null>(null)
+
+  const [holdPanelId, setHoldPanelId] = useState<string | null>(null)
 
   async function savePermitRef(shipmentId: string) {
     setSavingPermitId(shipmentId)
@@ -642,18 +934,40 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                   />
                 </th>
               )}
+              {isFFD && !historical && (
+                <th className="px-3 py-3 w-10">
+                  <input
+                    type="checkbox"
+                    checked={selectedFFDIds.size === displaySorted.length && displaySorted.length > 0}
+                    onChange={() => toggleSelectAllFFD(displaySorted)}
+                    className="w-4 h-4 rounded border-gray-300 text-purple-600 focus:ring-purple-500 cursor-pointer"
+                  />
+                </th>
+              )}
+              {isAdmin && !historical && (
+                <th className="px-3 py-3 w-10">
+                  <input
+                    type="checkbox"
+                    checked={selectedAdminIds.size === displaySorted.length && displaySorted.length > 0}
+                    onChange={() => toggleSelectAllAdmin(displaySorted)}
+                    className="w-4 h-4 rounded border-gray-300 text-red-600 focus:ring-red-500 cursor-pointer"
+                  />
+                </th>
+              )}
               <th className="text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">#</th>
               <SortableHeader label="BL Number"    column="bl"       sort={sort} onSort={onSort} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
               <SortableHeader label="Invoice"      column="invoice"  sort={sort} onSort={onSort} className={colCls('invoice', 'hidden md:table-cell px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide')} />
               <th className={colCls('consignee', 'hidden lg:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>Consignee</th>
               <th className={colCls('port', 'hidden xl:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>Port of Loading</th>
+              <th className={colCls('offloading_location', 'hidden xl:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>Offloading Location</th>
               <th className={colCls('bayan_type', 'hidden xl:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>Bayan Type</th>
               <SortableHeader label={isPRO ? 'My Task' : 'Stage'} column="stage" sort={sort} onSort={onSort} className={colCls('stage', 'px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide')} />
               <th className={colCls('progress', 'text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>Progress</th>
               <SortableHeader label={historical ? 'Offloading Date' : 'Planned Pull out'} column="pull_out" sort={sort} onSort={onSort} className={colCls('pull_out', 'hidden md:table-cell px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide')} />
               <SortableHeader label="ETA to Port"  column="eta"         sort={sort} onSort={onSort} className={colCls('eta',         'hidden xl:table-cell px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide')} />
               <SortableHeader label="DO Validity"  column="do_validity" sort={sort} onSort={onSort} className={colCls('do_validity', 'hidden xl:table-cell px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide')} />
-              <th className={colCls('amls', 'hidden lg:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>{isPRO ? 'Permit No' : 'AMLS Job#'}</th>
+              <th className={colCls('amls', 'hidden lg:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>AMLS Job#</th>
+              <th className={colCls('permit_no', 'hidden lg:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>Permit No</th>
               <th />
               {isFFD && <th />}
             </tr>
@@ -670,6 +984,13 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
               const showAssignBtn = !historical && isFFD && s.current_stage === 'IN_PROGRESS'
               const showReviewBtn = !historical && isFFD && s.current_stage === 'FFD_REVIEW'
               const showPaymentBtn = !historical && isCustomer && s.bayan_payment_pending && s.bayan_payment_task_id
+              const hasActiveHold = s.permit_status === 'ON_HOLD' || s.do_status === 'ON_HOLD' || s.bayan_status === 'ON_HOLD' || s.ccro_status === 'ON_HOLD'
+              const showHoldBtn = !historical && s.current_stage === 'IN_PROGRESS' && (
+                isFFD || (isPRO && (
+                  (s.permit_status && s.permit_status !== 'COMPLETED') ||
+                  (s.bayan_status && s.bayan_status !== 'COMPLETED')
+                ))
+              )
 
               return (
                 <>
@@ -702,6 +1023,26 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                         />
                       </td>
                     )}
+                    {isFFD && !historical && (
+                      <td className="px-3 py-3">
+                        <input
+                          type="checkbox"
+                          checked={selectedFFDIds.has(s.id)}
+                          onChange={() => toggleSelectFFD(s.id)}
+                          className="w-4 h-4 rounded border-gray-300 text-purple-600 focus:ring-purple-500 cursor-pointer"
+                        />
+                      </td>
+                    )}
+                    {isAdmin && !historical && (
+                      <td className="px-3 py-3">
+                        <input
+                          type="checkbox"
+                          checked={selectedAdminIds.has(s.id)}
+                          onChange={() => toggleSelectAdmin(s.id)}
+                          className="w-4 h-4 rounded border-gray-300 text-red-600 focus:ring-red-500 cursor-pointer"
+                        />
+                      </td>
+                    )}
                     <td className="px-3 py-3">
                       <div className="flex items-center gap-1.5">
                         {isOverdue && <AlertTriangle size={14} className="text-red-500" />}
@@ -717,13 +1058,19 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                     <td className={colCls('port', 'hidden xl:table-cell px-3 py-3 text-xs text-gray-600 dark:text-gray-300 whitespace-nowrap')}>
                       {s.loading_port_name || <span className="text-gray-400">—</span>}
                     </td>
+                    <td className={colCls('offloading_location', 'hidden xl:table-cell px-3 py-3 text-xs text-gray-600 dark:text-gray-300 whitespace-nowrap')}>
+                      {s.offloading_point_name || <span className="text-gray-400">—</span>}
+                    </td>
                     <td className={colCls('bayan_type', 'hidden xl:table-cell px-3 py-3 text-xs text-gray-600 dark:text-gray-300 whitespace-nowrap')}>
                       {s.bayan_type_name || <span className="text-gray-400">—</span>}
                     </td>
                     <td className={colCls('stage', 'px-3 py-3')}>
-                      {isPRO && s.current_stage === 'IN_PROGRESS' ? (
+                      {isPRO && s.current_stage === 'IN_PROGRESS' ? (() => {
+                        const showPermit = !!(s.permit_status && s.permit_status !== 'COMPLETED' && s.permit_assigned_to_id === currentUserId)
+                        const showBayan  = !!(s.bayan_status  && s.bayan_status  !== 'COMPLETED' && s.bayan_assigned_to_id  === currentUserId)
+                        return (
                         <div className="flex flex-col gap-1">
-                          {s.permit_status && s.permit_status !== 'COMPLETED' && (
+                          {showPermit && (
                             <span className={clsx('text-xs font-medium px-2 py-0.5 rounded-full inline-flex items-center gap-1',
                               s.permit_status === 'ON_HOLD'
                                 ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400'
@@ -733,7 +1080,7 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                               Permit
                             </span>
                           )}
-                          {s.bayan_status && s.bayan_status !== 'COMPLETED' && (
+                          {showBayan && (
                             <span className={clsx('text-xs font-medium px-2 py-0.5 rounded-full inline-flex items-center gap-1',
                               s.bayan_status === 'ON_HOLD'
                                 ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400'
@@ -743,13 +1090,14 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                               Bayan
                             </span>
                           )}
-                          {(!s.permit_status || s.permit_status === 'COMPLETED') && (!s.bayan_status || s.bayan_status === 'COMPLETED') && (
+                          {!showPermit && !showBayan && (
                             <span className={clsx('text-xs font-medium px-2 py-0.5 rounded-full', STAGE_COLORS[s.current_stage])}>
                               {STAGE_LABELS[s.current_stage as ShipmentStage]}
                             </span>
                           )}
                         </div>
-                      ) : isFFD && (s.do_revalidation_count > 0 || s.ccro_returned_count > 0) ? (
+                        )
+                      })() : isFFD && (s.do_revalidation_count > 0 || s.ccro_returned_count > 0) ? (
                         <div className="flex flex-col gap-1">
                           <span className={clsx('text-xs font-medium px-2 py-0.5 rounded-full', STAGE_COLORS[s.current_stage])}>
                             {STAGE_LABELS[s.current_stage as ShipmentStage]}
@@ -850,51 +1198,7 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                       )}
                     </td>
                     <td className={colCls('amls', 'hidden lg:table-cell px-3 py-3')}>
-                      {isPRO ? (
-                        editingPermitId === s.id ? (
-                          <div className="flex items-center gap-1">
-                            <input
-                              type="text"
-                              value={permitRefValue}
-                              onChange={e => setPermitRefValue(e.target.value)}
-                              autoFocus
-                              placeholder="Permit No…"
-                              onKeyDown={e => {
-                                if (e.key === 'Enter') savePermitRef(s.id)
-                                if (e.key === 'Escape') setEditingPermitId(null)
-                              }}
-                              className="text-xs border dark:border-gray-600 rounded px-2 py-1 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500 w-24"
-                            />
-                            <button
-                              onClick={() => savePermitRef(s.id)}
-                              disabled={savingPermitId === s.id}
-                              className="p-1 text-green-600 hover:text-green-700 disabled:opacity-40"
-                              title="Save"
-                            >
-                              <CheckCircle size={14} />
-                            </button>
-                            <button
-                              onClick={() => setEditingPermitId(null)}
-                              disabled={savingPermitId === s.id}
-                              className="p-1 text-gray-400 hover:text-gray-600 disabled:opacity-40"
-                              title="Cancel"
-                            >
-                              <X size={12} />
-                            </button>
-                          </div>
-                        ) : (
-                          <button
-                            onClick={() => { setEditingPermitId(s.id); setPermitRefValue(s.permit_ref ?? '') }}
-                            className="flex items-center gap-1 text-left border border-dashed border-gray-300 dark:border-gray-600 hover:border-blue-400 dark:hover:border-blue-500 rounded px-1.5 py-0.5 transition-colors group/permit"
-                            title="Edit Permit No"
-                          >
-                            <span className="text-xs text-gray-600 dark:text-gray-300">
-                              {s.permit_ref || <span className="text-gray-400 italic">—</span>}
-                            </span>
-                            <Pencil size={10} className="text-gray-400 group-hover/permit:text-blue-500 shrink-0 transition-colors" />
-                          </button>
-                        )
-                      ) : isFFD && editingAmlsId === s.id ? (
+                      {isFFD && editingAmlsId === s.id ? (
                         <div className="flex items-center gap-1">
                           <input
                             type="text"
@@ -942,6 +1246,57 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                         </span>
                       )}
                     </td>
+                    <td className={colCls('permit_no', 'hidden lg:table-cell px-3 py-3')}>
+                      {isPRO && s.permit_assigned_to_id === currentUserId ? (
+                        editingPermitId === s.id ? (
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="text"
+                              value={permitRefValue}
+                              onChange={e => setPermitRefValue(e.target.value)}
+                              autoFocus
+                              placeholder="Permit No…"
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') savePermitRef(s.id)
+                                if (e.key === 'Escape') setEditingPermitId(null)
+                              }}
+                              className="text-xs border dark:border-gray-600 rounded px-2 py-1 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500 w-24"
+                            />
+                            <button
+                              onClick={() => savePermitRef(s.id)}
+                              disabled={savingPermitId === s.id}
+                              className="p-1 text-green-600 hover:text-green-700 disabled:opacity-40"
+                              title="Save"
+                            >
+                              <CheckCircle size={14} />
+                            </button>
+                            <button
+                              onClick={() => setEditingPermitId(null)}
+                              disabled={savingPermitId === s.id}
+                              className="p-1 text-gray-400 hover:text-gray-600 disabled:opacity-40"
+                              title="Cancel"
+                            >
+                              <X size={12} />
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => { setEditingPermitId(s.id); setPermitRefValue(s.permit_ref ?? '') }}
+                            className="flex items-center gap-1 text-left border border-dashed border-gray-300 dark:border-gray-600 hover:border-blue-400 dark:hover:border-blue-500 rounded px-1.5 py-0.5 transition-colors group/permit"
+                            title="Edit Permit No"
+                          >
+                            <span className="text-xs text-gray-600 dark:text-gray-300">
+                              {s.permit_ref || <span className="text-gray-400 italic">—</span>}
+                            </span>
+                            <Pencil size={10} className="text-gray-400 group-hover/permit:text-blue-500 shrink-0 transition-colors" />
+                          </button>
+                        )
+                      ) : (
+                        <span className="text-xs text-gray-600 dark:text-gray-300">
+                          {s.permit_ref || <span className="text-gray-400">—</span>}
+                        </span>
+                      )}
+                    </td>
                     <td className="px-3 py-3">
                       <div className="flex items-center gap-2">
                         {showPaymentBtn && (
@@ -962,6 +1317,26 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                             ? <Loader2 size={14} className="animate-spin" />
                             : <Download size={14} />}
                         </button>
+                        {showHoldBtn && (
+                          <button
+                            onClick={() => {
+                              const willOpen = holdPanelId !== s.id
+                              setHoldPanelId(willOpen ? s.id : null)
+                              if (willOpen) onExpand?.(null)
+                            }}
+                            title={hasActiveHold ? 'Active hold — click to manage' : 'Put task on hold'}
+                            className={clsx(
+                              'w-5 h-5 rounded flex items-center justify-center transition-colors shrink-0',
+                              holdPanelId === s.id
+                                ? 'bg-red-700 text-white'
+                                : hasActiveHold
+                                ? 'bg-amber-500 hover:bg-amber-600 text-white'
+                                : 'bg-red-600 hover:bg-red-700 text-white'
+                            )}
+                          >
+                            <Pause size={10} />
+                          </button>
+                        )}
                         <Link to={`/shipments/${s.id}`} className="text-blue-600 hover:underline text-xs whitespace-nowrap">
                           View →
                         </Link>
@@ -980,8 +1355,8 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                               Approve
                             </button>
                             <button
-                              onClick={() => onExpand?.(isExpanded ? null : s.id)}
-                              className={clsx(
+                              onClick={() => { if (!isExpanded) setHoldPanelId(null); onExpand?.(isExpanded ? null : s.id) }}
+                            className={clsx(
                                 'flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border font-medium transition-colors whitespace-nowrap',
                                 isExpanded
                                   ? 'bg-red-600 text-white border-red-600'
@@ -995,7 +1370,7 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                         )}
                         {showAssignBtn && (
                           <button
-                            onClick={() => onExpand?.(isExpanded ? null : s.id)}
+                            onClick={() => { if (!isExpanded) setHoldPanelId(null); onExpand?.(isExpanded ? null : s.id) }}
                             className={clsx(
                               'flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border font-medium transition-colors whitespace-nowrap',
                               isExpanded
@@ -1029,6 +1404,17 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                           shipmentId={s.id}
                           proUsers={proUsers}
                           onDone={() => onExpand?.(null)}
+                        />
+                      </td>
+                    </tr>
+                  )}
+                  {holdPanelId === s.id && showHoldBtn && (
+                    <tr key={`${s.id}-hold`}>
+                      <td colSpan={colSpan} className="p-0">
+                        <InlineHoldPanel
+                          shipmentId={s.id}
+                          userTeam={isFFD ? 'FFD' : 'PRO'}
+                          onDone={() => setHoldPanelId(null)}
                         />
                       </td>
                     </tr>
@@ -1076,25 +1462,245 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
 
       {isPRO && !historical && selectedProIds.size > 0 && (
         <div className="fixed bottom-20 lg:bottom-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none">
-          <div className="flex items-center gap-3 bg-gray-900 dark:bg-gray-700 text-white px-5 py-3 rounded-2xl shadow-xl border border-gray-700 dark:border-gray-600 pointer-events-auto">
+          <div className="flex flex-wrap items-center gap-2 bg-gray-900 dark:bg-gray-700 text-white px-5 py-3 rounded-2xl shadow-xl border border-gray-700 dark:border-gray-600 pointer-events-auto">
             <span className="text-sm">
               <span className="font-semibold text-blue-400">{selectedProIds.size}</span>
               {' '}shipment{selectedProIds.size !== 1 ? 's' : ''} selected
             </span>
-            <button
-              onClick={submitBulkBayanPayment}
-              disabled={savingBulkPayment}
-              className="flex items-center gap-1.5 text-xs bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white px-4 py-1.5 rounded-lg font-medium"
-            >
-              <DollarSign size={13} />
-              {savingBulkPayment ? 'Sending…' : 'Request Bayan Payment'}
-            </button>
+            {/* Bayan payment request hidden — payment is now auto-requested on Bayan task completion */}
+            {(() => {
+              const TASK_BLOCKED_STAGES = ['FFD_REVIEW', 'TRANSPORT', 'DC_TRANSPORT']
+              const stageBlocked = displaySorted.some(s => selectedProIds.has(s.id) && TASK_BLOCKED_STAGES.includes(s.current_stage))
+              const stageTitle = stageBlocked ? 'One or more selected shipments are in a stage where task actions are not applicable' : undefined
+              return (
+                <>
+                  {stageBlocked && (
+                    <button
+                      onClick={() => setSelectedProIds(prev => new Set([...prev].filter(id => !TASK_BLOCKED_STAGES.includes(displaySorted.find(s => s.id === id)?.current_stage ?? ''))))}
+                      className="text-xs text-amber-300 hover:text-amber-100 underline underline-offset-2"
+                    >
+                      Deselect ineligible
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setShowBulkHoldPRO(true)}
+                    disabled={stageBlocked}
+                    title={stageTitle}
+                    className="flex items-center gap-1.5 text-xs bg-amber-600 hover:bg-amber-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-3 py-1.5 rounded-lg font-medium"
+                  >
+                    <Pause size={13} /> Put on Hold
+                  </button>
+                  <button
+                    onClick={() => setShowBulkReleaseHoldPRO(true)}
+                    disabled={stageBlocked}
+                    title={stageTitle}
+                    className="flex items-center gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-3 py-1.5 rounded-lg font-medium"
+                  >
+                    <Unlock size={13} /> Release Hold
+                  </button>
+                </>
+              )
+            })()}
             <button
               onClick={() => setSelectedProIds(new Set())}
               className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-200 px-2 py-1 rounded hover:bg-gray-800 dark:hover:bg-gray-600"
             >
               <X size={13} /> Clear
             </button>
+          </div>
+        </div>
+      )}
+
+      {isFFD && !historical && selectedFFDIds.size > 0 && (
+        <div className="fixed bottom-20 lg:bottom-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none">
+          <div className="flex flex-wrap items-center gap-2 bg-gray-900 dark:bg-gray-700 text-white px-5 py-3 rounded-2xl shadow-xl border border-gray-700 dark:border-gray-600 pointer-events-auto">
+            <span className="text-sm">
+              <span className="font-semibold text-purple-400">{selectedFFDIds.size}</span>
+              {' '}shipment{selectedFFDIds.size !== 1 ? 's' : ''} selected
+            </span>
+            {(() => {
+              const TASK_BLOCKED_STAGES = ['FFD_REVIEW', 'TRANSPORT', 'DC_TRANSPORT']
+              const selectedShips = displaySorted.filter(s => selectedFFDIds.has(s.id))
+              const stageBlocked = selectedShips.some(s => TASK_BLOCKED_STAGES.includes(s.current_stage))
+              const stageTitle = stageBlocked ? 'One or more selected shipments are in a stage where task actions are not applicable' : undefined
+              const bayanBlocked = stageBlocked || selectedShips.some(s => s.bayan_status !== null)
+              const assignBayanBlocked = stageBlocked || selectedShips.some(s => s.bayan_status === null || s.bayan_status === 'COMPLETED')
+              const assignPermitBlocked = stageBlocked || selectedShips.some(s => s.permit_status === 'COMPLETED')
+              return (
+                <>
+                  {stageBlocked && (
+                    <button
+                      onClick={() => setSelectedFFDIds(prev => new Set([...prev].filter(id => !TASK_BLOCKED_STAGES.includes(displaySorted.find(s => s.id === id)?.current_stage ?? ''))))}
+                      className="text-xs text-amber-300 hover:text-amber-100 underline underline-offset-2"
+                    >
+                      Deselect ineligible
+                    </button>
+                  )}
+                  <button
+                    onClick={handleBulkOpenBayan}
+                    disabled={savingBulkOpenBayan || bayanBlocked}
+                    title={stageBlocked ? stageTitle : bayanBlocked ? 'One or more selected shipments already have a Bayan task open or completed' : undefined}
+                    className="flex items-center gap-1.5 text-xs bg-purple-600 hover:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-3 py-1.5 rounded-lg font-medium"
+                  >
+                    <ListTodo size={13} />
+                    {savingBulkOpenBayan ? 'Opening…' : 'Open Bayan'}
+                  </button>
+                  <button
+                    onClick={() => setShowBulkAssignBayan(true)}
+                    disabled={assignBayanBlocked}
+                    title={stageBlocked ? stageTitle : assignBayanBlocked ? 'All selected shipments must have an open (non-completed) Bayan task' : undefined}
+                    className="flex items-center gap-1.5 text-xs bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-3 py-1.5 rounded-lg font-medium"
+                  >
+                    <UserCheck size={13} /> Assign Bayan →
+                  </button>
+                  <button
+                    onClick={() => setShowBulkAssignPermit(true)}
+                    disabled={assignPermitBlocked}
+                    title={stageBlocked ? stageTitle : assignPermitBlocked ? 'One or more selected shipments have a completed Permit task — cannot reassign' : undefined}
+                    className="flex items-center gap-1.5 text-xs bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-3 py-1.5 rounded-lg font-medium"
+                  >
+                    <UserCheck size={13} /> Assign Permit →
+                  </button>
+                  <button
+                    onClick={() => setShowBulkHoldFFD(true)}
+                    disabled={stageBlocked}
+                    title={stageTitle}
+                    className="flex items-center gap-1.5 text-xs bg-amber-600 hover:bg-amber-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-3 py-1.5 rounded-lg font-medium"
+                  >
+                    <Pause size={13} /> Put on Hold
+                  </button>
+                  <button
+                    onClick={() => setShowBulkReleaseHoldFFD(true)}
+                    disabled={stageBlocked}
+                    title={stageTitle}
+                    className="flex items-center gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-3 py-1.5 rounded-lg font-medium"
+                  >
+                    <Unlock size={13} /> Release Hold
+                  </button>
+                </>
+              )
+            })()}
+            <button
+              onClick={() => setSelectedFFDIds(new Set())}
+              className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-200 px-2 py-1 rounded hover:bg-gray-800 dark:hover:bg-gray-600"
+            >
+              <X size={13} /> Clear
+            </button>
+          </div>
+        </div>
+      )}
+
+      {showBulkAssignBayan && proUsers && (
+        <BulkAssignTaskModal
+          taskType="BAYAN"
+          selectedIds={Array.from(selectedFFDIds)}
+          proUsers={proUsers}
+          onClose={() => setShowBulkAssignBayan(false)}
+          onDone={() => { setShowBulkAssignBayan(false); setSelectedFFDIds(new Set()) }}
+        />
+      )}
+      {showBulkAssignPermit && proUsers && (
+        <BulkAssignTaskModal
+          taskType="PERMIT"
+          selectedIds={Array.from(selectedFFDIds)}
+          proUsers={proUsers}
+          onClose={() => setShowBulkAssignPermit(false)}
+          onDone={() => { setShowBulkAssignPermit(false); setSelectedFFDIds(new Set()) }}
+        />
+      )}
+      {showBulkHoldFFD && (
+        <BulkHoldModal
+          selectedIds={Array.from(selectedFFDIds)}
+          selectedShipments={displaySorted.filter(s => selectedFFDIds.has(s.id))}
+          userTeam="FFD"
+          onClose={() => setShowBulkHoldFFD(false)}
+          onDone={() => { setShowBulkHoldFFD(false); setSelectedFFDIds(new Set()) }}
+        />
+      )}
+      {showBulkReleaseHoldFFD && (
+        <BulkReleaseHoldModal
+          selectedIds={Array.from(selectedFFDIds)}
+          selectedShipments={displaySorted.filter(s => selectedFFDIds.has(s.id))}
+          userTeam="FFD"
+          onClose={() => setShowBulkReleaseHoldFFD(false)}
+          onDone={() => { setShowBulkReleaseHoldFFD(false); setSelectedFFDIds(new Set()) }}
+        />
+      )}
+      {showBulkHoldPRO && (
+        <BulkHoldModal
+          selectedIds={Array.from(selectedProIds)}
+          selectedShipments={displaySorted.filter(s => selectedProIds.has(s.id))}
+          userTeam="PRO"
+          currentUserId={currentUserId}
+          onClose={() => setShowBulkHoldPRO(false)}
+          onDone={() => { setShowBulkHoldPRO(false); setSelectedProIds(new Set()) }}
+        />
+      )}
+      {showBulkReleaseHoldPRO && (
+        <BulkReleaseHoldModal
+          selectedIds={Array.from(selectedProIds)}
+          selectedShipments={displaySorted.filter(s => selectedProIds.has(s.id))}
+          userTeam="PRO"
+          currentUserId={currentUserId}
+          onClose={() => setShowBulkReleaseHoldPRO(false)}
+          onDone={() => { setShowBulkReleaseHoldPRO(false); setSelectedProIds(new Set()) }}
+        />
+      )}
+
+      {/* Admin bulk delete floating bar */}
+      {isAdmin && !historical && selectedAdminIds.size > 0 && (
+        <div className="fixed bottom-20 lg:bottom-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none">
+          <div className="flex flex-wrap items-center gap-2 bg-gray-900 dark:bg-gray-700 text-white px-5 py-3 rounded-2xl shadow-xl border border-gray-700 dark:border-gray-600 pointer-events-auto">
+            <span className="text-sm">
+              <span className="font-semibold text-red-400">{selectedAdminIds.size}</span>
+              {' '}shipment{selectedAdminIds.size !== 1 ? 's' : ''} selected
+            </span>
+            <button
+              onClick={() => setConfirmBulkDelete(true)}
+              className="flex items-center gap-1.5 text-xs bg-red-600 hover:bg-red-500 text-white px-3 py-1.5 rounded-lg font-medium"
+            >
+              <X size={13} /> Delete Selected
+            </button>
+            <button
+              onClick={() => setSelectedAdminIds(new Set())}
+              className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-200 px-2 py-1 rounded hover:bg-gray-800 dark:hover:bg-gray-600"
+            >
+              <X size={13} /> Clear
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Admin bulk delete confirmation dialog */}
+      {confirmBulkDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-sm">
+            <div className="px-5 py-4 border-b dark:border-gray-700">
+              <h2 className="text-sm font-semibold text-gray-900 dark:text-white">Confirm Bulk Delete</h2>
+            </div>
+            <div className="px-5 py-4">
+              <p className="text-sm text-gray-600 dark:text-gray-300">
+                You are about to permanently delete{' '}
+                <span className="font-semibold text-red-600">{selectedAdminIds.size}</span>{' '}
+                shipment{selectedAdminIds.size !== 1 ? 's' : ''}. This cannot be undone.
+              </p>
+            </div>
+            <div className="flex items-center justify-end gap-2 px-5 py-4 border-t dark:border-gray-700">
+              <button
+                onClick={() => setConfirmBulkDelete(false)}
+                disabled={savingBulkDelete}
+                className="text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 px-3 py-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleBulkDelete}
+                disabled={savingBulkDelete}
+                className="text-xs bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 disabled:opacity-50 font-medium"
+              >
+                {savingBulkDelete ? 'Deleting…' : 'Yes, Delete'}
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -1553,7 +2159,7 @@ export function ShipmentList() {
                 )}
               </button>
               {showColPicker && (
-                <div className="absolute right-0 top-full mt-1 z-20 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg p-3 min-w-[190px]">
+                <div className="absolute right-0 top-full mt-1 z-50 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg p-3 min-w-[190px]">
                   <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-2 uppercase tracking-wide">Visible columns</p>
                   {ALL_COLUMNS.map(col => (
                     <label key={col.key} className="flex items-center gap-2 py-1 cursor-pointer hover:text-gray-900 dark:hover:text-white">
@@ -1629,6 +2235,8 @@ export function ShipmentList() {
           isCustomer={isCustomer}
           isPRO={isPRO}
           isDC={isDC}
+          isAdmin={user?.is_admin}
+          currentUserId={user?.id}
           expandedId={expandedId}
           onExpand={setExpandedId}
           proUsers={proUsers as { id: string; full_name: string }[]}

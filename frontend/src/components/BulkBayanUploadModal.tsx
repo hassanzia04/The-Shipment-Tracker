@@ -163,6 +163,14 @@ export function BulkBayanUploadModal({ onClose, onDone }: Props) {
     })
   }
 
+  function unmatchRow(idx: number) {
+    setRows(prev => {
+      const updated = [...prev]
+      updated[idx] = { ...updated[idx], shipmentId: null, blNumber: null, bayanTypeName: null, hasExistingDoc: false }
+      return updated
+    })
+  }
+
   function setCompleteTask(idx: number, value: boolean) {
     setRows(prev => {
       const updated = [...prev]
@@ -170,6 +178,8 @@ export function BulkBayanUploadModal({ onClose, onDone }: Props) {
       return updated
     })
   }
+
+  const matchedIds = new Set(rows.map(r => r.shipmentId).filter((id): id is string => id !== null))
 
   const allAnalyzed = rows.length > 0 && rows.every(r => !r.analyzing)
   const readyCount = rows.filter(r => r.shipmentId && r.uploadStatus === 'idle' && !r.hasExistingDoc).length
@@ -211,8 +221,10 @@ export function BulkBayanUploadModal({ onClose, onDone }: Props) {
                 <BayanFileRow
                   key={`${row.file.name}-${idx}`}
                   row={row}
+                  matchedIds={matchedIds}
                   onRemove={() => removeRow(idx)}
                   onMatch={(sid, bl, typeName) => setManualMatch(idx, sid, bl, typeName)}
+                  onUnmatch={() => unmatchRow(idx)}
                   onCompleteChange={v => setCompleteTask(idx, v)}
                 />
               ))}
@@ -271,13 +283,17 @@ function typeStyle(name: string | null) {
 
 function BayanFileRow({
   row,
+  matchedIds,
   onRemove,
   onMatch,
+  onUnmatch,
   onCompleteChange,
 }: {
   row: RowState
+  matchedIds: Set<string>
   onRemove: () => void
   onMatch: (shipmentId: string, blNumber: string, bayanTypeName: string | null) => void
+  onUnmatch: () => void
   onCompleteChange: (v: boolean) => void
 }) {
   const [searching, setSearching] = useState(false)
@@ -288,7 +304,7 @@ function BayanFileRow({
   async function fetchInitial() {
     try {
       const { data } = await shipmentsApi.list({ limit: 10, my_queue: true, task_type_filter: 'BAYAN' })
-      setResults(data.items)
+      setResults(data.items.filter(s => s.id === row.shipmentId || !matchedIds.has(s.id)))
     } catch {
       setResults([])
     }
@@ -306,7 +322,7 @@ function BayanFileRow({
     searchTimeout.current = setTimeout(async () => {
       try {
         const { data } = await shipmentsApi.list({ search: q, limit: 8, my_queue: true, task_type_filter: 'BAYAN' })
-        setResults(data.items)
+        setResults(data.items.filter(s => s.id === row.shipmentId || !matchedIds.has(s.id)))
       } catch {
         setResults([])
       }
@@ -346,7 +362,11 @@ function BayanFileRow({
           <Eye size={14} />
         </button>
         {!isDone && row.uploadStatus === 'idle' && (
-          <button onClick={onRemove} className="p-0.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400">
+          <button
+            onClick={row.shipmentId ? onUnmatch : onRemove}
+            title={row.shipmentId ? 'Remove match' : 'Remove file'}
+            className="p-0.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400"
+          >
             <X size={14} />
           </button>
         )}

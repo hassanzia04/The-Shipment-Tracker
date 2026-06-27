@@ -1,4 +1,4 @@
-import { format, parseISO, isValid } from 'date-fns'
+import { format, parseISO, isValid, formatDistanceToNow } from 'date-fns'
 
 export function formatDate(value: string | Date | null | undefined): string {
   if (!value) return '—'
@@ -30,6 +30,16 @@ export function formatDuration(seconds: number | null | undefined): string {
   const m = Math.floor((seconds % 3600) / 60)
   if (h > 0) return `${h}h ${m}m`
   return `${m}m`
+}
+
+export function timeAgo(value: string | Date | null | undefined): string {
+  if (!value) return '—'
+  try {
+    const d = typeof value === 'string' ? parseISO(value) : value
+    return isValid(d) ? formatDistanceToNow(d, { addSuffix: true }) : '—'
+  } catch {
+    return '—'
+  }
 }
 
 export function formatFileSize(bytes: number): string {

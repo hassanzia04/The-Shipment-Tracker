@@ -125,6 +125,22 @@ TEMPLATES: dict[str, dict] = {
         "subject": "FFD Tracker — Bayan payment required ({count} shipment{plural})",
         "body": "Bayan payment is required for {count} shipment{plural}. The Bayan documents are attached to this email. Please complete the payment and confirm.",
     },
+    "bulk_bayan_opened": {
+        "subject": "FFD Tracker — Bayan tasks opened ({count} shipment{plural})",
+        "body": "{count} Bayan task{plural} have been opened by {actor_name}. Please log in to review and assign them.",
+    },
+    "bulk_task_assigned": {
+        "subject": "FFD Tracker — {task_type} tasks assigned to you ({count} shipment{plural})",
+        "body": "{count} {task_type} task{plural} have been assigned to you by {actor_name}. Please log in to review.",
+    },
+    "bulk_hold_assigned": {
+        "subject": "FFD Tracker — Tasks put on hold ({count} shipment{plural})",
+        "body": "{count} shipment{plural} have been put on hold by {actor_name}. Entity: {hold_entity}. Reason: {hold_reason}.",
+    },
+    "bulk_hold_released": {
+        "subject": "FFD Tracker — Tasks released from hold ({count} shipment{plural})",
+        "body": "{count} shipment{plural} have been released from hold by {actor_name}.",
+    },
     "ccro_bulk_received": {
         "subject": "FFD Tracker — CCROs confirmed ({count} shipment{plural}), please arrange transport",
         "body": "CCROs for {count} shipment{plural} have been confirmed. Please assign trucks to the containers listed below.",
@@ -151,7 +167,7 @@ async def _get_cc_emails_for_user(db: AsyncSession, user_id: uuid.UUID) -> list[
     return [row.cc_email for row in result.scalars().all()]
 
 
-def _render_alert_email(body: str, shipment_url: str, remark: str = "", doc_links: list[dict] | None = None) -> str:
+def _render_alert_email(body: str, shipment_url: str, remark: str = "", doc_links: list[dict] | None = None, button_label: str = "View Shipment &rarr;") -> str:
     remark_block = ""
     if remark:
         remark_block = (
@@ -210,7 +226,7 @@ def _render_alert_email(body: str, shipment_url: str, remark: str = "", doc_link
     <a href="{shipment_url_escaped}"
        style="display:inline-block;padding:10px 20px;background-color:#1d4ed8;color:#ffffff;
               font-family:Arial,sans-serif;font-size:13px;font-weight:600;text-decoration:none;
-              border-radius:4px;">View Shipment &rarr;</a>
+              border-radius:4px;">{button_label}</a>
   </td></tr>
 
   <tr><td bgcolor="#f8fafc" style="background-color:#f8fafc;padding:16px 32px;border-top:1px solid #e2e8f0;">
@@ -882,6 +898,189 @@ async def mark_read(db: AsyncSession, user_id: uuid.UUID, notification_id: uuid.
         notif.is_read = True
         notif.read_at = datetime.now(timezone.utc)
         await db.commit()
+
+
+def _bl_list_table(shipments: list) -> str:
+    rows = "".join(
+        f'<tr style="border-top:1px solid #e2e8f0;">'
+        f'<td style="padding:7px 10px;font-family:Arial,sans-serif;font-size:13px;font-weight:600;color:#111827;">{_html.escape(s.bl_number)}</td>'
+        f'</tr>'
+        for s in shipments
+    )
+    return (
+        '<table cellpadding="0" cellspacing="0" style="margin-top:16px;border:1px solid #e2e8f0;border-radius:6px;width:100%;border-collapse:collapse;">'
+        '<tr style="background-color:#f8fafc;">'
+        '<th style="padding:8px 10px;font-family:Arial,sans-serif;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;text-align:left;">BL Number</th>'
+        '</tr>'
+        f'{rows}'
+        '</table>'
+    )
+
+
+async def notify_bulk_bayan_opened(
+    db: AsyncSession,
+    shipments: list,
+    actor_name: str,
+) -> None:
+    """One email to PRO team when FFD bulk-opens Bayan tasks."""
+    from app.notifications.tasks import send_email_task
+
+    count = len(shipments)
+    plural = "s" if count != 1 else ""
+    template = TEMPLATES["bulk_bayan_opened"]
+    body = template["body"].format(count=count, plural=plural, actor_name=_html.escape(actor_name))
+    subject = template["subject"].format(count=count, plural=plural)
+
+    users = await _get_team_users(db, Team.PRO)
+    cc_emails = await _get_cc_emails_for_team(db, Team.PRO)
+    tracker_url = _html.escape(settings.FRONTEND_URL)
+    email_html = _render_alert_email(f"{body}{_bl_list_table(shipments)}", tracker_url, button_label="Open Shipments &rarr;")
+
+    for user in users:
+        db.add(Notification(
+            shipment_id=None,
+            recipient_id=user.id,
+            channel="IN_APP",
+            template="bulk_bayan_opened",
+            payload={"subject": subject, "body": body},
+        ))
+
+    if users:
+        try:
+            send_email_task.delay([u.email for u in users], subject, email_html, cc_emails or None)
+        except Exception:
+            logger.exception("Failed to queue bulk-bayan-opened email (broker unavailable?)")
+
+    await db.commit()
+
+
+async def notify_bulk_task_assigned(
+    db: AsyncSession,
+    shipments: list,
+    assignee,
+    task_type_value: str,
+    actor_name: str,
+) -> None:
+    """One email to the PRO assignee; individual in-app notifications per shipment."""
+    from app.notifications.tasks import send_email_task
+
+    count = len(shipments)
+    plural = "s" if count != 1 else ""
+    task_type_label = task_type_value.replace("_", " ").title()
+    template = TEMPLATES["bulk_task_assigned"]
+    body = template["body"].format(
+        count=count, plural=plural,
+        task_type=_html.escape(task_type_label),
+        actor_name=_html.escape(actor_name),
+    )
+    subject = template["subject"].format(count=count, plural=plural, task_type=_html.escape(task_type_label))
+
+    cc_emails = await _get_cc_emails_for_user(db, assignee.id)
+    tracker_url = _html.escape(settings.FRONTEND_URL)
+    email_html = _render_alert_email(f"{body}{_bl_list_table(shipments)}", tracker_url, button_label="Open Shipments &rarr;")
+
+    for shipment in shipments:
+        per_shipment_body = (
+            f"{task_type_label} task for BL: {_html.escape(shipment.bl_number)} "
+            f"has been assigned to you by {_html.escape(actor_name)}."
+        )
+        db.add(Notification(
+            shipment_id=shipment.id,
+            recipient_id=assignee.id,
+            channel="IN_APP",
+            template="bulk_task_assigned",
+            payload={"subject": subject, "body": per_shipment_body},
+        ))
+
+    try:
+        send_email_task.delay(assignee.email, subject, email_html, cc_emails or None)
+    except Exception:
+        logger.exception("Failed to queue bulk-task-assigned email to %s (broker unavailable?)", assignee.email)
+
+    await db.commit()
+
+
+async def notify_bulk_hold_assigned(
+    db: AsyncSession,
+    shipments: list,
+    actor_name: str,
+    hold_entity,
+    hold_reason,
+) -> None:
+    """One email to FFD when tasks are bulk put on hold."""
+    from app.notifications.tasks import send_email_task
+
+    count = len(shipments)
+    plural = "s" if count != 1 else ""
+    template = TEMPLATES["bulk_hold_assigned"]
+    body = template["body"].format(
+        count=count, plural=plural,
+        actor_name=_html.escape(actor_name),
+        hold_entity=_html.escape(hold_entity.value),
+        hold_reason=_html.escape(hold_reason.value),
+    )
+    subject = template["subject"].format(count=count, plural=plural)
+
+    users = await _get_team_users(db, Team.FFD)
+    cc_emails = await _get_cc_emails_for_team(db, Team.FFD)
+    tracker_url = _html.escape(settings.FRONTEND_URL)
+    email_html = _render_alert_email(f"{body}{_bl_list_table(shipments)}", tracker_url, button_label="Open Shipments &rarr;")
+
+    for user in users:
+        db.add(Notification(
+            shipment_id=None,
+            recipient_id=user.id,
+            channel="IN_APP",
+            template="bulk_hold_assigned",
+            payload={"subject": subject, "body": body},
+        ))
+
+    # Hold email alerts disabled — re-enable when needed
+    # if users:
+    #     try:
+    #         send_email_task.delay([u.email for u in users], subject, email_html, cc_emails or None)
+    #     except Exception:
+    #         logger.exception("Failed to queue bulk-hold-assigned email (broker unavailable?)")
+
+    await db.commit()
+
+
+async def notify_bulk_hold_released(
+    db: AsyncSession,
+    shipments: list,
+    actor_name: str,
+) -> None:
+    """One email to FFD when tasks are bulk released from hold."""
+    from app.notifications.tasks import send_email_task
+
+    count = len(shipments)
+    plural = "s" if count != 1 else ""
+    template = TEMPLATES["bulk_hold_released"]
+    body = template["body"].format(count=count, plural=plural, actor_name=_html.escape(actor_name))
+    subject = template["subject"].format(count=count, plural=plural)
+
+    users = await _get_team_users(db, Team.FFD)
+    cc_emails = await _get_cc_emails_for_team(db, Team.FFD)
+    tracker_url = _html.escape(settings.FRONTEND_URL)
+    email_html = _render_alert_email(f"{body}{_bl_list_table(shipments)}", tracker_url, button_label="Open Shipments &rarr;")
+
+    for user in users:
+        db.add(Notification(
+            shipment_id=None,
+            recipient_id=user.id,
+            channel="IN_APP",
+            template="bulk_hold_released",
+            payload={"subject": subject, "body": body},
+        ))
+
+    # Hold email alerts disabled — re-enable when needed
+    # if users:
+    #     try:
+    #         send_email_task.delay([u.email for u in users], subject, email_html, cc_emails or None)
+    #     except Exception:
+    #         logger.exception("Failed to queue bulk-hold-released email (broker unavailable?)")
+
+    await db.commit()
 
 
 async def mark_all_read(db: AsyncSession, user_id: uuid.UUID) -> None:

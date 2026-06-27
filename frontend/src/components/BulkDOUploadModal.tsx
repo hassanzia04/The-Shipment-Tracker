@@ -141,6 +141,14 @@ export function BulkDOUploadModal({ onClose, onDone }: Props) {
     })
   }
 
+  function unmatchRow(idx: number) {
+    setRows(prev => {
+      const updated = [...prev]
+      updated[idx] = { ...updated[idx], shipmentId: null, blNumber: null, hasExistingDoc: false }
+      return updated
+    })
+  }
+
   function setCompleteTask(idx: number, value: boolean) {
     setRows(prev => {
       const updated = [...prev]
@@ -156,6 +164,8 @@ export function BulkDOUploadModal({ onClose, onDone }: Props) {
       return updated
     })
   }
+
+  const matchedIds = new Set(rows.map(r => r.shipmentId).filter((id): id is string => id !== null))
 
   const allAnalyzed = rows.length > 0 && rows.every(r => !r.analyzing)
   const readyCount = rows.filter(r => r.shipmentId && r.doDate && r.uploadStatus === 'idle' && !r.hasExistingDoc).length
@@ -197,8 +207,10 @@ export function BulkDOUploadModal({ onClose, onDone }: Props) {
                 <DOFileRow
                   key={`${row.file.name}-${idx}`}
                   row={row}
+                  matchedIds={matchedIds}
                   onRemove={() => removeRow(idx)}
                   onMatch={(sid, bl) => setManualMatch(idx, sid, bl)}
+                  onUnmatch={() => unmatchRow(idx)}
                   onDateChange={date => setDate(idx, date)}
                   onCompleteChange={v => setCompleteTask(idx, v)}
                 />
@@ -249,14 +261,18 @@ function openPdf(file: File) {
 
 function DOFileRow({
   row,
+  matchedIds,
   onRemove,
   onMatch,
+  onUnmatch,
   onDateChange,
   onCompleteChange,
 }: {
   row: RowState
+  matchedIds: Set<string>
   onRemove: () => void
   onMatch: (shipmentId: string, blNumber: string) => void
+  onUnmatch: () => void
   onDateChange: (date: string) => void
   onCompleteChange: (v: boolean) => void
 }) {
@@ -268,7 +284,7 @@ function DOFileRow({
   async function fetchInitial() {
     try {
       const { data } = await shipmentsApi.list({ limit: 10, my_queue: true, task_type_filter: 'DO' })
-      setResults(data.items)
+      setResults(data.items.filter(s => s.id === row.shipmentId || !matchedIds.has(s.id)))
     } catch {
       setResults([])
     }
@@ -286,7 +302,7 @@ function DOFileRow({
     searchTimeout.current = setTimeout(async () => {
       try {
         const { data } = await shipmentsApi.list({ search: q, limit: 8, my_queue: true, task_type_filter: 'DO' })
-        setResults(data.items)
+        setResults(data.items.filter(s => s.id === row.shipmentId || !matchedIds.has(s.id)))
       } catch {
         setResults([])
       }
@@ -326,7 +342,11 @@ function DOFileRow({
           <Eye size={14} />
         </button>
         {!isDone && row.uploadStatus === 'idle' && (
-          <button onClick={onRemove} className="p-0.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400">
+          <button
+            onClick={row.shipmentId ? onUnmatch : onRemove}
+            title={row.shipmentId ? 'Remove match' : 'Remove file'}
+            className="p-0.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400"
+          >
             <X size={14} />
           </button>
         )}

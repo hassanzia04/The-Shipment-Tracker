@@ -91,9 +91,11 @@ HOLD_REASON_MAP: dict[ExternalEntity, list[HoldReason]] = {
     ],
 }
 
-# Maps which external entities each team can assign holds to
+# Maps which external entities each team can assign holds to.
+# FFD includes ROP and MOAF because they supervise the PRO team and these entities
+# can genuinely block Permit/Bayan/CCRO tasks in the real workflow.
 TEAM_HOLD_PERMISSIONS: dict[Team, list[ExternalEntity]] = {
-    Team.FFD: [ExternalEntity.SHIPPING_LINE, ExternalEntity.PORT, ExternalEntity.OTHER],
+    Team.FFD: [ExternalEntity.SHIPPING_LINE, ExternalEntity.ROP, ExternalEntity.MOAF, ExternalEntity.PORT, ExternalEntity.OTHER],
     Team.PRO: [ExternalEntity.SHIPPING_LINE, ExternalEntity.ROP, ExternalEntity.MOAF, ExternalEntity.OTHER],
 }
 
@@ -176,3 +178,4 @@ class EventType(str, Enum):
     RECALLED_FROM_TRANSPORT = "RECALLED_FROM_TRANSPORT"
     SHIPMENT_DETAILS_CHANGED = "SHIPMENT_DETAILS_CHANGED"
     BAYAN_PAYMENT_EMAIL_SENT = "BAYAN_PAYMENT_EMAIL_SENT"
+    OFFLOADING_UNDONE = "OFFLOADING_UNDONE"

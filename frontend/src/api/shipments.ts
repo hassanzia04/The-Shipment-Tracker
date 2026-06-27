@@ -157,8 +157,11 @@ export const shipmentsApi = {
     api.post<Shipment>(`/shipments/${id}/mark-returned`, { container_id }),
 
   // DC
-  markOffloaded: (id: string, container_id: string) =>
-    api.post<Shipment>(`/shipments/${id}/mark-offloaded`, { container_id }),
+  markOffloaded: (id: string, container_id: string, offloaded_at?: string) =>
+    api.post<Shipment>(`/shipments/${id}/mark-offloaded`, { container_id, offloaded_at: offloaded_at ?? null }),
+
+  undoOffloaded: (id: string, container_id: string, remark: string) =>
+    api.post<Shipment>(`/shipments/${id}/undo-offloaded`, { container_id, remark }),
 
   containerView: (params?: { historical?: boolean; skip?: number; limit?: number; search?: string; status?: string; from_date?: string; to_date?: string; amls_only?: boolean; sort_by?: string; sort_dir?: string }) =>
     api.get<PaginatedContainerView>('/shipments/container-view', { params }),
@@ -200,6 +203,21 @@ export const shipmentsApi = {
 
   bulkConfirmCcro: (shipment_ids: string[]) =>
     api.post<{ confirmed: number; skipped: string[] }>('/shipments/bulk-confirm-ccro', { shipment_ids }),
+
+  bulkOpenBayan: (shipment_ids: string[]) =>
+    api.post('/shipments/bulk-open-bayan', { shipment_ids }),
+
+  bulkAssignTask: (shipment_ids: string[], task_type: string, assignee_id: string) =>
+    api.post('/shipments/bulk-assign-task', { shipment_ids, task_type, assignee_id }),
+
+  bulkAssignHold: (shipment_ids: string[], hold_entity: string, hold_reason: string, hold_remark: string | null, task_types: string[]) =>
+    api.post('/shipments/bulk-assign-hold', { shipment_ids, hold_entity, hold_reason, hold_remark, task_types }),
+
+  bulkReleaseHold: (shipment_ids: string[], release_remark: string | null, task_types: string[]) =>
+    api.post('/shipments/bulk-release-hold', { shipment_ids, release_remark, task_types }),
+
+  bulkDelete: (shipment_ids: string[]) =>
+    api.post('/shipments/bulk-delete', { shipment_ids }),
 
   setAmlsJob: (id: string, amls_job_number: string | null) =>
     api.patch(`/shipments/${id}/amls-job`, { amls_job_number }),

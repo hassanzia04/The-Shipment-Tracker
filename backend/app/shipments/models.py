@@ -95,6 +95,14 @@ class Shipment(Base):
             return best.completed_by_name
         return best.assigned_to_name
 
+    def _best_task_assigned_to_id(self, task_type: "TaskType"):
+        priority = {TaskStatus.ON_HOLD: 3, TaskStatus.IN_PROGRESS: 2, TaskStatus.COMPLETED: 1}
+        tasks = [t for t in (self.tasks or []) if t.task_type == task_type]
+        if not tasks:
+            return None
+        best = max(tasks, key=lambda t: priority.get(t.status, 0))
+        return best.assigned_to_id
+
     @property
     def permit_status(self) -> str | None:
         return self._best_task_status(TaskType.PERMIT)
@@ -102,6 +110,10 @@ class Shipment(Base):
     @property
     def permit_user(self) -> str | None:
         return self._best_task_user(TaskType.PERMIT)
+
+    @property
+    def permit_assigned_to_id(self):
+        return self._best_task_assigned_to_id(TaskType.PERMIT)
 
     @property
     def do_status(self) -> str | None:
@@ -112,12 +124,24 @@ class Shipment(Base):
         return self._best_task_user(TaskType.DO)
 
     @property
+    def do_assigned_to_id(self):
+        return self._best_task_assigned_to_id(TaskType.DO)
+
+    @property
     def bayan_status(self) -> str | None:
         return self._best_task_status(TaskType.BAYAN)
 
     @property
+    def ccro_status(self) -> str | None:
+        return self._best_task_status(TaskType.CCRO)
+
+    @property
     def bayan_user(self) -> str | None:
         return self._best_task_user(TaskType.BAYAN)
+
+    @property
+    def bayan_assigned_to_id(self):
+        return self._best_task_assigned_to_id(TaskType.BAYAN)
 
     @property
     def bayan_payment_pending(self) -> bool:

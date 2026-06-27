@@ -146,6 +146,14 @@ export function BulkPermitUploadModal({ onClose, onDone }: Props) {
     })
   }
 
+  function unmatchRow(idx: number) {
+    setRows(prev => {
+      const updated = [...prev]
+      updated[idx] = { ...updated[idx], shipmentId: null, blNumber: null, permitRef: null, hasExistingDoc: false }
+      return updated
+    })
+  }
+
   function setCompleteTask(idx: number, value: boolean) {
     setRows(prev => {
       const updated = [...prev]
@@ -153,6 +161,8 @@ export function BulkPermitUploadModal({ onClose, onDone }: Props) {
       return updated
     })
   }
+
+  const matchedIds = new Set(rows.map(r => r.shipmentId).filter((id): id is string => id !== null))
 
   const readyCount = rows.filter(r => r.shipmentId && r.uploadStatus === 'idle' && !r.hasExistingDoc).length
   const pendingManual = rows.filter(r => !r.shipmentId && !r.analyzing && r.uploadStatus === 'idle').length
@@ -193,8 +203,10 @@ export function BulkPermitUploadModal({ onClose, onDone }: Props) {
                 <PermitFileRow
                   key={`${row.file.name}-${idx}`}
                   row={row}
+                  matchedIds={matchedIds}
                   onRemove={() => removeRow(idx)}
                   onMatch={(sid, bl, permit) => setManualMatch(idx, sid, bl, permit)}
+                  onUnmatch={() => unmatchRow(idx)}
                   onCompleteChange={v => setCompleteTask(idx, v)}
                 />
               ))}
@@ -236,13 +248,17 @@ export function BulkPermitUploadModal({ onClose, onDone }: Props) {
 
 function PermitFileRow({
   row,
+  matchedIds,
   onRemove,
   onMatch,
+  onUnmatch,
   onCompleteChange,
 }: {
   row: RowState
+  matchedIds: Set<string>
   onRemove: () => void
   onMatch: (shipmentId: string, blNumber: string, permitRef: string | null) => void
+  onUnmatch: () => void
   onCompleteChange: (v: boolean) => void
 }) {
   const [searching, setSearching] = useState(false)
@@ -253,7 +269,7 @@ function PermitFileRow({
   async function fetchInitial() {
     try {
       const { data } = await shipmentsApi.list({ limit: 10, my_queue: true, task_type_filter: 'PERMIT' })
-      setResults(data.items)
+      setResults(data.items.filter(s => s.id === row.shipmentId || !matchedIds.has(s.id)))
     } catch {
       setResults([])
     }
@@ -271,7 +287,7 @@ function PermitFileRow({
     searchTimeout.current = setTimeout(async () => {
       try {
         const { data } = await shipmentsApi.list({ search: q, limit: 8, my_queue: true, task_type_filter: 'PERMIT' })
-        setResults(data.items)
+        setResults(data.items.filter(s => s.id === row.shipmentId || !matchedIds.has(s.id)))
       } catch {
         setResults([])
       }
@@ -311,7 +327,11 @@ function PermitFileRow({
           <Eye size={14} />
         </button>
         {!isDone && row.uploadStatus === 'idle' && (
-          <button onClick={onRemove} className="p-0.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400">
+          <button
+            onClick={row.shipmentId ? onUnmatch : onRemove}
+            title={row.shipmentId ? 'Remove match' : 'Remove file'}
+            className="p-0.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400"
+          >
             <X size={14} />
           </button>
         )}

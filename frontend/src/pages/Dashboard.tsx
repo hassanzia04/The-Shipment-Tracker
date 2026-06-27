@@ -1,11 +1,11 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { api } from '@/lib/api'
-import { formatDate, formatDateTime } from '@/lib/dates'
+import { formatDate, formatDateTime, timeAgo } from '@/lib/dates'
 import { STAGE_LABELS, ENTITY_LABELS, HOLD_REASON_LABELS, TASK_TYPE_LABELS } from '@/types'
 import type { ShipmentStage, ExternalEntity, HoldReason, TaskType } from '@/types'
-import { AlertTriangle, CheckCircle, Clock, Package, TrendingUp, ArrowRight, Minus, ChevronDown, Layers, Sparkles, Loader } from 'lucide-react'
+import { AlertTriangle, CheckCircle, Clock, Package, TrendingUp, ArrowRight, Minus, ChevronDown, Layers, Sparkles, Loader, Activity } from 'lucide-react'
 import { useSortable } from '@/lib/sort'
 import { SortableHeader } from '@/components/SortableHeader'
 import { useAuth } from '@/hooks/useAuth'
@@ -49,6 +49,96 @@ const CONTAINER_STATUS_CONFIG = [
   { key: 'OFFLOADED',       label: 'Offloaded',           color: 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400' },
   { key: 'RETURNED',        label: 'Returned',            color: 'bg-teal-100 dark:bg-teal-900/30 text-teal-700 dark:text-teal-400' },
 ] as const
+
+interface ActivityEvent {
+  id: string
+  event_type: string
+  shipment_id: string
+  bl_number: string
+  actor_name: string
+  created_at: string
+  remark: string | null
+  stage_from: string | null
+  stage_to: string | null
+  hold_entity: string | null
+}
+
+const ACTIVITY_DOT: Record<string, string> = {
+  SHIPMENT_CREATED:             'bg-blue-500',
+  DOCUMENTS_SUBMITTED:          'bg-purple-400',
+  DOCUMENTS_APPROVED:           'bg-green-500',
+  DOCUMENTS_REJECTED:           'bg-red-500',
+  SENT_BACK_TO_CUSTOMER:        'bg-orange-500',
+  TASK_CREATED:                 'bg-blue-400',
+  TASK_ASSIGNED:                'bg-blue-400',
+  TASK_COMPLETED:               'bg-green-500',
+  TASK_HOLD_ASSIGNED:           'bg-red-500',
+  TASK_HOLD_RELEASED:           'bg-emerald-500',
+  STAGE_CHANGED:                'bg-indigo-500',
+  CONTAINER_ADDED:              'bg-blue-300',
+  TRUCK_ASSIGNED:               'bg-orange-400',
+  OUTSOURCED_TRUCK_ASSIGNED:    'bg-violet-500',
+  TRUCK_UNASSIGNED:             'bg-gray-400',
+  BREAKDOWN_REPORTED:           'bg-red-600',
+  CONTAINER_ARRIVED:            'bg-orange-400',
+  CONTAINER_OFFLOADED:          'bg-orange-500',
+  CONTAINER_RETURNED:           'bg-teal-500',
+  CONTAINER_RETURNED_TO_FFD:    'bg-orange-500',
+  CONTAINER_RESET_TO_TRANSPORT: 'bg-orange-400',
+  CONTAINER_CLOSED:             'bg-gray-500',
+  DO_REVALIDATION_REQUESTED:    'bg-rose-500',
+  DO_REVALIDATED:               'bg-emerald-500',
+  OFFLOADING_UNDONE:            'bg-amber-500',
+  RECALLED_FROM_TRANSPORT:      'bg-orange-600',
+  PULL_OUT_DATE_CHANGED:        'bg-gray-400',
+  DO_VALIDITY_UPDATED:          'bg-gray-400',
+  PERMIT_REF_UPDATED:           'bg-gray-400',
+  SHIPMENT_DETAILS_CHANGED:     'bg-gray-400',
+  BAYAN_PAYMENT_EMAIL_SENT:     'bg-purple-400',
+  SENT_BACK_TO_FFD:             'bg-amber-500',
+}
+
+function activityLabel(e: ActivityEvent): string {
+  const entity = e.hold_entity ? ` (${ENTITY_LABELS[e.hold_entity as ExternalEntity] || e.hold_entity})` : ''
+  const stageDesc = e.stage_from && e.stage_to
+    ? `${STAGE_LABELS[e.stage_from as ShipmentStage]} → ${STAGE_LABELS[e.stage_to as ShipmentStage]}`
+    : null
+  const MAP: Record<string, string> = {
+    SHIPMENT_CREATED:             'created shipment',
+    DOCUMENTS_SUBMITTED:          'submitted documents',
+    DOCUMENTS_REJECTED:           'rejected documents',
+    DOCUMENTS_APPROVED:           'approved documents',
+    SENT_BACK_TO_CUSTOMER:        'sent back to customer',
+    TASK_CREATED:                 'opened a task',
+    TASK_ASSIGNED:                'assigned a task',
+    TASK_COMPLETED:               'completed a task',
+    TASK_HOLD_ASSIGNED:           `placed task on hold${entity}`,
+    TASK_HOLD_RELEASED:           'released a hold',
+    STAGE_CHANGED:                stageDesc ? `stage: ${stageDesc}` : 'stage changed',
+    CONTAINER_ADDED:              'added a container',
+    TRUCK_ASSIGNED:               'assigned truck',
+    OUTSOURCED_TRUCK_ASSIGNED:    'assigned outsourced truck',
+    TRUCK_UNASSIGNED:             'unassigned truck',
+    BREAKDOWN_REPORTED:           'reported breakdown',
+    CONTAINER_ARRIVED:            'container arrived at DC',
+    CONTAINER_OFFLOADED:          'container offloaded',
+    CONTAINER_RETURNED:           'container returned',
+    CONTAINER_RETURNED_TO_FFD:    'container returned to FFD',
+    CONTAINER_RESET_TO_TRANSPORT: 'container reset to transport',
+    CONTAINER_CLOSED:             'closed container',
+    DO_REVALIDATION_REQUESTED:    'requested DO revalidation',
+    DO_REVALIDATED:               'DO revalidated',
+    OFFLOADING_UNDONE:            'undid container offloading',
+    RECALLED_FROM_TRANSPORT:      'recalled from transport',
+    PULL_OUT_DATE_CHANGED:        'updated pull-out date',
+    DO_VALIDITY_UPDATED:          'updated DO validity',
+    PERMIT_REF_UPDATED:           'updated permit reference',
+    SHIPMENT_DETAILS_CHANGED:     'updated shipment details',
+    BAYAN_PAYMENT_EMAIL_SENT:     'sent Bayan payment email',
+    SENT_BACK_TO_FFD:             'sent back to FFD',
+  }
+  return MAP[e.event_type] ?? e.event_type.toLowerCase().replace(/_/g, ' ')
+}
 
 type DocStatus = 'IN_PROGRESS' | 'ON_HOLD' | 'COMPLETED' | null | undefined
 
@@ -116,16 +206,25 @@ function formatHoldDuration(heldAt: string | null | undefined): { label: string;
   return { label, color }
 }
 
+const _UI_KEY     = 'dashboard:ui'
+const _SCROLL_KEY = 'dashboard:scroll'
+
+function readSavedUI() {
+  try { return JSON.parse(sessionStorage.getItem(_UI_KEY) ?? '{}') } catch { return {} }
+}
+
 export function Dashboard() {
-  const [docStatusOpen, setDocStatusOpen] = useState(false)
-  const [holdsOpen, setHoldsOpen] = useState(true)
-  const [volumeOpen, setVolumeOpen] = useState(true)
-  const [allShipmentsOpen, setAllShipmentsOpen] = useState(false)
+  const [docStatusOpen, setDocStatusOpen] = useState<boolean>(() => readSavedUI().docStatusOpen ?? false)
+  const [holdsOpen, setHoldsOpen] = useState<boolean>(() => readSavedUI().holdsOpen ?? true)
+  const [volumeOpen, setVolumeOpen] = useState<boolean>(() => readSavedUI().volumeOpen ?? true)
+  const [allShipmentsOpen, setAllShipmentsOpen] = useState<boolean>(() => readSavedUI().allShipmentsOpen ?? false)
+  const [activityOpen, setActivityOpen] = useState<boolean>(() => readSavedUI().activityOpen ?? false)
   const [aiSummary, setAiSummary] = useState<string | null>(null)
   const [aiLoading, setAiLoading] = useState(false)
 
   const { user } = useAuth()
   const canUseAi = user?.team === 'MANAGEMENT' || user?.team === 'CUSTOMER' || user?.team === 'CUSTOMER_MANAGEMENT' || user?.is_admin
+  const isManagement = user?.team === 'MANAGEMENT' || user?.team === 'CUSTOMER_MANAGEMENT' || user?.team === 'FFD' || user?.is_admin
 
   async function fetchAiSummary() {
     if (aiLoading) return
@@ -146,6 +245,45 @@ export function Dashboard() {
     queryFn: () => api.get('/analytics/dashboard').then(r => r.data),
     refetchInterval: 5 * 60_000,
   })
+
+  const { data: activityFeed } = useQuery<ActivityEvent[]>({
+    queryKey: ['activity-feed'],
+    queryFn: () => api.get('/analytics/activity-feed?limit=10').then(r => r.data),
+    refetchInterval: 90_000,
+    enabled: !!isManagement,
+  })
+
+  // Persist collapsible state so back-navigation restores the same open/closed sections
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(_UI_KEY, JSON.stringify({ docStatusOpen, holdsOpen, volumeOpen, allShipmentsOpen, activityOpen }))
+    } catch {}
+  }, [docStatusOpen, holdsOpen, volumeOpen, allShipmentsOpen, activityOpen])
+
+  // Take over scroll restoration — browser's 'auto' fights with React re-renders
+  useEffect(() => {
+    if ('scrollRestoration' in history) history.scrollRestoration = 'manual'
+    return () => { if ('scrollRestoration' in history) history.scrollRestoration = 'auto' }
+  }, [])
+
+  // Save scroll position on every scroll event
+  useEffect(() => {
+    const save = () => { try { sessionStorage.setItem(_SCROLL_KEY, String(window.scrollY)) } catch {} }
+    window.addEventListener('scroll', save, { passive: true })
+    return () => window.removeEventListener('scroll', save)
+  }, [])
+
+  // Restore scroll after data is ready — setTimeout(0) lets React finish committing the DOM first
+  useEffect(() => {
+    if (!isLoading && data) {
+      const saved = sessionStorage.getItem(_SCROLL_KEY)
+      const y = saved ? parseInt(saved, 10) : 0
+      if (y > 0) {
+        const id = setTimeout(() => window.scrollTo(0, y), 0)
+        return () => clearTimeout(id)
+      }
+    }
+  }, [isLoading, data])
 
   const { sorted: sortedShipments, sort: shipSort, toggle: shipToggle } = useSortable(
     (data as any)?.shipments ?? [],
@@ -290,6 +428,66 @@ export function Dashboard() {
               {aiLoading ? <><Loader size={12} className="animate-spin" /> Generating…</> : aiSummary ? 'Refresh' : 'Generate'}
             </button>
           </div>
+        </div>
+      )}
+
+      {/* ── Activity Feed (management only) ── */}
+      {isManagement && (
+        <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-xl overflow-hidden">
+          <button
+            onClick={() => setActivityOpen(o => !o)}
+            className="w-full px-5 py-4 flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors text-left"
+          >
+            <div className="flex items-center gap-3">
+              <Activity size={16} className="text-gray-500 dark:text-gray-400 shrink-0" />
+              <div>
+                <h2 className="font-semibold text-gray-800 dark:text-gray-100">Live Activity</h2>
+                <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
+                  {activityFeed && activityFeed.length > 0
+                    ? activityOpen
+                      ? `${activityFeed.length} recent events — newest first`
+                      : `Last: ${timeAgo(activityFeed[0].created_at)}`
+                    : 'No activity recorded yet'}
+                </p>
+              </div>
+            </div>
+            <ChevronDown
+              size={18}
+              className={clsx('text-gray-400 transition-transform duration-200 shrink-0', activityOpen && 'rotate-180')}
+            />
+          </button>
+
+          {activityOpen && (
+            <div className="border-t dark:border-gray-700 max-h-[400px] overflow-y-auto divide-y dark:divide-gray-700">
+              {!activityFeed || activityFeed.length === 0 ? (
+                <p className="text-sm text-gray-400 py-8 text-center">No activity recorded yet</p>
+              ) : (
+                activityFeed.map((event) => (
+                  <Link
+                    key={event.id}
+                    to={`/shipments/${event.shipment_id}`}
+                    className="flex items-center gap-3 px-5 py-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
+                  >
+                    <span className={clsx('w-2 h-2 rounded-full shrink-0', ACTIVITY_DOT[event.event_type] ?? 'bg-gray-400')} />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm text-gray-800 dark:text-gray-100 truncate">
+                        <span className="font-medium">{event.actor_name}</span>
+                        <span className="text-gray-400 dark:text-gray-500"> · </span>
+                        {activityLabel(event)}
+                      </p>
+                      <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5 truncate">
+                        BL: {event.bl_number}
+                        {event.remark && <span className="italic ml-1.5">"{event.remark}"</span>}
+                      </p>
+                    </div>
+                    <span className="text-xs text-gray-400 dark:text-gray-500 shrink-0 tabular-nums whitespace-nowrap">
+                      {timeAgo(event.created_at)}
+                    </span>
+                  </Link>
+                ))
+              )}
+            </div>
+          )}
         </div>
       )}
 

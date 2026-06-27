@@ -109,6 +109,51 @@ async def bulk_confirm_ccro(
     return await service.bulk_confirm_ccro_and_notify(db, body.shipment_ids, actor)
 
 
+@router.post("/bulk-open-bayan", status_code=204)
+async def bulk_open_bayan(
+    body: schemas.BulkOpenBayanRequest,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+):
+    await service.bulk_open_bayan(db, actor, body.shipment_ids)
+
+
+@router.post("/bulk-assign-task", status_code=204)
+async def bulk_assign_task(
+    body: schemas.BulkAssignTaskRequest,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+):
+    await service.bulk_assign_task(db, actor, body.shipment_ids, body.task_type, body.assignee_id)
+
+
+@router.post("/bulk-assign-hold", status_code=204)
+async def bulk_assign_hold(
+    body: schemas.BulkAssignHoldRequest,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+):
+    await service.bulk_assign_hold(db, actor, body.shipment_ids, body.hold_entity, body.hold_reason, body.hold_remark, body.task_types)
+
+
+@router.post("/bulk-release-hold", status_code=204)
+async def bulk_release_hold(
+    body: schemas.BulkReleaseHoldRequest,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+):
+    await service.bulk_release_hold(db, actor, body.shipment_ids, body.release_remark, body.task_types)
+
+
+@router.post("/bulk-delete", status_code=204)
+async def bulk_delete_shipments(
+    body: schemas.BulkDeleteRequest,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+):
+    await service.bulk_delete_shipments(db, actor, body.shipment_ids)
+
+
 # Must be defined BEFORE /{shipment_id} so FastAPI doesn't try to parse the path segment as a UUID
 @router.get("/container-view", response_model=schemas.PaginatedContainerView)
 async def container_view(
@@ -387,7 +432,12 @@ async def mark_arrived(shipment_id: uuid.UUID, container_id: uuid.UUID, body: sc
 
 @router.post("/{shipment_id}/mark-offloaded", response_model=schemas.ShipmentOut)
 async def mark_offloaded(shipment_id: uuid.UUID, body: schemas.MarkOffloadedRequest, db: AsyncSession = Depends(get_db), actor: User = Depends(get_current_user)):
-    return await service.mark_offloaded(db, shipment_id, actor, body.container_id)
+    return await service.mark_offloaded(db, shipment_id, actor, body.container_id, body.offloaded_at)
+
+
+@router.post("/{shipment_id}/undo-offloaded", response_model=schemas.ShipmentOut)
+async def undo_offloaded(shipment_id: uuid.UUID, body: schemas.UndoOffloadedRequest, db: AsyncSession = Depends(get_db), actor: User = Depends(get_current_user)):
+    return await service.undo_offloaded(db, shipment_id, actor, body.container_id, body.remark)
 
 
 @router.get("/{shipment_id}/container-billing-export")

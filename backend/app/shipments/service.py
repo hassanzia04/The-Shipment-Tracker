@@ -243,6 +243,17 @@ async def delete_shipment(db: AsyncSession, shipment_id: uuid.UUID, actor: User)
     await db.commit()
 
 
+async def bulk_delete_shipments(
+    db: AsyncSession,
+    actor: User,
+    shipment_ids: list[uuid.UUID],
+) -> None:
+    if not actor.is_admin:
+        raise HTTPException(status_code=403, detail="Only admins can bulk delete shipments")
+    for shipment_id in shipment_ids:
+        await delete_shipment(db, shipment_id, actor)
+
+
 _DETAIL_FIELD_LABELS: dict[str, str] = {
     'bl_number': 'BL Number',
     'invoice_number': 'Invoice Number',
@@ -460,6 +471,231 @@ async def bulk_request_bayan_payment(
     await notify_bulk_bayan_payment_requested(db, shipments, attachment_specs)
 
 
+async def bulk_open_bayan(
+    db: AsyncSession,
+    actor: User,
+    shipment_ids: list[uuid.UUID],
+) -> None:
+    from app.notifications.service import notify_bulk_bayan_opened
+    _assert_team(actor, Team.FFD)
+
+    result = await db.execute(
+        select(Shipment)
+        .options(selectinload(Shipment.tasks))
+        .where(Shipment.id.in_(shipment_ids))
+    )
+    shipments_by_id = {s.id: s for s in result.scalars().all()}
+
+    opened = []
+    for shipment_id in shipment_ids:
+        shipment = shipments_by_id.get(shipment_id)
+        if not shipment:
+            continue
+        if shipment.current_stage != ShipmentStage.IN_PROGRESS:
+            continue
+        if any(t.task_type == TaskType.BAYAN and t.status != TaskStatus.COMPLETED for t in shipment.tasks):
+            continue
+
+        bayan_task = ShipmentTask(
+            shipment_id=shipment.id,
+            task_type=TaskType.BAYAN,
+            assigned_team=Team.PRO.value,
+            created_by_id=actor.id,
+        )
+        db.add(bayan_task)
+        await db.flush()
+        await _record_event(db, shipment, EventType.TASK_CREATED, actor, task_id=bayan_task.id, remark="BAYAN task opened (bulk)")
+        opened.append(shipment)
+
+    await db.commit()
+    if opened:
+        await notify_bulk_bayan_opened(db, opened, actor.full_name)
+
+
+async def bulk_assign_task(
+    db: AsyncSession,
+    actor: User,
+    shipment_ids: list[uuid.UUID],
+    task_type: TaskType,
+    assignee_id: uuid.UUID,
+) -> None:
+    from app.auth.models import User as UserModel
+    from app.notifications.service import notify_bulk_task_assigned
+    _assert_team(actor, Team.FFD)
+
+    if task_type not in (TaskType.BAYAN, TaskType.PERMIT):
+        raise HTTPException(status_code=400, detail="Bulk assignment only supports BAYAN or PERMIT tasks")
+
+    assignee_result = await db.execute(
+        select(UserModel).where(UserModel.id == assignee_id, UserModel.is_active == True)
+    )
+    assignee = assignee_result.scalar_one_or_none()
+    if not assignee or assignee.team != Team.PRO:
+        raise HTTPException(status_code=400, detail="Assignee must be an active PRO team member")
+
+    result = await db.execute(
+        select(Shipment)
+        .options(selectinload(Shipment.tasks).selectinload(ShipmentTask.assigned_to))
+        .where(Shipment.id.in_(shipment_ids))
+    )
+    shipments_by_id = {s.id: s for s in result.scalars().all()}
+
+    assigned = []
+    for shipment_id in shipment_ids:
+        shipment = shipments_by_id.get(shipment_id)
+        if not shipment:
+            continue
+        task = next(
+            (t for t in shipment.tasks
+             if t.task_type == task_type
+             and t.assigned_team == Team.PRO.value),
+            None,
+        )
+        if not task:
+            continue
+        if task.status == TaskStatus.COMPLETED:
+            raise HTTPException(
+                status_code=400,
+                detail=f"BL {shipment.bl_number} has a completed {task_type.value} task — cannot reassign a completed task",
+            )
+        if task.assigned_to_id and task.assigned_to_id != assignee_id:
+            old_name = task.assigned_to.full_name if task.assigned_to else "unknown"
+            event_remark = f"Reassigned from {old_name} to {assignee.full_name} (bulk)"
+        else:
+            event_remark = f"Assigned to {assignee.full_name} (bulk)"
+        task.assigned_to_id = assignee_id
+        await _record_event(
+            db, shipment, EventType.TASK_ASSIGNED, actor,
+            task_id=task.id, remark=event_remark,
+        )
+        assigned.append(shipment)
+
+    await db.commit()
+    if assigned:
+        await notify_bulk_task_assigned(db, assigned, assignee, task_type.value, actor.full_name)
+
+
+async def bulk_assign_hold(
+    db: AsyncSession,
+    actor: User,
+    shipment_ids: list[uuid.UUID],
+    hold_entity: ExternalEntity,
+    hold_reason: HoldReason,
+    hold_remark: str | None,
+    task_types: list[TaskType] | None = None,
+) -> None:
+    from app.notifications.service import notify_bulk_hold_assigned
+
+    allowed = TEAM_HOLD_PERMISSIONS.get(actor.team, [])
+    if hold_entity not in allowed:
+        raise HTTPException(status_code=403, detail=f"{actor.team} cannot assign hold to {hold_entity}")
+    if hold_reason not in HOLD_REASON_MAP.get(hold_entity, []):
+        raise HTTPException(status_code=400, detail="Hold reason does not match entity")
+
+    if actor.team == Team.FFD:
+        team_eligible = {TaskType.PERMIT, TaskType.BAYAN, TaskType.DO, TaskType.CCRO}
+    elif actor.team == Team.PRO:
+        team_eligible = {TaskType.PERMIT, TaskType.BAYAN}
+    else:
+        raise HTTPException(status_code=403, detail="Only FFD or PRO can assign holds")
+
+    # Intersect with caller-supplied filter; fall back to all team-eligible types
+    eligible_types = (team_eligible & set(task_types)) if task_types else team_eligible
+
+    result = await db.execute(
+        select(Shipment)
+        .options(selectinload(Shipment.tasks))
+        .where(Shipment.id.in_(shipment_ids))
+    )
+    shipments_by_id = {s.id: s for s in result.scalars().all()}
+
+    affected = []
+    for shipment_id in shipment_ids:
+        shipment = shipments_by_id.get(shipment_id)
+        if not shipment:
+            continue
+        held_any = False
+        for task in shipment.tasks:
+            if task.task_type not in eligible_types:
+                continue
+            if task.status in (TaskStatus.COMPLETED, TaskStatus.ON_HOLD):
+                continue
+            if actor.team == Team.PRO and task.assigned_to_id != actor.id:
+                continue
+            task.status = TaskStatus.ON_HOLD
+            task.hold_entity = hold_entity
+            task.hold_reason = hold_reason
+            task.hold_remark = hold_remark
+            task.release_remark = None
+            await _record_event(
+                db, shipment, EventType.TASK_HOLD_ASSIGNED, actor, task_id=task.id,
+                remark=f"{hold_entity.value} — {hold_reason.value}" + (f": {hold_remark}" if hold_remark else ""),
+                hold_entity=hold_entity,
+                hold_reason=hold_reason,
+            )
+            held_any = True
+        if held_any:
+            affected.append(shipment)
+
+    await db.commit()
+    if affected:
+        await notify_bulk_hold_assigned(db, affected, actor.full_name, hold_entity, hold_reason)
+
+
+async def bulk_release_hold(
+    db: AsyncSession,
+    actor: User,
+    shipment_ids: list[uuid.UUID],
+    release_remark: str | None,
+    task_types: list[TaskType] | None = None,
+) -> None:
+    from app.notifications.service import notify_bulk_hold_released
+
+    if actor.team not in (Team.FFD, Team.PRO):
+        raise HTTPException(status_code=403, detail="Only FFD or PRO can release holds")
+
+    requested_types = set(task_types) if task_types else None
+
+    result = await db.execute(
+        select(Shipment)
+        .options(selectinload(Shipment.tasks))
+        .where(Shipment.id.in_(shipment_ids))
+    )
+    shipments_by_id = {s.id: s for s in result.scalars().all()}
+
+    affected = []
+    for shipment_id in shipment_ids:
+        shipment = shipments_by_id.get(shipment_id)
+        if not shipment:
+            continue
+        released_any = False
+        for task in shipment.tasks:
+            if task.status != TaskStatus.ON_HOLD:
+                continue
+            if actor.team == Team.PRO and task.assigned_team != Team.PRO.value:
+                continue
+            if actor.team == Team.PRO and task.assigned_to_id != actor.id:
+                continue
+            if requested_types and task.task_type not in requested_types:
+                continue
+            task.status = TaskStatus.IN_PROGRESS
+            task.release_remark = release_remark
+            task.hold_entity = None
+            task.hold_reason = None
+            task.hold_remark = None
+            await _record_event(
+                db, shipment, EventType.TASK_HOLD_RELEASED, actor,
+                task_id=task.id, remark=release_remark or None,
+            )
+            released_any = True
+        if released_any:
+            affected.append(shipment)
+
+    await db.commit()
+    if affected:
+        await notify_bulk_hold_released(db, affected, actor.full_name)
+
+
 async def set_permit_ref(
     db: AsyncSession,
     shipment_id: uuid.UUID,
@@ -468,6 +704,15 @@ async def set_permit_ref(
 ) -> Shipment:
     _assert_team(actor, Team.PRO)
     shipment = await _get_shipment(db, shipment_id)
+    permit_task = next(
+        (t for t in shipment.tasks
+         if t.task_type == TaskType.PERMIT
+         and t.assigned_to_id == actor.id
+         and t.status == TaskStatus.IN_PROGRESS),
+        None,
+    )
+    if not permit_task:
+        raise HTTPException(status_code=403, detail="You can only set the permit reference for permit tasks assigned to you")
     shipment.permit_ref = permit_ref or None
     remark = f"Permit ref set to {permit_ref}" if permit_ref else "Permit ref cleared"
     await _record_event(db, shipment, EventType.PERMIT_REF_UPDATED, actor, remark=remark)
@@ -612,13 +857,20 @@ async def list_shipments(
     if my_queue and not historical:
         if actor.team == Team.PRO:
             from sqlalchemy import exists
-            task_conditions = [
-                ShipmentTask.shipment_id == Shipment.id,
-                ShipmentTask.assigned_to_id == actor.id,
-                ShipmentTask.status.in_([TaskStatus.IN_PROGRESS, TaskStatus.ON_HOLD]),
-            ]
             if task_type_filter:
-                task_conditions.append(ShipmentTask.task_type == task_type_filter)
+                # Upload context: exclude ON_HOLD so held tasks don't appear in bulk upload modals
+                task_conditions = [
+                    ShipmentTask.shipment_id == Shipment.id,
+                    ShipmentTask.assigned_to_id == actor.id,
+                    ShipmentTask.status == TaskStatus.IN_PROGRESS,
+                    ShipmentTask.task_type == task_type_filter,
+                ]
+            else:
+                task_conditions = [
+                    ShipmentTask.shipment_id == Shipment.id,
+                    ShipmentTask.assigned_to_id == actor.id,
+                    ShipmentTask.status.in_([TaskStatus.IN_PROGRESS, TaskStatus.ON_HOLD]),
+                ]
             base_where.append(exists(select(ShipmentTask.id).where(*task_conditions)))
         elif actor.team == Team.FFD:
             from sqlalchemy import or_, exists as sa_exists
@@ -641,11 +893,12 @@ async def list_shipments(
             ))
             if task_type_filter:
                 from sqlalchemy import exists as sa_exists2
+                # Upload context: exclude ON_HOLD so held tasks don't appear in bulk upload modals
                 base_where.append(sa_exists2(
                     select(ShipmentTask.id).where(
                         ShipmentTask.shipment_id == Shipment.id,
                         ShipmentTask.task_type == task_type_filter,
-                        ShipmentTask.status.in_([TaskStatus.IN_PROGRESS, TaskStatus.ON_HOLD]),
+                        ShipmentTask.status == TaskStatus.IN_PROGRESS,
                     )
                 ))
         elif actor.team == Team.DC:
@@ -947,6 +1200,8 @@ async def assign_hold(
     task = result.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    if actor.team == Team.PRO and task.assigned_to_id != actor.id:
+        raise HTTPException(status_code=403, detail="You can only put a hold on tasks assigned to you")
 
     task.status = TaskStatus.ON_HOLD
     task.hold_entity = hold_entity
@@ -962,8 +1217,12 @@ async def assign_hold(
         hold_reason=hold_reason,
     )
     await db.commit()
-    await db.refresh(task)
-    return task
+    result = await db.execute(
+        select(ShipmentTask)
+        .options(selectinload(ShipmentTask.assigned_to))
+        .where(ShipmentTask.id == task_id)
+    )
+    return result.scalar_one()
 
 
 # ── Task: Release hold (Option B — explicit) ──────────────────────────────────
@@ -978,6 +1237,12 @@ async def release_hold(
         raise HTTPException(status_code=404, detail="Task not found")
     if task.status != TaskStatus.ON_HOLD:
         raise HTTPException(status_code=400, detail="Task is not on hold")
+    if actor.team not in (Team.FFD, Team.PRO):
+        raise HTTPException(status_code=403, detail="Only FFD or PRO can release holds")
+    if actor.team == Team.PRO and task.assigned_team != Team.PRO.value:
+        raise HTTPException(status_code=403, detail="PRO can only release holds on PRO tasks")
+    if actor.team == Team.PRO and task.assigned_to_id != actor.id:
+        raise HTTPException(status_code=403, detail="You can only release a hold on tasks assigned to you")
 
     task.status = TaskStatus.IN_PROGRESS
     task.release_remark = release_remark
@@ -988,8 +1253,12 @@ async def release_hold(
     shipment = await _get_shipment(db, shipment_id)
     await _record_event(db, shipment, EventType.TASK_HOLD_RELEASED, actor, task_id=task_id, remark=release_remark or None)
     await db.commit()
-    await db.refresh(task)
-    return task
+    result = await db.execute(
+        select(ShipmentTask)
+        .options(selectinload(ShipmentTask.assigned_to))
+        .where(ShipmentTask.id == task_id)
+    )
+    return result.scalar_one()
 
 
 # ── Task: Complete ────────────────────────────────────────────────────────────
@@ -1705,7 +1974,7 @@ async def send_back_to_ffd(db: AsyncSession, shipment_id: uuid.UUID, actor: User
 
 # ── DC: Mark container offloaded ──────────────────────────────────────────────
 
-async def mark_offloaded(db: AsyncSession, shipment_id: uuid.UUID, actor: User, container_id: uuid.UUID) -> Shipment:
+async def mark_offloaded(db: AsyncSession, shipment_id: uuid.UUID, actor: User, container_id: uuid.UUID, offloaded_at: datetime | None = None) -> Shipment:
     shipment = await _get_shipment(db, shipment_id)
 
     result = await db.execute(select(Container).where(Container.id == container_id, Container.shipment_id == shipment_id))
@@ -1715,6 +1984,22 @@ async def mark_offloaded(db: AsyncSession, shipment_id: uuid.UUID, actor: User, 
 
     is_outsourced = container.outsourced_truck_id is not None
     is_amls = shipment.offloading_point and shipment.offloading_point.is_amls
+    is_edit = container.status == ContainerStatus.OFFLOADED
+
+    if is_edit:
+        # Amendment — just verify team permission and update the timestamp
+        if is_amls:
+            _assert_team(actor, Team.DC)
+        elif is_outsourced:
+            _assert_team(actor, Team.FFD)
+        else:
+            if actor.team not in [Team.FFD, Team.TRANSPORT]:
+                raise HTTPException(status_code=403, detail="Only FFD or Transport can amend this offloading time")
+        container.offloaded_at = offloaded_at or datetime.now(timezone.utc)
+        db.add(ContainerEvent(container_id=container_id, event_type="OFFLOADED", actor_id=actor.id))
+        await _record_event(db, shipment, EventType.CONTAINER_OFFLOADED, actor, remark=f"Container {container.container_number} offloading time updated")
+        await db.commit()
+        return await _get_shipment(db, shipment_id)
 
     if is_amls:
         # AMLS offloading location — DC only, DN required (regardless of truck type)
@@ -1737,7 +2022,7 @@ async def mark_offloaded(db: AsyncSession, shipment_id: uuid.UUID, actor: User, 
             raise HTTPException(status_code=400, detail="Container must be assigned to a truck before it can be offloaded")
 
     container.status = ContainerStatus.OFFLOADED
-    container.offloaded_at = datetime.now(timezone.utc)
+    container.offloaded_at = offloaded_at or datetime.now(timezone.utc)
     db.add(ContainerEvent(container_id=container_id, event_type="OFFLOADED", actor_id=actor.id))
     await _record_event(db, shipment, EventType.CONTAINER_OFFLOADED, actor, remark=f"Container {container.container_number}")
     await db.commit()
@@ -1745,6 +2030,46 @@ async def mark_offloaded(db: AsyncSession, shipment_id: uuid.UUID, actor: User, 
     from app.notifications.service import notify_team
     if not is_outsourced:
         await notify_team(db, shipment, Team.TRANSPORT, "container_offloaded", in_app_only=True)
+    return await _get_shipment(db, shipment_id)
+
+
+# ── DC/FFD/Transport: Undo offloading ────────────────────────────────────────
+
+async def undo_offloaded(db: AsyncSession, shipment_id: uuid.UUID, actor: User, container_id: uuid.UUID, remark: str) -> Shipment:
+    shipment = await _get_shipment(db, shipment_id)
+
+    result = await db.execute(select(Container).where(Container.id == container_id, Container.shipment_id == shipment_id))
+    container = result.scalar_one_or_none()
+    if not container:
+        raise HTTPException(status_code=404, detail="Container not found")
+
+    if container.status != ContainerStatus.OFFLOADED:
+        raise HTTPException(status_code=400, detail="Container is not in OFFLOADED status — cannot undo")
+
+    is_outsourced = container.outsourced_truck_id is not None
+    is_amls = shipment.offloading_point and shipment.offloading_point.is_amls
+
+    if is_amls:
+        _assert_team(actor, Team.DC)
+        previous_status = ContainerStatus.AT_DC
+    elif is_outsourced:
+        _assert_team(actor, Team.FFD)
+        previous_status = ContainerStatus.OUTSOURCED_TRANSPORT
+    else:
+        if actor.team not in [Team.FFD, Team.TRANSPORT]:
+            raise HTTPException(status_code=403, detail="Only FFD or Transport can undo offloading for this container")
+        if container.arrived_at:
+            previous_status = ContainerStatus.AT_DC
+        elif container.truck_id:
+            previous_status = ContainerStatus.IN_TRANSIT
+        else:
+            previous_status = ContainerStatus.ASSIGNED
+
+    container.status = previous_status
+    container.offloaded_at = None
+    db.add(ContainerEvent(container_id=container_id, event_type="OFFLOADING_UNDONE", actor_id=actor.id))
+    await _record_event(db, shipment, EventType.OFFLOADING_UNDONE, actor, remark=f"Container {container.container_number} — {remark}")
+    await db.commit()
     return await _get_shipment(db, shipment_id)
 
 
@@ -2460,8 +2785,8 @@ async def export_shipments_list(
     ws.title = "Shipments"
     headers = [
         "SR#", "BL Number", "Invoice Number", "Stage", "Shipping Line", "Port of Loading",
-        "Bayan Type", "Planned Pull out", "Actual Pull out",
-        "Offloading Point", "AMLS Job#", "Permit", "DO", "Bayan", "Created At",
+        "Offloading Location", "Bayan Type", "Planned Pull out", "Actual Pull out",
+        "AMLS Job#", "Permit", "DO", "Bayan", "Created At",
     ]
     if historical:
         headers.append("Offloading Date")
@@ -2481,10 +2806,10 @@ async def export_shipments_list(
             s.current_stage.value,
             s.shipping_line.name if s.shipping_line else "",
             s.loading_port.name if s.loading_port else "",
+            s.offloading_point.name if s.offloading_point else "",
             s.bayan_type.name if s.bayan_type else "",
             _fmt(s.pull_out_date),
             _fmt(actual_pull_out),
-            s.offloading_point.name if s.offloading_point else "",
             s.amls_job_number or "",
             _task_status(s, "PERMIT"),
             _task_status(s, "DO"),

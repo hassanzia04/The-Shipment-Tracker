@@ -60,6 +60,34 @@ class BulkConfirmCcroRequest(BaseModel):
     shipment_ids: list[UUID]
 
 
+class BulkOpenBayanRequest(BaseModel):
+    shipment_ids: list[UUID]
+
+
+class BulkAssignTaskRequest(BaseModel):
+    shipment_ids: list[UUID]
+    task_type: TaskType
+    assignee_id: UUID
+
+
+class BulkAssignHoldRequest(BaseModel):
+    shipment_ids: list[UUID]
+    hold_entity: ExternalEntity
+    hold_reason: HoldReason
+    hold_remark: Optional[str] = None
+    task_types: Optional[list[TaskType]] = None
+
+
+class BulkReleaseHoldRequest(BaseModel):
+    shipment_ids: list[UUID]
+    release_remark: Optional[str] = None
+    task_types: Optional[list[TaskType]] = None
+
+
+class BulkDeleteRequest(BaseModel):
+    shipment_ids: list[UUID]
+
+
 class ConfirmSalalahTransportRequest(BaseModel):
     container_numbers: list[str]
 
@@ -189,10 +217,14 @@ class ShipmentListOut(BaseModel):
     docs_approved: bool = False
     permit_status: Optional[str] = None
     permit_user: Optional[str] = None
+    permit_assigned_to_id: Optional[UUID] = None
     do_status: Optional[str] = None
     do_user: Optional[str] = None
+    do_assigned_to_id: Optional[UUID] = None
     bayan_status: Optional[str] = None
     bayan_user: Optional[str] = None
+    bayan_assigned_to_id: Optional[UUID] = None
+    ccro_status: Optional[str] = None
     bayan_payment_pending: bool = False
     bayan_payment_task_id: Optional[UUID] = None
     do_revalidation_count: int = 0
@@ -272,6 +304,12 @@ class BreakdownRequest(BaseModel):
 
 class MarkOffloadedRequest(BaseModel):
     container_id: UUID
+    offloaded_at: Optional[datetime] = None
+
+
+class UndoOffloadedRequest(BaseModel):
+    container_id: UUID
+    remark: str
 
 
 class MarkReturnedRequest(BaseModel):

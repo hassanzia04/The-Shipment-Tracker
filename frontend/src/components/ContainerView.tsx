@@ -81,7 +81,7 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
   historical?: boolean
 }) {
   const qc = useQueryClient()
-  const [expanded, setExpanded] = useState<'assign' | 'issue' | 'arrived' | 'return' | 'revalidation' | 'assign_outsourced' | 'unassign' | null>(null)
+  const [expanded, setExpanded] = useState<'assign' | 'issue' | 'arrived' | 'offloaded' | 'undo_offload' | 'return' | 'revalidation' | 'assign_outsourced' | 'unassign' | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
   // Assign truck form state
@@ -99,6 +99,13 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
   // Arrival time form state
   const [arrivedDate, setArrivedDate] = useState('')
   const [arrivedTime, setArrivedTime] = useState('')
+
+  // Offloading time form state
+  const [offloadedDate, setOffloadedDate] = useState('')
+  const [offloadedTime, setOffloadedTime] = useState('')
+
+  // Undo offloading form state
+  const [undoOffloadRemark, setUndoOffloadRemark] = useState('')
 
   // Return-to-FFD form state
   const [returnRemark, setReturnRemark] = useState('')
@@ -135,6 +142,18 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
     return (team === 'FFD' || team === 'TRANSPORT') && ['ASSIGNED', 'IN_TRANSIT', 'AT_DC', 'BREAKDOWN'].includes(c.status)
   })()
 
+  const canEditOffloaded = !historical && !!c.offloaded_at && (() => {
+    if (isAmls) return team === 'DC'
+    if (isOutsourced) return team === 'FFD'
+    return team === 'FFD' || team === 'TRANSPORT'
+  })()
+
+  const canUndoOffloaded = c.status === 'OFFLOADED' && (() => {
+    if (isAmls) return team === 'DC'
+    if (isOutsourced) return team === 'FFD'
+    return team === 'FFD' || team === 'TRANSPORT'
+  })()
+
   const canMarkReturned           = !historical && c.status === 'OFFLOADED' && (isOutsourced ? team === 'FFD' : team === 'TRANSPORT')
   const canRequestDoRevalidation  = !historical && team === 'TRANSPORT' && c.status === 'OFFLOADED' && !isOutsourced
   const canMarkDoRevalidated      = !historical && team === 'FFD' && c.status === 'DO_REVALIDATION'
@@ -146,6 +165,14 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
     setArrivedDate(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`)
     setArrivedTime(`${pad(d.getHours())}:${pad(d.getMinutes())}`)
     setExpanded('arrived')
+  }
+
+  function openOffloadedForm() {
+    const d = c.offloaded_at ? new Date(c.offloaded_at) : new Date()
+    const pad = (n: number) => String(n).padStart(2, '0')
+    setOffloadedDate(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`)
+    setOffloadedTime(`${pad(d.getHours())}:${pad(d.getMinutes())}`)
+    setExpanded('offloaded')
   }
 
   async function downloadCcro() {
@@ -252,12 +279,29 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
   }
 
   async function markOffloaded() {
+    if (!offloadedDate || !offloadedTime) return
     setSubmitting(true)
     try {
-      await shipmentsApi.markOffloaded(c.shipment_id, c.container_id)
-      toast.success('Container offloaded')
+      const offloadedAt = new Date(`${offloadedDate}T${offloadedTime}`).toISOString()
+      await shipmentsApi.markOffloaded(c.shipment_id, c.container_id, offloadedAt)
+      toast.success(c.offloaded_at ? 'Offloading time updated' : `${c.container_number} marked as offloaded`)
       qc.invalidateQueries({ queryKey: ['container-view'] })
       onUpdated()
+      setExpanded(null)
+    } catch (e: any) { toast.error(e.response?.data?.detail || 'Failed') }
+    finally { setSubmitting(false) }
+  }
+
+  async function undoOffloaded() {
+    if (!undoOffloadRemark.trim()) { toast.error('Remark is required'); return }
+    setSubmitting(true)
+    try {
+      await shipmentsApi.undoOffloaded(c.shipment_id, c.container_id, undoOffloadRemark)
+      toast.success(`Offloading undone — ${c.container_number} reverted`)
+      qc.invalidateQueries({ queryKey: ['container-view'] })
+      onUpdated()
+      setExpanded(null)
+      setUndoOffloadRemark('')
     } catch (e: any) { toast.error(e.response?.data?.detail || 'Failed') }
     finally { setSubmitting(false) }
   }
@@ -504,8 +548,37 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
               </button>
             )}
             {canMarkOffloaded && (
-              <button onClick={markOffloaded} disabled={submitting} className="text-xs bg-green-600 text-white px-2 py-1 rounded hover:bg-green-700 disabled:opacity-50">
+              <button
+                onClick={() => expanded === 'offloaded' ? setExpanded(null) : openOffloadedForm()}
+                className={clsx(
+                  'text-xs px-2 py-1 rounded border',
+                  expanded === 'offloaded'
+                    ? 'bg-green-600 text-white border-green-600'
+                    : 'text-green-700 dark:text-green-400 border-green-200 dark:border-green-700 hover:bg-green-50 dark:hover:bg-green-900/20'
+                )}
+              >
                 Offloaded
+              </button>
+            )}
+            {canEditOffloaded && !canMarkOffloaded && (
+              <button
+                onClick={() => expanded === 'offloaded' ? setExpanded(null) : openOffloadedForm()}
+                className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 underline"
+              >
+                Edit time
+              </button>
+            )}
+            {canUndoOffloaded && (
+              <button
+                onClick={() => expanded === 'undo_offload' ? setExpanded(null) : setExpanded('undo_offload')}
+                className={clsx(
+                  'text-xs px-2 py-1 rounded border',
+                  expanded === 'undo_offload'
+                    ? 'bg-amber-600 text-white border-amber-600'
+                    : 'text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-700 hover:bg-amber-50 dark:hover:bg-amber-900/20'
+                )}
+              >
+                Undo Offload
               </button>
             )}
           </div>
@@ -621,6 +694,58 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
                 <button onClick={() => setExpanded(null)} className="text-xs text-gray-500 dark:text-gray-400">Cancel</button>
               </div>
               <p className="text-xs text-gray-400 dark:text-gray-500">Defaults to current time — adjust if logging retroactively</p>
+            </div>
+          </td>
+        </tr>
+      )}
+
+      {/* ── Offloading time form ── */}
+      {expanded === 'offloaded' && (
+        <tr>
+          <td colSpan={10} className="p-0">
+            <div className="px-5 py-3 bg-green-50 dark:bg-green-900/10 border-t border-b dark:border-gray-700 space-y-2">
+              <p className="text-xs font-semibold text-green-700 dark:text-green-400">
+                {c.offloaded_at ? 'Edit Offloading Time' : 'Record Offloading Time'}
+              </p>
+              <div className="flex items-center gap-3 flex-wrap">
+                <input type="date" value={offloadedDate} onChange={e => setOffloadedDate(e.target.value)} className="text-xs border dark:border-gray-600 rounded px-2 py-1.5 bg-white dark:bg-gray-700 dark:text-white" />
+                <input type="time" value={offloadedTime} onChange={e => setOffloadedTime(e.target.value)} className="text-xs border dark:border-gray-600 rounded px-2 py-1.5 bg-white dark:bg-gray-700 dark:text-white" />
+                <button
+                  onClick={markOffloaded}
+                  disabled={submitting || !offloadedDate || !offloadedTime}
+                  className="text-xs bg-green-600 text-white px-3 py-1.5 rounded hover:bg-green-700 disabled:opacity-50"
+                >
+                  {submitting ? 'Saving…' : c.offloaded_at ? 'Update' : 'Confirm Offloading'}
+                </button>
+                <button onClick={() => setExpanded(null)} className="text-xs text-gray-500 dark:text-gray-400">Cancel</button>
+              </div>
+              <p className="text-xs text-gray-400 dark:text-gray-500">Defaults to current time — adjust if logging retroactively</p>
+            </div>
+          </td>
+        </tr>
+      )}
+
+      {/* ── Undo offloading form ── */}
+      {expanded === 'undo_offload' && (
+        <tr>
+          <td colSpan={10} className="p-0">
+            <div className="px-5 py-3 bg-amber-50 dark:bg-amber-900/10 border-t border-b dark:border-gray-700 space-y-2">
+              <p className="text-xs font-semibold text-amber-700 dark:text-amber-400">Undo Offloading</p>
+              <p className="text-xs text-amber-600 dark:text-amber-500">Container will revert to its previous status. Provide a reason for the audit log.</p>
+              <div className="flex gap-2 items-start">
+                <textarea
+                  value={undoOffloadRemark}
+                  onChange={e => setUndoOffloadRemark(e.target.value)}
+                  placeholder="e.g. Marked offloaded by mistake — container still at DC…"
+                  className="text-xs border dark:border-gray-600 rounded px-2 py-1.5 bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 resize-none h-14 flex-1"
+                />
+              </div>
+              <div className="flex gap-2">
+                <button onClick={undoOffloaded} disabled={submitting || !undoOffloadRemark.trim()} className="text-xs bg-amber-600 text-white px-3 py-1.5 rounded hover:bg-amber-700 disabled:opacity-50">
+                  {submitting ? 'Saving…' : 'Undo Offloading'}
+                </button>
+                <button onClick={() => setExpanded(null)} className="text-xs text-gray-500 dark:text-gray-400">Cancel</button>
+              </div>
             </div>
           </td>
         </tr>

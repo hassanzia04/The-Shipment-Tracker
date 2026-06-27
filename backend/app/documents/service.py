@@ -746,7 +746,7 @@ async def _shipment_in_user_queue(
                 ShipmentTask.shipment_id == shipment.id,
                 ShipmentTask.task_type == task_type,
                 ShipmentTask.assigned_to_id == actor.id,
-                ShipmentTask.status.in_([TaskStatus.IN_PROGRESS, TaskStatus.ON_HOLD]),
+                ShipmentTask.status == TaskStatus.IN_PROGRESS,
             ).limit(1)
         )
         return r.scalar_one_or_none() is not None
@@ -770,7 +770,7 @@ async def _shipment_in_user_queue(
         select(ShipmentTask.id).where(
             ShipmentTask.shipment_id == shipment.id,
             ShipmentTask.task_type == task_type,
-            ShipmentTask.status != TaskStatus.COMPLETED,
+            ShipmentTask.status == TaskStatus.IN_PROGRESS,
         ).limit(1)
     )
     return r.scalar_one_or_none() is not None

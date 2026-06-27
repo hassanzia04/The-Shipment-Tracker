@@ -158,10 +158,14 @@ export interface ShipmentListItem {
   docs_approved: boolean
   permit_status: TaskStatus | null
   permit_user: string | null
+  permit_assigned_to_id: string | null
   do_status: TaskStatus | null
   do_user: string | null
+  do_assigned_to_id: string | null
   bayan_status: TaskStatus | null
   bayan_user: string | null
+  bayan_assigned_to_id: string | null
+  ccro_status: TaskStatus | null
   bayan_payment_pending: boolean
   bayan_payment_task_id: string | null
   do_revalidation_count: number
@@ -334,7 +338,7 @@ export const DOC_TYPE_OPTIONAL_DOCS: DocumentType[] = [
 ]
 
 export const TEAM_HOLD_PERMISSIONS: Partial<Record<Team, ExternalEntity[]>> = {
-  FFD: ['SHIPPING_LINE', 'PORT', 'OTHER'],
+  FFD: ['SHIPPING_LINE', 'ROP', 'MOAF', 'PORT', 'OTHER'],
   PRO: ['SHIPPING_LINE', 'ROP', 'MOAF', 'OTHER'],
 }
 

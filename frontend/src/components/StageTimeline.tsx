@@ -77,6 +77,7 @@ function getLabel(event: ShipmentEvent, taskName: string | undefined): string {
     case 'TRUCK_ASSIGNED':         return 'Truck & driver assigned to container'
     case 'BREAKDOWN_REPORTED':     return 'Breakdown / delay reported'
     case 'CONTAINER_OFFLOADED':    return 'Container offloaded at DC'
+    case 'OFFLOADING_UNDONE':      return 'Offloading undone — container reverted'
     case 'CONTAINER_RETURNED':     return 'Container returned'
     case 'SENT_BACK_TO_FFD':       return 'Shipment sent back to FFD team'
     case 'PULL_OUT_DATE_CHANGED':      return 'Pull-out date updated'

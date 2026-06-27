@@ -357,6 +357,51 @@ async def dashboard(db: AsyncSession = Depends(get_db), _: User = Depends(get_cu
     }
 
 
+@router.get("/activity-feed")
+async def activity_feed(
+    limit: int = Query(10, ge=1, le=50),
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+):
+    if actor.team not in (Team.MANAGEMENT, Team.CUSTOMER_MANAGEMENT, Team.FFD) and not actor.is_admin:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    result = await db.execute(
+        select(
+            ShipmentEvent.id,
+            ShipmentEvent.event_type,
+            ShipmentEvent.shipment_id,
+            ShipmentEvent.remark,
+            ShipmentEvent.stage_from,
+            ShipmentEvent.stage_to,
+            ShipmentEvent.hold_entity,
+            ShipmentEvent.created_at,
+            Shipment.bl_number,
+            User.full_name.label("actor_name"),
+        )
+        .join(Shipment, Shipment.id == ShipmentEvent.shipment_id)
+        .join(User, User.id == ShipmentEvent.actor_id)
+        .order_by(ShipmentEvent.created_at.desc())
+        .limit(limit)
+    )
+    rows = result.all()
+    return [
+        {
+            "id": str(row.id),
+            "event_type": row.event_type.value,
+            "shipment_id": str(row.shipment_id),
+            "bl_number": row.bl_number,
+            "actor_name": row.actor_name,
+            "created_at": row.created_at.isoformat(),
+            "remark": row.remark,
+            "stage_from": row.stage_from.value if row.stage_from else None,
+            "stage_to": row.stage_to.value if row.stage_to else None,
+            "hold_entity": row.hold_entity.value if row.hold_entity else None,
+        }
+        for row in rows
+    ]
+
+
 @router.get("/productivity")
 async def productivity(
     days: int = Query(30, ge=0),
