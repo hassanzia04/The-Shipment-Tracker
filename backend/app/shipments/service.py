@@ -823,6 +823,15 @@ async def list_shipments(
     historical: bool = False,
     completed_from=None,
     completed_to=None,
+    consignee_search: str | None = None,
+    port_search: str | None = None,
+    offloading_search: str | None = None,
+    bayan_type_search: str | None = None,
+    eta_from=None,
+    eta_to=None,
+    do_validity_from=None,
+    do_validity_to=None,
+    permit_search: str | None = None,
 ) -> tuple[list[Shipment], int]:
     from sqlalchemy import func as sa_func
 
@@ -975,6 +984,45 @@ async def list_shipments(
                 Container.actual_pull_out_date < to_dt,
             ).correlate(Shipment).exists()
         )
+
+    if consignee_search:
+        base_where.append(
+            select(Consignee.id).where(
+                Consignee.id == Shipment.consignee_id,
+                Consignee.name.ilike(f"%{consignee_search}%"),
+            ).correlate(Shipment).exists()
+        )
+    if port_search:
+        base_where.append(
+            select(LoadingPort.id).where(
+                LoadingPort.id == Shipment.loading_port_id,
+                LoadingPort.name.ilike(f"%{port_search}%"),
+            ).correlate(Shipment).exists()
+        )
+    if offloading_search:
+        base_where.append(
+            select(OffloadingPoint.id).where(
+                OffloadingPoint.id == Shipment.offloading_point_id,
+                OffloadingPoint.name.ilike(f"%{offloading_search}%"),
+            ).correlate(Shipment).exists()
+        )
+    if bayan_type_search:
+        base_where.append(
+            select(BayanType.id).where(
+                BayanType.id == Shipment.bayan_type_id,
+                BayanType.name.ilike(f"%{bayan_type_search}%"),
+            ).correlate(Shipment).exists()
+        )
+    if eta_from:
+        base_where.append(Shipment.eta_at_port >= eta_from)
+    if eta_to:
+        base_where.append(Shipment.eta_at_port <= eta_to)
+    if do_validity_from:
+        base_where.append(Shipment.do_validity_date >= do_validity_from)
+    if do_validity_to:
+        base_where.append(Shipment.do_validity_date <= do_validity_to)
+    if permit_search:
+        base_where.append(Shipment.permit_ref.ilike(f"%{permit_search}%"))
 
     count_q = select(sa_func.count(Shipment.id))
     for clause in base_where:
@@ -1559,9 +1607,8 @@ async def confirm_ccro_and_send_to_transport(db: AsyncSession, shipment_id: uuid
 
 # ── FFD: Salalah — extract container numbers from uploaded Bayan ──────────────
 
-async def get_bayan_container_suggestions(db: AsyncSession, shipment_id: uuid.UUID, actor: User) -> list[str]:
-    """Return ISO 6346 container numbers extracted from the latest uploaded Bayan PDF.
-    Returns an empty list if no Bayan is uploaded or extraction finds nothing."""
+async def get_bayan_container_suggestions(db: AsyncSession, shipment_id: uuid.UUID, actor: User) -> dict:
+    """Return ISO 6346 container numbers extracted from the latest Bayan PDF, plus its document ID for viewing."""
     from app.documents.models import Document
     from app.enums import DocumentType
     from app.documents.service import extract_container_numbers_from_bayan, fetch_oci_bytes
@@ -1575,12 +1622,13 @@ async def get_bayan_container_suggestions(db: AsyncSession, shipment_id: uuid.UU
     )
     bayan_doc = result.scalars().first()
     if not bayan_doc or not bayan_doc.oci_path:
-        return []
+        return {"container_numbers": [], "bayan_document_id": None}
 
-    raw = fetch_oci_bytes(bayan_doc.oci_path)
+    import asyncio
+    raw = await asyncio.to_thread(fetch_oci_bytes, bayan_doc.oci_path)
     if not raw:
-        return []
-    return extract_container_numbers_from_bayan(raw)
+        return {"container_numbers": [], "bayan_document_id": str(bayan_doc.id)}
+    return {"container_numbers": extract_container_numbers_from_bayan(raw), "bayan_document_id": str(bayan_doc.id)}
 
 
 # ── FFD: Salalah — confirm Bayan/DO/Permit complete, send to Transport ────────
@@ -1635,9 +1683,27 @@ async def confirm_salalah_transport(
     )
     await db.commit()
 
+    from app.documents.models import Document
+    from app.enums import DocumentType
+    from app.documents.service import generate_par_url
     from app.notifications.service import notify_team
-    await notify_team(db, shipment, Team.TRANSPORT, "salalah_ready_for_transport")
-    await notify_team(db, shipment, Team.DC, "ccro_sent_to_dc", container_numbers=container_list)
+
+    doc_links: list[dict] = []
+    for doc_type, label in [(DocumentType.DO, "DO"), (DocumentType.BAYAN, "Bayan")]:
+        doc_result = await db.execute(
+            select(Document).where(
+                Document.shipment_id == shipment.id,
+                Document.doc_type == doc_type,
+            ).order_by(Document.uploaded_at.desc()).limit(1)
+        )
+        doc = doc_result.scalars().first()
+        if doc and doc.oci_path:
+            url = generate_par_url(doc.oci_path)
+            if url:
+                doc_links.append({"filename": f"{label} — {shipment.bl_number}.pdf", "url": url})
+
+    await notify_team(db, shipment, Team.TRANSPORT, "salalah_ready_for_transport", doc_links=doc_links or None)
+    await notify_team(db, shipment, Team.DC, "ccro_sent_to_dc", doc_links=doc_links or None, container_numbers=container_list)
     return await _get_shipment(db, shipment_id)
 
 
@@ -2561,6 +2627,137 @@ async def bulk_upload_ccros(
     failed     = sum(1 for r in results if r["status"] == "not_detected")
     duplicates = sum(1 for r in results if r["status"] == "duplicate")
     return {"results": results, "matched": matched, "created": created, "failed": failed, "duplicates": duplicates}
+
+
+# ── FFD: Salalah bulk — list shipments ready for transport ────────────────────
+
+async def list_salalah_ready_shipments(db: AsyncSession, actor: User) -> list[dict]:
+    """Return all Salalah IN_PROGRESS shipments where DO + Bayan + Permit are complete.
+    Bayan container suggestions are NOT fetched here — the caller requests them per-shipment
+    via get_bayan_container_suggestions to avoid slow OCI calls on this endpoint."""
+    from app.masters.models import LoadingPort
+
+    _assert_team(actor, Team.FFD)
+
+    result = await db.execute(
+        select(Shipment)
+        .join(LoadingPort, LoadingPort.id == Shipment.loading_port_id)
+        .where(
+            func.lower(LoadingPort.name) == "salalah",
+            Shipment.current_stage == ShipmentStage.IN_PROGRESS,
+        )
+        .options(
+            selectinload(Shipment.tasks),
+            selectinload(Shipment.containers),
+        )
+        .order_by(Shipment.pull_out_date.asc().nullslast(), Shipment.created_at.desc())
+    )
+    shipments = list(result.scalars().unique().all())
+
+    items = []
+    for shipment in shipments:
+        do_done = _task_completed(shipment, TaskType.DO)
+        bayan_done = _task_completed(shipment, TaskType.BAYAN)
+        permit_ok = shipment.permit_not_required or _task_completed(shipment, TaskType.PERMIT)
+        if not (do_done and bayan_done and permit_ok):
+            continue
+
+        items.append({
+            "shipment_id": str(shipment.id),
+            "bl_number": shipment.bl_number,
+            "existing_containers": [c.container_number for c in shipment.containers],
+            "bayan_suggestions": [],
+        })
+
+    return items
+
+
+# ── FFD: Salalah bulk — confirm all and send to Transport ─────────────────────
+
+async def bulk_confirm_salalah_transport(
+    db: AsyncSession,
+    actor: User,
+    items: list[dict],  # list of { shipment_id: UUID, container_numbers: list[str] }
+) -> dict:
+    """Confirm Salalah transport for multiple shipments and send ONE combined email
+    each to Transport and DC with BL/container table and DO + Bayan doc links."""
+    from app.documents.models import Document
+    from app.enums import DocumentType
+    from app.documents.service import generate_par_url
+
+    _assert_team(actor, Team.FFD)
+
+    confirmed = []
+
+    for item in items:
+        shipment_id = item["shipment_id"]
+        container_numbers: list[str] = item["container_numbers"]
+
+        try:
+            shipment = await _get_shipment(db, shipment_id)
+        except HTTPException:
+            continue
+
+        if not _is_salalah_port(shipment) or shipment.current_stage != ShipmentStage.IN_PROGRESS:
+            continue
+        if not (_task_completed(shipment, TaskType.DO) and _task_completed(shipment, TaskType.BAYAN)):
+            continue
+        if not (shipment.permit_not_required or _task_completed(shipment, TaskType.PERMIT)):
+            continue
+        if not container_numbers:
+            continue
+
+        existing_numbers = {c.container_number.upper() for c in shipment.containers}
+        for raw_number in container_numbers:
+            number = raw_number.strip().upper()
+            if not number or number in existing_numbers:
+                continue
+            try:
+                await _assert_container_not_active(db, number, exclude_shipment_id=shipment.id)
+            except HTTPException:
+                continue
+            db.add(Container(shipment_id=shipment.id, container_number=number))
+            await db.flush()
+            await _record_event(db, shipment, EventType.CONTAINER_ADDED, actor, remark=number)
+            existing_numbers.add(number)
+
+        final_containers = [n.strip().upper() for n in container_numbers if n.strip()]
+        container_list = ", ".join(final_containers)
+
+        prev_stage = shipment.current_stage
+        shipment.current_stage = ShipmentStage.TRANSPORT
+        await _record_event(
+            db, shipment, EventType.STAGE_CHANGED, actor,
+            stage_from=prev_stage, stage_to=ShipmentStage.TRANSPORT,
+            remark=f"Salalah bulk confirm — Bayan, DO, and Permit complete. Containers: {container_list}",
+        )
+        await db.commit()
+
+        doc_links: list[dict] = []
+        for doc_type, label in [(DocumentType.DO, "DO"), (DocumentType.BAYAN, "Bayan")]:
+            doc_result = await db.execute(
+                select(Document).where(
+                    Document.shipment_id == shipment.id,
+                    Document.doc_type == doc_type,
+                ).order_by(Document.uploaded_at.desc()).limit(1)
+            )
+            doc = doc_result.scalars().first()
+            if doc and doc.oci_path:
+                url = generate_par_url(doc.oci_path)
+                if url:
+                    doc_links.append({"filename": f"{label} — {shipment.bl_number}.pdf", "url": url})
+
+        confirmed.append({
+            "shipment": await _get_shipment(db, shipment.id),
+            "container_numbers": final_containers,
+            "doc_links": doc_links,
+        })
+
+    if confirmed:
+        from app.notifications.service import notify_bulk_salalah_confirmed
+        await notify_bulk_salalah_confirmed(db, confirmed)
+
+    return {"confirmed": len(confirmed)}
 
 
 async def export_container_billing(

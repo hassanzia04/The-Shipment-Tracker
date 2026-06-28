@@ -16,7 +16,7 @@ export interface PaginatedContainerView {
 }
 
 export const shipmentsApi = {
-  list: (params?: { skip?: number; limit?: number; search?: string; stage?: string; my_queue?: boolean; task_type_filter?: string; missing_date?: boolean; amls_search?: string; missing_amls?: boolean; pull_out_from?: string; pull_out_to?: string; sort_by?: string; sort_dir?: string; historical?: boolean; completed_from?: string; completed_to?: string }) =>
+  list: (params?: { skip?: number; limit?: number; search?: string; stage?: string; my_queue?: boolean; task_type_filter?: string; missing_date?: boolean; amls_search?: string; missing_amls?: boolean; pull_out_from?: string; pull_out_to?: string; sort_by?: string; sort_dir?: string; historical?: boolean; completed_from?: string; completed_to?: string; consignee_search?: string; port_search?: string; offloading_search?: string; bayan_type_search?: string; eta_from?: string; eta_to?: string; do_validity_from?: string; do_validity_to?: string; permit_search?: string }) =>
     api.get<PaginatedShipments>('/shipments', { params }),
 
   get: (id: string) => api.get<Shipment>(`/shipments/${id}`),
@@ -80,7 +80,7 @@ export const shipmentsApi = {
   confirmCcro: (id: string) => api.post<Shipment>(`/shipments/${id}/confirm-ccro`),
 
   getBayanContainers: (id: string) =>
-    api.get<{ container_numbers: string[] }>(`/shipments/${id}/bayan-containers`),
+    api.get<{ container_numbers: string[]; bayan_document_id: string | null }>(`/shipments/${id}/bayan-containers`),
 
   confirmSalalahTransport: (id: string, container_numbers: string[]) =>
     api.post<Shipment>(`/shipments/${id}/confirm-salalah-transport`, { container_numbers }),
@@ -203,6 +203,12 @@ export const shipmentsApi = {
 
   bulkConfirmCcro: (shipment_ids: string[]) =>
     api.post<{ confirmed: number; skipped: string[] }>('/shipments/bulk-confirm-ccro', { shipment_ids }),
+
+  getSalalahReady: () =>
+    api.get<{ items: Array<{ shipment_id: string; bl_number: string; existing_containers: string[]; bayan_suggestions: string[] }> }>('/shipments/salalah-ready'),
+
+  bulkConfirmSalalah: (items: Array<{ shipment_id: string; container_numbers: string[] }>) =>
+    api.post<{ confirmed: number }>('/shipments/bulk-confirm-salalah', { items }),
 
   bulkOpenBayan: (shipment_ids: string[]) =>
     api.post('/shipments/bulk-open-bayan', { shipment_ids }),

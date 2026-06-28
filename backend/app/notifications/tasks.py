@@ -166,14 +166,19 @@ async def _send_do_expiry_alerts() -> None:
             subject = f"FFD Tracker — DO Validity Expiring Soon ({len(expiring)} B/L{'s' if len(expiring) != 1 else ''})"
 
             for team in [Team.FFD, Team.TRANSPORT]:
+                from app.notifications.models import AlertCCConfig
                 users_result = await db.execute(
                     select(User).where(User.team == team, User.is_active == True)
                 )
                 team_emails = [u.email for u in users_result.scalars().all()]
                 if not team_emails:
                     continue
+                cc_result = await db.execute(
+                    select(AlertCCConfig).where(AlertCCConfig.team == team.value)
+                )
+                cc_emails = [row.cc_email for row in cc_result.scalars().all()] or None
                 try:
-                    send_email_task.delay(team_emails, subject, html)
+                    send_email_task.delay(team_emails, subject, html, cc_emails)
                 except Exception:
                     logger.error("Failed to queue DO expiry alert for team %s", team.value)
     finally:
@@ -182,6 +187,9 @@ async def _send_do_expiry_alerts() -> None:
 
 def _build_do_expiry_html(expiring: list[dict], today) -> str:
     from app.notifications.daily_report import _th, _td
+    from app.core.config import settings
+    import html as _html
+    tracker_url = _html.escape(settings.FRONTEND_URL)
 
     urgency_color = {1: ("#dc2626", "#fee2e2"), 2: ("#c2410c", "#fff7ed"), 3: ("#a16207", "#fef9c3")}
     rows = ""
@@ -233,7 +241,8 @@ def _build_do_expiry_html(expiring: list[dict], today) -> str:
   </td></tr>
   <tr><td bgcolor="#f8fafc" style="background-color:#f8fafc;padding:16px 32px;border-top:1px solid #e2e8f0;">
     <p style="margin:0;font-family:Arial,sans-serif;font-size:11px;color:#94a3b8;text-align:center;">
-      Shipment Tracker &nbsp;&middot;&nbsp; Automated DO Expiry Alert
+      Automated alert &mdash; <a href="{tracker_url}" style="color:#1d4ed8;text-decoration:none;">FFD Shipment Tracker</a>
+      &nbsp;&middot;&nbsp; Developed by <strong>Bayanat Technology</strong>
     </p>
   </td></tr>
 </table>

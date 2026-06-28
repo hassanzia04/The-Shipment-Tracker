@@ -179,6 +179,30 @@ async def split_by_document(
     return await service.split_document_by_id(db, actor, source_document_id, shipment_id, parsed)
 
 
+@router.get("/available-types")
+async def get_available_doc_types(
+    shipment_ids: list[uuid.UUID] = Query(...),
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+):
+    by_type = await service.get_available_doc_types(db, shipment_ids)
+    return {"by_type": by_type}
+
+
+@router.post("/bulk-download")
+async def bulk_download(
+    body: schemas.BulkDownloadRequest,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+):
+    zip_bytes = await service.bulk_download_as_zip(db, body.shipment_ids, body.doc_types, body.group_by)
+    return StreamingResponse(
+        io.BytesIO(zip_bytes),
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="bulk_documents.zip"'},
+    )
+
+
 @router.get("/ccros/pending-zip")
 async def download_pending_ccros(
     db: AsyncSession = Depends(get_db),

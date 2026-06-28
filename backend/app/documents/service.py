@@ -473,6 +473,116 @@ async def download_pending_ccros_zip(db: AsyncSession) -> tuple[bytes, int]:
     return buf.getvalue(), len(rows)
 
 
+async def get_available_doc_types(
+    db: AsyncSession,
+    shipment_ids: list[uuid.UUID],
+) -> dict[str, list[dict]]:
+    from app.shipments.models import Shipment
+
+    docs_result = await db.execute(
+        select(Document.shipment_id, Document.doc_type)
+        .where(Document.shipment_id.in_(shipment_ids))
+        .distinct()
+    )
+    rows = docs_result.all()
+
+    ships_result = await db.execute(
+        select(Shipment.id, Shipment.bl_number).where(Shipment.id.in_(shipment_ids))
+    )
+    bl_map = {row.id: row.bl_number for row in ships_result.all()}
+
+    by_type: dict[str, list[dict]] = {}
+    for row in rows:
+        key = row.doc_type.value
+        if key not in by_type:
+            by_type[key] = []
+        by_type[key].append({
+            "shipment_id": str(row.shipment_id),
+            "bl_number": bl_map.get(row.shipment_id, str(row.shipment_id)),
+        })
+
+    return by_type
+
+
+_DOC_TYPE_LABELS: dict[DocumentType, str] = {
+    DocumentType.COMBINED_DOCS: "Required Documents",
+    DocumentType.COMMERCIAL_INVOICE: "Commercial Invoice",
+    DocumentType.PACKING_LIST: "Packing List",
+    DocumentType.CERT_OF_ORIGIN: "Certificate of Origin",
+    DocumentType.HALAL_CERT: "Halal Certificate",
+    DocumentType.BL: "Bill of Lading",
+    DocumentType.HEALTH_CERT: "Health Certificate",
+    DocumentType.MISCELLANEOUS: "Miscellaneous",
+    DocumentType.PERMIT: "Permit",
+    DocumentType.BAYAN: "Bayan",
+    DocumentType.DO: "Delivery Order",
+    DocumentType.CCRO: "CCRO",
+    DocumentType.DN: "Delivery Note",
+    DocumentType.DC_HEALTH_CERT: "Health Certificate (DC)",
+}
+
+
+async def bulk_download_as_zip(
+    db: AsyncSession,
+    shipment_ids: list[uuid.UUID],
+    doc_types: list[DocumentType],
+    group_by: str = "shipment",
+) -> bytes:
+    from app.shipments.models import Shipment
+
+    ships_result = await db.execute(
+        select(Shipment.id, Shipment.bl_number).where(Shipment.id.in_(shipment_ids))
+    )
+    bl_map = {row.id: (row.bl_number or str(row.id)).replace("/", "-") for row in ships_result.all()}
+
+    docs_result = await db.execute(
+        select(Document)
+        .where(
+            Document.shipment_id.in_(shipment_ids),
+            Document.doc_type.in_(doc_types),
+        )
+        .order_by(Document.shipment_id, Document.doc_type, Document.uploaded_at)
+    )
+    docs = list(docs_result.scalars().all())
+
+    if not docs:
+        raise HTTPException(status_code=404, detail="No documents found for the selected shipments and types")
+
+    client = _get_oci_client()
+    if not client:
+        raise HTTPException(status_code=503, detail="Document storage is not configured on this server.")
+
+    buf = io.BytesIO()
+    seen_names: set[str] = set()
+    with zf_module.ZipFile(buf, "w", compression=zf_module.ZIP_DEFLATED) as zipf:
+        for doc in docs:
+            bl = bl_map.get(doc.shipment_id, str(doc.shipment_id))
+            if group_by == "doc_type":
+                folder = _DOC_TYPE_LABELS.get(doc.doc_type, doc.doc_type.value)
+                base = f"{folder}/BL_{bl}_{doc.original_filename}"
+            else:
+                base = f"BL_{bl}/{doc.doc_type.value}_{doc.original_filename}"
+            arc_name = base
+            counter = 1
+            while arc_name in seen_names:
+                stem, _, ext = base.rpartition(".")
+                arc_name = f"{stem}_{counter}.{ext}" if ext else f"{base}_{counter}"
+                counter += 1
+            seen_names.add(arc_name)
+            try:
+                obj = await _run_sync(
+                    client.get_object,
+                    namespace_name=settings.OCI_NAMESPACE,
+                    bucket_name=settings.OCI_BUCKET_NAME,
+                    object_name=doc.oci_path,
+                )
+                zipf.writestr(arc_name, obj.data.content)
+            except Exception:
+                pass
+
+    return buf.getvalue()
+
+
 async def _split_raw_into_documents(
     db: AsyncSession,
     actor: User,

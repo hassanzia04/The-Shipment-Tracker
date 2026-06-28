@@ -435,16 +435,22 @@ function CcroFileRow({
   onContainerChange: (value: string) => void
 }) {
   const [searching, setSearching] = useState(false)
+  const [loadingResults, setLoadingResults] = useState(false)
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<ShipmentListItem[]>([])
   const searchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  const isSalalah = (s: ShipmentListItem) => s.loading_port_name?.trim().toLowerCase() === 'salalah'
+
   async function fetchInitial() {
+    setLoadingResults(true)
     try {
       const { data } = await shipmentsApi.list({ limit: 10, my_queue: true, task_type_filter: 'CCRO' })
-      setResults(data.items)
+      setResults(data.items.filter(s => !isSalalah(s)))
     } catch {
       setResults([])
+    } finally {
+      setLoadingResults(false)
     }
   }
 
@@ -457,12 +463,15 @@ function CcroFileRow({
     setQuery(q)
     if (searchTimeout.current) clearTimeout(searchTimeout.current)
     if (!q.trim()) { void fetchInitial(); return }
+    setLoadingResults(true)
     searchTimeout.current = setTimeout(async () => {
       try {
         const { data } = await shipmentsApi.list({ search: q, limit: 8, my_queue: true, task_type_filter: 'CCRO' })
-        setResults(data.items)
+        setResults(data.items.filter(s => !isSalalah(s)))
       } catch {
         setResults([])
+      } finally {
+        setLoadingResults(false)
       }
     }, 300)
   }
@@ -597,9 +606,13 @@ function CcroFileRow({
             placeholder="Search by BL number…"
             className="w-full text-xs rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-500"
           />
-          {results.length > 0 && (
-            <div className="absolute top-full left-0 right-0 z-10 mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded shadow-lg max-h-40 overflow-y-auto">
-              {results.map(s => (
+          {(loadingResults || results.length > 0 || query.trim()) && (
+            <div className="absolute top-full left-0 right-0 z-20 mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-xl max-h-52 overflow-y-auto">
+              {loadingResults ? (
+                <div className="px-3 py-3 flex justify-center"><Loader size={14} className="animate-spin text-gray-400" /></div>
+              ) : results.length === 0 ? (
+                <div className="px-3 py-3 text-xs text-gray-400 text-center">No shipments found</div>
+              ) : results.map(s => (
                 <button
                   key={s.id}
                   onClick={() => {
@@ -608,10 +621,15 @@ function CcroFileRow({
                     setQuery('')
                     setResults([])
                   }}
-                  className="w-full text-left px-3 py-2 text-xs hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-800 dark:text-gray-200 flex justify-between gap-2"
+                  className="w-full text-left px-3 py-2.5 hover:bg-blue-50 dark:hover:bg-blue-900/20 border-b border-gray-100 dark:border-gray-700 last:border-0 flex items-center justify-between gap-2"
                 >
-                  <span className="font-medium">{s.bl_number}</span>
-                  <span className="text-gray-400">{s.invoice_number}</span>
+                  <div className="min-w-0">
+                    <div className="text-xs font-semibold text-gray-900 dark:text-white truncate">{s.bl_number}</div>
+                    <div className="text-xs text-gray-400 truncate">{s.invoice_number}</div>
+                  </div>
+                  {s.offloading_point_name && (
+                    <span className="text-xs text-gray-400 shrink-0 truncate max-w-[110px]">{s.offloading_point_name}</span>
+                  )}
                 </button>
               ))}
             </div>

@@ -149,6 +149,14 @@ TEMPLATES: dict[str, dict] = {
         "subject": "FFD Tracker — {count} shipment{plural} incoming, CCROs sent to Transport",
         "body": "CCROs for {count} shipment{plural} have been sent to the Transport team. Please coordinate with Transport regarding expected arrivals.",
     },
+    "salalah_bulk_ready_transport": {
+        "subject": "FFD Tracker — {count} Salalah shipment{plural} ready for transport",
+        "body": "{count} Salalah shipment{plural} (Bayan, DO, and Permit complete) are now ready for transport. Please coordinate with the FFD team to book port appointments and arrange trucks.",
+    },
+    "salalah_bulk_sent_to_dc": {
+        "subject": "FFD Tracker — {count} Salalah shipment{plural} incoming",
+        "body": "{count} Salalah shipment{plural} have been confirmed by the FFD team and are heading your way. Please review the details below.",
+    },
 }
 
 
@@ -862,6 +870,138 @@ async def notify_bulk_ccro_confirmed(
             )
         except Exception:
             logger.exception("Failed to queue bulk CCRO email to DC")
+
+    await db.commit()
+
+
+async def notify_bulk_salalah_confirmed(
+    db: AsyncSession,
+    # List of dicts: { shipment, container_numbers: list[str], doc_links: list[dict] }
+    confirmed: list[dict],
+) -> None:
+    """Send ONE email to Transport + ONE email to DC for all Salalah bulk-confirmed shipments."""
+    from app.notifications.tasks import send_email_task
+
+    count = len(confirmed)
+    plural = "s" if count != 1 else ""
+
+    def _shipment_rows_with_docs() -> str:
+        rows = ""
+        for entry in confirmed:
+            bl = _html.escape(entry["shipment"].bl_number)
+            containers = _html.escape(", ".join(entry["container_numbers"]))
+            doc_buttons = ""
+            for dl in entry["doc_links"]:
+                fname = _html.escape(dl["filename"])
+                url = _html.escape(dl["url"])
+                doc_buttons += (
+                    f'<a href="{url}" style="display:inline-block;margin:2px 4px 2px 0;'
+                    f'padding:4px 10px;background-color:#1d4ed8;color:#ffffff;'
+                    f'font-family:Arial,sans-serif;font-size:11px;font-weight:600;'
+                    f'text-decoration:none;border-radius:4px;">&#8681; {fname}</a>'
+                )
+            rows += (
+                f'<tr>'
+                f'<td style="padding:6px 10px;font-family:Arial,sans-serif;font-size:13px;'
+                f'color:#374151;border-bottom:1px solid #e2e8f0;white-space:nowrap;">{bl}</td>'
+                f'<td style="padding:6px 10px;font-family:Arial,sans-serif;font-size:13px;'
+                f'color:#374151;border-bottom:1px solid #e2e8f0;">{containers}</td>'
+                f'<td style="padding:6px 10px;border-bottom:1px solid #e2e8f0;">{doc_buttons}</td>'
+                f'</tr>'
+            )
+        return rows
+
+    def _build_salalah_email(body: str) -> str:
+        tracker_url = _html.escape(settings.FRONTEND_URL)
+        return f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background-color:#f1f5f9;">
+<table width="100%" cellpadding="0" cellspacing="0" bgcolor="#f1f5f9">
+<tr><td align="center" style="padding:24px 16px;">
+<table width="680" cellpadding="0" cellspacing="0" bgcolor="#ffffff"
+  style="background-color:#ffffff;max-width:680px;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.1);">
+  <tr><td bgcolor="#1d4ed8" style="background-color:#1d4ed8;padding:24px 32px;">
+    <p style="margin:0;font-family:Arial,sans-serif;font-size:18px;font-weight:bold;color:#ffffff;">FFD Shipment Tracker</p>
+  </td></tr>
+  <tr><td style="padding:28px 32px 8px;">
+    <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:14px;color:#374151;line-height:1.6;">{body}</p>
+    <table cellpadding="0" cellspacing="0" style="width:100%;border:1px solid #e2e8f0;border-radius:6px;border-collapse:collapse;">
+      <tr style="background-color:#f8fafc;">
+        <th style="padding:8px 10px;font-family:Arial,sans-serif;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;text-align:left;border-bottom:1px solid #e2e8f0;">BL Number</th>
+        <th style="padding:8px 10px;font-family:Arial,sans-serif;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;text-align:left;border-bottom:1px solid #e2e8f0;">Containers</th>
+        <th style="padding:8px 10px;font-family:Arial,sans-serif;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;text-align:left;border-bottom:1px solid #e2e8f0;">Documents</th>
+      </tr>
+      {_shipment_rows_with_docs()}
+    </table>
+    <p style="margin:12px 0 0;font-family:Arial,sans-serif;font-size:11px;color:#9ca3af;">Document links expire in 7 days.</p>
+  </td></tr>
+  <tr><td style="padding:20px 32px 28px;">
+    <a href="{tracker_url}" style="display:inline-block;padding:10px 20px;background-color:#1d4ed8;color:#ffffff;font-family:Arial,sans-serif;font-size:13px;font-weight:600;text-decoration:none;border-radius:4px;">Open Tracker &rarr;</a>
+  </td></tr>
+  <tr><td bgcolor="#f8fafc" style="background-color:#f8fafc;padding:16px 32px;border-top:1px solid #e2e8f0;">
+    <p style="margin:0;font-family:Arial,sans-serif;font-size:11px;color:#94a3b8;text-align:center;">
+      Automated alert &mdash; <a href="{tracker_url}" style="color:#1d4ed8;text-decoration:none;">FFD Shipment Tracker</a>
+      &nbsp;&middot;&nbsp; Developed by <strong>Bayanat Technology</strong>
+    </p>
+  </td></tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>"""
+
+    # Transport team
+    transport_users = await _get_team_users(db, Team.TRANSPORT)
+    transport_cc = await _get_cc_emails_for_team(db, Team.TRANSPORT)
+    transport_tmpl = TEMPLATES["salalah_bulk_ready_transport"]
+    transport_body = transport_tmpl["body"].format(count=count, plural=plural)
+    transport_subject = transport_tmpl["subject"].format(count=count, plural=plural)
+    for user in transport_users:
+        for entry in confirmed:
+            db.add(Notification(
+                shipment_id=entry["shipment"].id,
+                recipient_id=user.id,
+                channel="IN_APP",
+                template="salalah_bulk_ready_transport",
+                payload={"subject": transport_subject, "body": f"Salalah confirmed — BL: {entry['shipment'].bl_number}"},
+            ))
+    if transport_users:
+        try:
+            send_email_task.delay(
+                [u.email for u in transport_users],
+                transport_subject,
+                _build_salalah_email(transport_body),
+                transport_cc or None,
+            )
+        except Exception:
+            logger.exception("Failed to queue bulk Salalah email to Transport")
+
+    # DC team
+    dc_users = await _get_team_users(db, Team.DC)
+    dc_cc = await _get_cc_emails_for_team(db, Team.DC)
+    dc_tmpl = TEMPLATES["salalah_bulk_sent_to_dc"]
+    dc_body = dc_tmpl["body"].format(count=count, plural=plural)
+    dc_subject = dc_tmpl["subject"].format(count=count, plural=plural)
+    for user in dc_users:
+        for entry in confirmed:
+            db.add(Notification(
+                shipment_id=entry["shipment"].id,
+                recipient_id=user.id,
+                channel="IN_APP",
+                template="salalah_bulk_sent_to_dc",
+                payload={"subject": dc_subject, "body": f"Salalah shipment incoming — BL: {entry['shipment'].bl_number}"},
+            ))
+    if dc_users:
+        try:
+            send_email_task.delay(
+                [u.email for u in dc_users],
+                dc_subject,
+                _build_salalah_email(dc_body),
+                dc_cc or None,
+            )
+        except Exception:
+            logger.exception("Failed to queue bulk Salalah email to DC")
 
     await db.commit()
 

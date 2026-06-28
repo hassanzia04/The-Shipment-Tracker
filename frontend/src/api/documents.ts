@@ -84,6 +84,17 @@ export const documentsApi = {
   downloadAll: (shipmentId: string) =>
     api.get(`/documents/shipment/${shipmentId}/zip`, { responseType: 'blob' }),
 
+  getAvailableTypes: (shipmentIds: string[]) => {
+    const params = new URLSearchParams()
+    shipmentIds.forEach(id => params.append('shipment_ids', id))
+    return api.get<{ by_type: Record<string, Array<{ shipment_id: string; bl_number: string }>> }>(
+      `/documents/available-types?${params.toString()}`
+    )
+  },
+
+  bulkDownload: (shipmentIds: string[], docTypes: string[], groupBy: 'shipment' | 'doc_type') =>
+    api.post('/documents/bulk-download', { shipment_ids: shipmentIds, doc_types: docTypes, group_by: groupBy }, { responseType: 'blob' }),
+
   downloadPendingCcrosZip: () =>
     api.get('/documents/ccros/pending-zip', { responseType: 'blob' }),
 

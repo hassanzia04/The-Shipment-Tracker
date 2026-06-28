@@ -92,6 +92,26 @@ class ConfirmSalalahTransportRequest(BaseModel):
     container_numbers: list[str]
 
 
+class SalalahReadyItem(BaseModel):
+    shipment_id: str
+    bl_number: str
+    existing_containers: list[str]
+    bayan_suggestions: list[str]
+
+
+class SalalahReadyResponse(BaseModel):
+    items: list[SalalahReadyItem]
+
+
+class BulkSalalahItem(BaseModel):
+    shipment_id: UUID
+    container_numbers: list[str]
+
+
+class BulkConfirmSalalahRequest(BaseModel):
+    items: list[BulkSalalahItem]
+
+
 class TaskOut(BaseModel):
     model_config = {"from_attributes": True}
     id: UUID

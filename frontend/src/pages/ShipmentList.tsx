@@ -10,9 +10,11 @@ import { BulkBayanUploadModal } from '@/components/BulkBayanUploadModal'
 import { BulkPermitUploadModal } from '@/components/BulkPermitUploadModal'
 import { BulkDOUploadModal } from '@/components/BulkDOUploadModal'
 import { BulkCcroUploadModal } from '@/components/BulkCcroUploadModal'
+import { BulkSalalahConfirmModal } from '@/components/BulkSalalahConfirmModal'
 import { BulkAssignTaskModal } from '@/components/BulkAssignTaskModal'
 import { BulkHoldModal } from '@/components/BulkHoldModal'
 import { BulkReleaseHoldModal } from '@/components/BulkReleaseHoldModal'
+import { BulkDownloadModal } from '@/components/BulkDownloadModal'
 import { useAuth } from '@/hooks/useAuth'
 import toast from 'react-hot-toast'
 import {
@@ -20,13 +22,14 @@ import {
   ChevronLeft, ChevronRight, X, Calendar,
   ChevronDown, ChevronUp, UserCheck, ListTodo, Box,
   CheckCircle, DollarSign, Pencil, FileSpreadsheet, Files, Download, Loader2,
-  SlidersHorizontal, Pause, Unlock,
+  SlidersHorizontal, Pause, Unlock, FileDown,
 } from 'lucide-react'
 import { STAGE_LABELS, TASK_TYPE_LABELS, ENTITY_LABELS, HOLD_REASON_LABELS, HOLD_REASON_MAP, TEAM_HOLD_PERMISSIONS } from '@/types'
 import type { ShipmentListItem, ShipmentStage, TaskType, TaskStatus, Team, ExternalEntity, HoldReason } from '@/types'
 import type { SortState } from '@/lib/sort'
 import { formatDate, formatDateTime } from '@/lib/dates'
 import { SortableHeader } from '@/components/SortableHeader'
+import { ColumnFilterPopover } from '@/components/ColumnFilterPopover'
 import clsx from 'clsx'
 
 const ALL_COLUMNS = [
@@ -603,7 +606,24 @@ function InlineHoldPanel({ shipmentId, userTeam, onDone }: {
 
 // ── Priority table (with optional FFD inline assign) ─────────────────────────
 
-function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCustomer, isPRO, isDC, isAdmin, currentUserId, expandedId, onExpand, proUsers, onRefresh, sort, onSort, hiddenCols = new Set(), isMobile = false, historical = false }: {
+interface ColFilters {
+  bl: string
+  consignee: string
+  port: string
+  offloading: string
+  bayan_type: string
+  stage: string
+  pull_out_from: string
+  pull_out_to: string
+  eta_from: string
+  eta_to: string
+  do_validity_from: string
+  do_validity_to: string
+  amls: string
+  permit: string
+}
+
+function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCustomer, isPRO, isDC, isAdmin, currentUserId, expandedId, onExpand, proUsers, onRefresh, sort, onSort, hiddenCols = new Set(), isMobile = false, historical = false, colFilters, onColFilter }: {
   shipments: ShipmentListItem[]
   page: number
   totalPages: number
@@ -624,6 +644,8 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
   hiddenCols?: Set<string>
   isMobile?: boolean
   historical?: boolean
+  colFilters: ColFilters
+  onColFilter: (key: keyof ColFilters, value: string) => void
 }) {
   const qc = useQueryClient()
   const offset = (page - 1) * PAGE_SIZE
@@ -658,6 +680,9 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
   const [selectedAdminIds, setSelectedAdminIds] = useState<Set<string>>(new Set())
   const [savingBulkDelete, setSavingBulkDelete] = useState(false)
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false)
+
+  const [showBulkDownload, setShowBulkDownload] = useState(false)
+  const [bulkDownloadIds, setBulkDownloadIds] = useState<string[]>([])
 
   const [downloadingIds, setDownloadingIds] = useState<Set<string>>(new Set())
   const [approvingIds, setApprovingIds] = useState<Set<string>>(new Set())
@@ -955,19 +980,41 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                 </th>
               )}
               <th className="text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">#</th>
-              <SortableHeader label="BL Number"    column="bl"       sort={sort} onSort={onSort} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
-              <SortableHeader label="Invoice"      column="invoice"  sort={sort} onSort={onSort} className={colCls('invoice', 'hidden md:table-cell px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide')} />
-              <th className={colCls('consignee', 'hidden lg:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>Consignee</th>
-              <th className={colCls('port', 'hidden xl:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>Port of Loading</th>
-              <th className={colCls('offloading_location', 'hidden xl:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>Offloading Location</th>
-              <th className={colCls('bayan_type', 'hidden xl:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>Bayan Type</th>
-              <SortableHeader label={isPRO ? 'My Task' : 'Stage'} column="stage" sort={sort} onSort={onSort} className={colCls('stage', 'px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide')} />
+              <SortableHeader label="BL Number" column="bl" sort={sort} onSort={onSort} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide"
+                filter={<ColumnFilterPopover filter={{ type: 'text', value: colFilters.bl, onChange: v => onColFilter('bl', v), placeholder: 'Filter BL…' }} />}
+              />
+              <SortableHeader label="Invoice" column="invoice" sort={sort} onSort={onSort} className={colCls('invoice', 'hidden md:table-cell px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide')} />
+              <th className={colCls('consignee', 'hidden lg:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>
+                <div className="flex items-center gap-1">Consignee<ColumnFilterPopover filter={{ type: 'text', value: colFilters.consignee, onChange: v => onColFilter('consignee', v), placeholder: 'Filter consignee…' }} /></div>
+              </th>
+              <th className={colCls('port', 'hidden xl:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>
+                <div className="flex items-center gap-1">Port of Loading<ColumnFilterPopover filter={{ type: 'text', value: colFilters.port, onChange: v => onColFilter('port', v), placeholder: 'Filter port…' }} /></div>
+              </th>
+              <th className={colCls('offloading_location', 'hidden xl:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>
+                <div className="flex items-center gap-1">Offloading Location<ColumnFilterPopover filter={{ type: 'text', value: colFilters.offloading, onChange: v => onColFilter('offloading', v), placeholder: 'Filter location…' }} /></div>
+              </th>
+              <th className={colCls('bayan_type', 'hidden xl:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>
+                <div className="flex items-center gap-1">Bayan Type<ColumnFilterPopover filter={{ type: 'text', value: colFilters.bayan_type, onChange: v => onColFilter('bayan_type', v), placeholder: 'Filter type…' }} /></div>
+              </th>
+              <SortableHeader label={isPRO ? 'My Task' : 'Stage'} column="stage" sort={sort} onSort={onSort} className={colCls('stage', 'px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide')}
+                filter={!isPRO && <ColumnFilterPopover filter={{ type: 'select', value: colFilters.stage, onChange: v => onColFilter('stage', v), options: Object.entries(STAGE_LABELS).filter(([v]) => v !== 'COMPLETED').map(([value, label]) => ({ value, label })), allLabel: 'All stages' }} />}
+              />
               <th className={colCls('progress', 'text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>Progress</th>
-              <SortableHeader label={historical ? 'Offloading Date' : 'Planned Pull out'} column="pull_out" sort={sort} onSort={onSort} className={colCls('pull_out', 'hidden md:table-cell px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide')} />
-              <SortableHeader label="ETA to Port"  column="eta"         sort={sort} onSort={onSort} className={colCls('eta',         'hidden xl:table-cell px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide')} />
-              <SortableHeader label="DO Validity"  column="do_validity" sort={sort} onSort={onSort} className={colCls('do_validity', 'hidden xl:table-cell px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide')} />
-              <th className={colCls('amls', 'hidden lg:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>AMLS Job#</th>
-              <th className={colCls('permit_no', 'hidden lg:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>Permit No</th>
+              <SortableHeader label={historical ? 'Offloading Date' : 'Planned Pull out'} column="pull_out" sort={sort} onSort={onSort} className={colCls('pull_out', 'hidden md:table-cell px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide')}
+                filter={!historical && <ColumnFilterPopover filter={{ type: 'daterange', from: colFilters.pull_out_from, to: colFilters.pull_out_to, onFromChange: v => onColFilter('pull_out_from', v), onToChange: v => onColFilter('pull_out_to', v) }} />}
+              />
+              <SortableHeader label="ETA to Port" column="eta" sort={sort} onSort={onSort} className={colCls('eta', 'hidden xl:table-cell px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide')}
+                filter={<ColumnFilterPopover filter={{ type: 'daterange', from: colFilters.eta_from, to: colFilters.eta_to, onFromChange: v => onColFilter('eta_from', v), onToChange: v => onColFilter('eta_to', v) }} />}
+              />
+              <SortableHeader label="DO Validity" column="do_validity" sort={sort} onSort={onSort} className={colCls('do_validity', 'hidden xl:table-cell px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide')}
+                filter={<ColumnFilterPopover filter={{ type: 'daterange', from: colFilters.do_validity_from, to: colFilters.do_validity_to, onFromChange: v => onColFilter('do_validity_from', v), onToChange: v => onColFilter('do_validity_to', v) }} />}
+              />
+              <th className={colCls('amls', 'hidden lg:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>
+                <div className="flex items-center gap-1">AMLS Job#<ColumnFilterPopover filter={{ type: 'text', value: colFilters.amls, onChange: v => onColFilter('amls', v), placeholder: 'Filter AMLS…' }} /></div>
+              </th>
+              <th className={colCls('permit_no', 'hidden lg:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>
+                <div className="flex items-center gap-1">Permit No<ColumnFilterPopover filter={{ type: 'text', value: colFilters.permit, onChange: v => onColFilter('permit', v), placeholder: 'Filter permit…' }} /></div>
+              </th>
               <th />
               {isFFD && <th />}
             </tr>
@@ -1451,6 +1498,12 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
               {savingBulk ? 'Saving…' : 'Set Pull-out Date'}
             </button>
             <button
+              onClick={() => { setBulkDownloadIds(Array.from(selectedIds)); setShowBulkDownload(true) }}
+              className="flex items-center gap-1.5 text-xs bg-teal-600 hover:bg-teal-500 text-white px-3 py-1.5 rounded-lg font-medium"
+            >
+              <FileDown size={13} /> Download Docs
+            </button>
+            <button
               onClick={() => { setSelectedIds(new Set()); setBulkDate('') }}
               className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-200 px-2 py-1 rounded hover:bg-gray-800 dark:hover:bg-gray-600"
             >
@@ -1501,6 +1554,12 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                 </>
               )
             })()}
+            <button
+              onClick={() => { setBulkDownloadIds(Array.from(selectedProIds)); setShowBulkDownload(true) }}
+              className="flex items-center gap-1.5 text-xs bg-teal-600 hover:bg-teal-500 text-white px-3 py-1.5 rounded-lg font-medium"
+            >
+              <FileDown size={13} /> Download Docs
+            </button>
             <button
               onClick={() => setSelectedProIds(new Set())}
               className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-200 px-2 py-1 rounded hover:bg-gray-800 dark:hover:bg-gray-600"
@@ -1580,6 +1639,12 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                 </>
               )
             })()}
+            <button
+              onClick={() => { setBulkDownloadIds(Array.from(selectedFFDIds)); setShowBulkDownload(true) }}
+              className="flex items-center gap-1.5 text-xs bg-teal-600 hover:bg-teal-500 text-white px-3 py-1.5 rounded-lg font-medium"
+            >
+              <FileDown size={13} /> Download Docs
+            </button>
             <button
               onClick={() => setSelectedFFDIds(new Set())}
               className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-200 px-2 py-1 rounded hover:bg-gray-800 dark:hover:bg-gray-600"
@@ -1662,6 +1727,12 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
               <X size={13} /> Delete Selected
             </button>
             <button
+              onClick={() => { setBulkDownloadIds(Array.from(selectedAdminIds)); setShowBulkDownload(true) }}
+              className="flex items-center gap-1.5 text-xs bg-teal-600 hover:bg-teal-500 text-white px-3 py-1.5 rounded-lg font-medium"
+            >
+              <FileDown size={13} /> Download Docs
+            </button>
+            <button
               onClick={() => setSelectedAdminIds(new Set())}
               className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-200 px-2 py-1 rounded hover:bg-gray-800 dark:hover:bg-gray-600"
             >
@@ -1669,6 +1740,13 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
             </button>
           </div>
         </div>
+      )}
+
+      {showBulkDownload && (
+        <BulkDownloadModal
+          selectedIds={bulkDownloadIds}
+          onClose={() => setShowBulkDownload(false)}
+        />
       )}
 
       {/* Admin bulk delete confirmation dialog */}
@@ -1746,11 +1824,28 @@ export function ShipmentList() {
   const [showBulkPermit, setShowBulkPermit] = useState(false)
   const [showBulkDO, setShowBulkDO] = useState(false)
   const [showBulkCcro, setShowBulkCcro] = useState(false)
+  const [showBulkSalalah, setShowBulkSalalah] = useState(false)
   const [sort, setSort] = useState<SortState>({ column: null, dir: 'asc' })
   const toggleSort = useCallback((column: string) => {
     setSort(s => ({ column, dir: s.column === column && s.dir === 'asc' ? 'desc' : 'asc' }))
     setPage(1)
   }, [])
+
+  // Column-level filter state (new — server-driven)
+  const [filterConsignee, setFilterConsignee] = useState('')
+  const [debouncedConsignee, setDebouncedConsignee] = useState('')
+  const [filterPort, setFilterPort] = useState('')
+  const [debouncedPort, setDebouncedPort] = useState('')
+  const [filterOffloading, setFilterOffloading] = useState('')
+  const [debouncedOffloading, setDebouncedOffloading] = useState('')
+  const [filterBayanType, setFilterBayanType] = useState('')
+  const [debouncedBayanType, setDebouncedBayanType] = useState('')
+  const [filterEtaFrom, setFilterEtaFrom] = useState('')
+  const [filterEtaTo, setFilterEtaTo] = useState('')
+  const [filterDoValidityFrom, setFilterDoValidityFrom] = useState('')
+  const [filterDoValidityTo, setFilterDoValidityTo] = useState('')
+  const [filterPermit, setFilterPermit] = useState('')
+  const [debouncedPermit, setDebouncedPermit] = useState('')
 
   const [isMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768)
   const [hiddenCols, setHiddenCols] = useState<Set<string>>(() =>
@@ -1848,17 +1943,23 @@ export function ShipmentList() {
     return () => clearTimeout(t)
   }, [amlsSearch])
 
+  useEffect(() => { const t = setTimeout(() => setDebouncedConsignee(filterConsignee), 300); return () => clearTimeout(t) }, [filterConsignee])
+  useEffect(() => { const t = setTimeout(() => setDebouncedPort(filterPort), 300); return () => clearTimeout(t) }, [filterPort])
+  useEffect(() => { const t = setTimeout(() => setDebouncedOffloading(filterOffloading), 300); return () => clearTimeout(t) }, [filterOffloading])
+  useEffect(() => { const t = setTimeout(() => setDebouncedBayanType(filterBayanType), 300); return () => clearTimeout(t) }, [filterBayanType])
+  useEffect(() => { const t = setTimeout(() => setDebouncedPermit(filterPermit), 300); return () => clearTimeout(t) }, [filterPermit])
+
   const isFirstRender = useRef(true)
   useEffect(() => {
     if (isFirstRender.current) { isFirstRender.current = false; return }
     setPage(1)
-  }, [debouncedSearch, stageFilter, missingDate, debouncedAmlsSearch, missingAmls, pullOutFrom, pullOutTo, completedFrom, completedTo])
+  }, [debouncedSearch, stageFilter, missingDate, debouncedAmlsSearch, missingAmls, pullOutFrom, pullOutTo, completedFrom, completedTo, debouncedConsignee, debouncedPort, debouncedOffloading, debouncedBayanType, filterEtaFrom, filterEtaTo, filterDoValidityFrom, filterDoValidityTo, debouncedPermit])
 
   const skip = (page - 1) * PAGE_SIZE
   const isMyQueue = !historical && stageFilter === 'my_queue'
 
   const { data, isLoading } = useQuery({
-    queryKey: ['shipments', skip, debouncedSearch, stageFilter, missingDate, debouncedAmlsSearch, missingAmls, pullOutFrom, pullOutTo, sort.column, sort.dir, historical, completedFrom, completedTo],
+    queryKey: ['shipments', skip, debouncedSearch, stageFilter, missingDate, debouncedAmlsSearch, missingAmls, pullOutFrom, pullOutTo, sort.column, sort.dir, historical, completedFrom, completedTo, debouncedConsignee, debouncedPort, debouncedOffloading, debouncedBayanType, filterEtaFrom, filterEtaTo, filterDoValidityFrom, filterDoValidityTo, debouncedPermit],
     queryFn: () => shipmentsApi.list({
       skip,
       limit: PAGE_SIZE,
@@ -1875,6 +1976,15 @@ export function ShipmentList() {
       historical: historical || undefined,
       completed_from: (historical && completedFrom) || undefined,
       completed_to: (historical && completedTo) || undefined,
+      consignee_search: debouncedConsignee || undefined,
+      port_search: debouncedPort || undefined,
+      offloading_search: debouncedOffloading || undefined,
+      bayan_type_search: debouncedBayanType || undefined,
+      eta_from: filterEtaFrom || undefined,
+      eta_to: filterEtaTo || undefined,
+      do_validity_from: filterDoValidityFrom || undefined,
+      do_validity_to: filterDoValidityTo || undefined,
+      permit_search: debouncedPermit || undefined,
     }).then(r => r.data),
     placeholderData: prev => prev,
   })
@@ -1882,6 +1992,42 @@ export function ShipmentList() {
   const items      = data?.items ?? []
   const total      = data?.total ?? 0
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+
+  const colFilters: ColFilters = {
+    bl: search,
+    consignee: filterConsignee,
+    port: filterPort,
+    offloading: filterOffloading,
+    bayan_type: filterBayanType,
+    stage: stageFilter === 'my_queue' ? '' : stageFilter,
+    pull_out_from: pullOutFrom,
+    pull_out_to: pullOutTo,
+    eta_from: filterEtaFrom,
+    eta_to: filterEtaTo,
+    do_validity_from: filterDoValidityFrom,
+    do_validity_to: filterDoValidityTo,
+    amls: amlsSearch,
+    permit: filterPermit,
+  }
+
+  function handleColFilter(key: keyof ColFilters, value: string) {
+    switch (key) {
+      case 'bl': setSearch(value); break
+      case 'consignee': setFilterConsignee(value); break
+      case 'port': setFilterPort(value); break
+      case 'offloading': setFilterOffloading(value); break
+      case 'bayan_type': setFilterBayanType(value); break
+      case 'stage': setStageFilter(value as typeof stageFilter); break
+      case 'pull_out_from': setPullOutFrom(value); break
+      case 'pull_out_to': setPullOutTo(value); break
+      case 'eta_from': setFilterEtaFrom(value); break
+      case 'eta_to': setFilterEtaTo(value); break
+      case 'do_validity_from': setFilterDoValidityFrom(value); break
+      case 'do_validity_to': setFilterDoValidityTo(value); break
+      case 'amls': setAmlsSearch(value); break
+      case 'permit': setFilterPermit(value); break
+    }
+  }
 
   return (
     <div>
@@ -1918,6 +2064,12 @@ export function ShipmentList() {
               >
                 <Files size={16} /> <span className="hidden sm:inline">Bulk Upload CCROs</span><span className="sm:hidden">CCROs</span>
               </button>
+              <button
+                onClick={() => setShowBulkSalalah(true)}
+                className="flex items-center gap-2 bg-orange-600 text-white px-3 sm:px-4 py-2 rounded-lg text-sm font-medium hover:bg-orange-700 whitespace-nowrap"
+              >
+                <CheckCircle size={16} /> <span className="hidden sm:inline">Salalah Confirmation</span><span className="sm:hidden">Salalah</span>
+              </button>
             </>
           )}
           {user?.team === 'CUSTOMER' && (
@@ -1949,6 +2101,12 @@ export function ShipmentList() {
       {showBulkCcro && (
         <BulkCcroUploadModal
           onClose={() => setShowBulkCcro(false)}
+          onDone={() => qc.invalidateQueries({ queryKey: ['shipments'] })}
+        />
+      )}
+      {showBulkSalalah && (
+        <BulkSalalahConfirmModal
+          onClose={() => setShowBulkSalalah(false)}
           onDone={() => qc.invalidateQueries({ queryKey: ['shipments'] })}
         />
       )}
@@ -2246,6 +2404,8 @@ export function ShipmentList() {
           hiddenCols={hiddenCols}
           isMobile={isMobile}
           historical={historical}
+          colFilters={colFilters}
+          onColFilter={handleColFilter}
         />
       )}
 

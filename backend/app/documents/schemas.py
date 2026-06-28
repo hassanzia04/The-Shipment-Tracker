@@ -1,3 +1,4 @@
+from typing import Literal
 from pydantic import BaseModel
 from uuid import UUID
 from datetime import datetime
@@ -67,3 +68,9 @@ class CcroAnalysisItem(BaseModel):
     has_existing_doc: bool = False
     conflict_bl: str | None = None
     has_active_ccro_task: bool = False
+
+
+class BulkDownloadRequest(BaseModel):
+    shipment_ids: list[UUID]
+    doc_types: list[DocumentType]
+    group_by: Literal["shipment", "doc_type"] = "shipment"

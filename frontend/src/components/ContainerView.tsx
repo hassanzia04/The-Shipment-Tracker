@@ -7,6 +7,7 @@ import { documentsApi, openDocument } from '@/api/documents'
 import { mastersApi } from '@/api/masters'
 import type { SortState } from '@/lib/sort'
 import { SortableHeader } from '@/components/SortableHeader'
+import { ColumnFilterPopover } from '@/components/ColumnFilterPopover'
 
 import { formatDate, formatDateTime } from '@/lib/dates'
 import type { ContainerViewItem, Truck, OutsourcedTruck } from '@/types'
@@ -853,6 +854,20 @@ export function ContainerView({ team, historical = false }: Props) {
   const [page, setPage] = useState(1)
   const [sort, setSort] = useState<SortState>({ column: null, dir: 'asc' })
 
+  // Column-level client-side filters
+  const [cfBl, setCfBl] = useState('')
+  const [cfContainer, setCfContainer] = useState('')
+  const [cfDoFrom, setCfDoFrom] = useState('')
+  const [cfDoTo, setCfDoTo] = useState('')
+  const [cfTruck, setCfTruck] = useState('')
+  const [cfPort, setCfPort] = useState('')
+  const [cfBayanType, setCfBayanType] = useState('')
+  const [cfLocation, setCfLocation] = useState('')
+  const [cfEtaFrom, setCfEtaFrom] = useState('')
+  const [cfEtaTo, setCfEtaTo] = useState('')
+  const [cfOffloadedFrom, setCfOffloadedFrom] = useState('')
+  const [cfOffloadedTo, setCfOffloadedTo] = useState('')
+
   function toggleSort(column: string) {
     setSort(s => ({ column, dir: s.column === column && s.dir === 'asc' ? 'desc' : 'asc' }))
     setPage(1)
@@ -953,7 +968,30 @@ export function ContainerView({ team, historical = false }: Props) {
     }
   }
 
-  const filteredContainers = containers
+  const filteredContainers = containers.filter(c => {
+    if (cfBl && !c.bl_number.toLowerCase().includes(cfBl.toLowerCase())) return false
+    if (cfContainer && !c.container_number.toLowerCase().includes(cfContainer.toLowerCase())) return false
+    if (cfTruck) {
+      const haystack = `${c.plate_number ?? ''} ${c.driver_name ?? ''} ${c.outsourced_plate_number ?? ''} ${c.outsourced_driver_name ?? ''}`.toLowerCase()
+      if (!haystack.includes(cfTruck.toLowerCase())) return false
+    }
+    if (cfPort && !c.loading_port_name?.toLowerCase().includes(cfPort.toLowerCase())) return false
+    if (cfBayanType && !c.bayan_type_name?.toLowerCase().includes(cfBayanType.toLowerCase())) return false
+    if (cfLocation && !c.offloading_point_name?.toLowerCase().includes(cfLocation.toLowerCase())) return false
+    if (cfDoFrom && c.do_validity_date && c.do_validity_date < cfDoFrom) return false
+    if (cfDoTo && c.do_validity_date && c.do_validity_date > cfDoTo) return false
+    if (cfEtaFrom) {
+      const eta = (c.expected_arrival_at ?? c.outsourced_expected_arrival_at)?.slice(0, 10)
+      if (!eta || eta < cfEtaFrom) return false
+    }
+    if (cfEtaTo) {
+      const eta = (c.expected_arrival_at ?? c.outsourced_expected_arrival_at)?.slice(0, 10)
+      if (!eta || eta > cfEtaTo) return false
+    }
+    if (cfOffloadedFrom && c.offloaded_at && c.offloaded_at.slice(0, 10) < cfOffloadedFrom) return false
+    if (cfOffloadedTo && c.offloaded_at && c.offloaded_at.slice(0, 10) > cfOffloadedTo) return false
+    return true
+  })
 
   if (isLoading) {
     return <div className="space-y-2">{[...Array(4)].map((_, i) => <div key={i} className="h-12 bg-gray-100 dark:bg-gray-700 rounded-xl animate-pulse" />)}</div>
@@ -1105,15 +1143,33 @@ export function ContainerView({ team, historical = false }: Props) {
             <table className="w-full text-sm">
               <thead className="bg-gray-50 dark:bg-gray-700 border-b dark:border-gray-600 sticky top-0 z-20">
                 <tr>
-                  <SortableHeader label="B/L Number"        column="bl"        sort={sort} onSort={toggleSort} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
-                  <SortableHeader label="Container"          column="container" sort={sort} onSort={toggleSort} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
-                  <SortableHeader label="DO Validity"        column="do"        sort={sort} onSort={toggleSort} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide hidden md:table-cell" />
-                  <SortableHeader label="Truck / Driver"     column="truck"     sort={sort} onSort={toggleSort} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
-                  <th className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap hidden md:table-cell">Port of Loading</th>
-                  <th className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap hidden md:table-cell">Bayan Type</th>
-                  <SortableHeader label="Offloading Location" column="location" sort={sort} onSort={toggleSort} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide hidden md:table-cell" />
-                  <SortableHeader label="ETA / Arrived"      column="eta"       sort={sort} onSort={toggleSort} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
-                  <th className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap hidden md:table-cell">Offloading Date</th>
+                  <SortableHeader label="B/L Number" column="bl" sort={sort} onSort={toggleSort} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide"
+                    filter={<ColumnFilterPopover filter={{ type: 'text', value: cfBl, onChange: setCfBl, placeholder: 'Filter BL…' }} />}
+                  />
+                  <SortableHeader label="Container" column="container" sort={sort} onSort={toggleSort} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide"
+                    filter={<ColumnFilterPopover filter={{ type: 'text', value: cfContainer, onChange: setCfContainer, placeholder: 'Filter container…' }} />}
+                  />
+                  <SortableHeader label="DO Validity" column="do" sort={sort} onSort={toggleSort} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide hidden md:table-cell"
+                    filter={<ColumnFilterPopover filter={{ type: 'daterange', from: cfDoFrom, to: cfDoTo, onFromChange: setCfDoFrom, onToChange: setCfDoTo }} />}
+                  />
+                  <SortableHeader label="Truck / Driver" column="truck" sort={sort} onSort={toggleSort} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide"
+                    filter={<ColumnFilterPopover filter={{ type: 'text', value: cfTruck, onChange: setCfTruck, placeholder: 'Filter truck/driver…' }} />}
+                  />
+                  <th className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap hidden md:table-cell">
+                    <div className="flex items-center gap-1">Port of Loading<ColumnFilterPopover filter={{ type: 'text', value: cfPort, onChange: setCfPort, placeholder: 'Filter port…' }} /></div>
+                  </th>
+                  <th className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap hidden md:table-cell">
+                    <div className="flex items-center gap-1">Bayan Type<ColumnFilterPopover filter={{ type: 'text', value: cfBayanType, onChange: setCfBayanType, placeholder: 'Filter type…' }} /></div>
+                  </th>
+                  <SortableHeader label="Offloading Location" column="location" sort={sort} onSort={toggleSort} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide hidden md:table-cell"
+                    filter={<ColumnFilterPopover filter={{ type: 'text', value: cfLocation, onChange: setCfLocation, placeholder: 'Filter location…' }} />}
+                  />
+                  <SortableHeader label="ETA / Arrived" column="eta" sort={sort} onSort={toggleSort} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide"
+                    filter={<ColumnFilterPopover filter={{ type: 'daterange', from: cfEtaFrom, to: cfEtaTo, onFromChange: setCfEtaFrom, onToChange: setCfEtaTo }} />}
+                  />
+                  <th className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap hidden md:table-cell">
+                    <div className="flex items-center gap-1">Offloading Date<ColumnFilterPopover filter={{ type: 'daterange', from: cfOffloadedFrom, to: cfOffloadedTo, onFromChange: setCfOffloadedFrom, onToChange: setCfOffloadedTo }} /></div>
+                  </th>
                   <th className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Actions</th>
                 </tr>
               </thead>

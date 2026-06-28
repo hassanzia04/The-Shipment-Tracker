@@ -37,6 +37,15 @@ async def list_shipments(
     historical: bool = Query(False),
     completed_from: Optional[date] = Query(None),
     completed_to: Optional[date] = Query(None),
+    consignee_search: Optional[str] = Query(None),
+    port_search: Optional[str] = Query(None),
+    offloading_search: Optional[str] = Query(None),
+    bayan_type_search: Optional[str] = Query(None),
+    eta_from: Optional[date] = Query(None),
+    eta_to: Optional[date] = Query(None),
+    do_validity_from: Optional[date] = Query(None),
+    do_validity_to: Optional[date] = Query(None),
+    permit_search: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ):
@@ -48,6 +57,11 @@ async def list_shipments(
         pull_out_from=pull_out_from, pull_out_to=pull_out_to,
         sort_by=sort_by, sort_dir=sort_dir,
         historical=historical, completed_from=completed_from, completed_to=completed_to,
+        consignee_search=consignee_search or None, port_search=port_search or None,
+        offloading_search=offloading_search or None, bayan_type_search=bayan_type_search or None,
+        eta_from=eta_from, eta_to=eta_to,
+        do_validity_from=do_validity_from, do_validity_to=do_validity_to,
+        permit_search=permit_search or None,
     )
     return {"items": items, "total": total, "skip": skip, "limit": limit}
 
@@ -222,6 +236,24 @@ async def bl_export(
     )
 
 
+@router.get("/salalah-ready")
+async def get_salalah_ready(db: AsyncSession = Depends(get_db), actor: User = Depends(get_current_user)):
+    items = await service.list_salalah_ready_shipments(db, actor)
+    return {"items": items}
+
+
+@router.post("/bulk-confirm-salalah")
+async def bulk_confirm_salalah(
+    body: schemas.BulkConfirmSalalahRequest,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+):
+    return await service.bulk_confirm_salalah_transport(
+        db, actor,
+        [{"shipment_id": item.shipment_id, "container_numbers": item.container_numbers} for item in body.items],
+    )
+
+
 @router.get("/{shipment_id}", response_model=schemas.ShipmentOut)
 async def get_shipment(shipment_id: uuid.UUID, db: AsyncSession = Depends(get_db), actor: User = Depends(get_current_user)):
     shipment = await service.get_shipment(db, shipment_id, actor)
@@ -309,8 +341,7 @@ async def confirm_ccro(shipment_id: uuid.UUID, db: AsyncSession = Depends(get_db
 
 @router.get("/{shipment_id}/bayan-containers")
 async def get_bayan_containers(shipment_id: uuid.UUID, db: AsyncSession = Depends(get_db), actor: User = Depends(get_current_user)):
-    suggestions = await service.get_bayan_container_suggestions(db, shipment_id, actor)
-    return {"container_numbers": suggestions}
+    return await service.get_bayan_container_suggestions(db, shipment_id, actor)
 
 
 @router.post("/{shipment_id}/confirm-salalah-transport", response_model=schemas.ShipmentOut)

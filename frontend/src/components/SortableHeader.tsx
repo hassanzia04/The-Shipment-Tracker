@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react'
 import type { SortState } from '@/lib/sort'
 import clsx from 'clsx'
@@ -8,9 +9,10 @@ interface Props {
   sort: SortState
   onSort: (col: string) => void
   className?: string
+  filter?: ReactNode
 }
 
-export function SortableHeader({ label, column, sort, onSort, className }: Props) {
+export function SortableHeader({ label, column, sort, onSort, className, filter }: Props) {
   const active = sort.column === column
   return (
     <th
@@ -27,6 +29,7 @@ export function SortableHeader({ label, column, sort, onSort, className }: Props
             : <ArrowUpDown size={11} />
           }
         </span>
+        {filter}
       </div>
     </th>
   )
