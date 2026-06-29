@@ -23,9 +23,10 @@ interface RowState {
 interface Props {
   onClose: () => void
   onDone: () => void
+  renewalMode?: boolean
 }
 
-export function BulkDOUploadModal({ onClose, onDone }: Props) {
+export function BulkDOUploadModal({ onClose, onDone, renewalMode = false }: Props) {
   const [rows, setRows] = useState<RowState[]>([])
   const [uploading, setUploading] = useState(false)
 
@@ -38,14 +39,14 @@ export function BulkDOUploadModal({ onClose, onDone }: Props) {
       blNumber: null,
       doDate: '',
       hasExistingDoc: false,
-      completeTask: true,
+      completeTask: !renewalMode,
       uploadStatus: 'idle',
       uploadResult: null,
     }))
     setRows(prev => [...prev, ...newRows])
 
     try {
-      const { data } = await documentsApi.analyzeDOs(accepted)
+      const { data } = await documentsApi.analyzeDOs(accepted, renewalMode)
       setRows(prev => {
         const updated = [...prev]
         const offset = updated.length - accepted.length
@@ -84,14 +85,15 @@ export function BulkDOUploadModal({ onClose, onDone }: Props) {
 
     await Promise.all(
       rows.map(async (row, idx) => {
-        if (!row.shipmentId || !row.doDate || row.uploadStatus !== 'idle' || row.hasExistingDoc) return
+        if (!row.shipmentId || !row.doDate || row.uploadStatus !== 'idle') return
+        if (!renewalMode && row.hasExistingDoc) return
         setRows(prev => {
           const updated = [...prev]
           updated[idx] = { ...updated[idx], uploadStatus: 'uploading' }
           return updated
         })
         try {
-          await documentsApi.upload({ shipment_id: row.shipmentId, doc_type: 'DO', file: row.file })
+          await documentsApi.upload({ shipment_id: row.shipmentId, doc_type: 'DO', file: row.file, force_replace: renewalMode || row.hasExistingDoc })
           await shipmentsApi.setDoValidity(row.shipmentId, row.doDate)
           if (row.completeTask) {
             try {
@@ -168,16 +170,18 @@ export function BulkDOUploadModal({ onClose, onDone }: Props) {
   const matchedIds = new Set(rows.map(r => r.shipmentId).filter((id): id is string => id !== null))
 
   const allAnalyzed = rows.length > 0 && rows.every(r => !r.analyzing)
-  const readyCount = rows.filter(r => r.shipmentId && r.doDate && r.uploadStatus === 'idle' && !r.hasExistingDoc).length
+  const readyCount = rows.filter(r => r.shipmentId && r.doDate && r.uploadStatus === 'idle' && (!r.hasExistingDoc || renewalMode)).length
   const pendingDate = rows.filter(r => r.shipmentId && !r.doDate && r.uploadStatus === 'idle').length
   const pendingManual = rows.filter(r => !r.shipmentId && !r.analyzing && r.uploadStatus === 'idle').length
+  const _today = new Date().toISOString().slice(0, 10)
+  const expiredDoCount = renewalMode ? rows.filter(r => r.shipmentId && r.doDate && r.doDate < _today && r.uploadStatus === 'idle').length : 0
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
       <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col">
 
         <div className="flex items-center justify-between px-6 py-4 border-b dark:border-gray-700">
-          <h2 className="text-base font-semibold text-gray-900 dark:text-white">Bulk DO Upload</h2>
+          <h2 className="text-base font-semibold text-gray-900 dark:text-white">{renewalMode ? 'Bulk DO Renewal' : 'Bulk DO Upload'}</h2>
           <button onClick={onClose} className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500">
             <X size={18} />
           </button>
@@ -208,6 +212,7 @@ export function BulkDOUploadModal({ onClose, onDone }: Props) {
                   key={`${row.file.name}-${idx}`}
                   row={row}
                   matchedIds={matchedIds}
+                  renewalMode={renewalMode}
                   onRemove={() => removeRow(idx)}
                   onMatch={(sid, bl) => setManualMatch(idx, sid, bl)}
                   onUnmatch={() => unmatchRow(idx)}
@@ -229,6 +234,8 @@ export function BulkDOUploadModal({ onClose, onDone }: Props) {
               ? `${pendingDate} file${pendingDate !== 1 ? 's' : ''} need a validity date`
               : pendingManual > 0
               ? `${pendingManual} file${pendingManual !== 1 ? 's' : ''} need manual assignment`
+              : expiredDoCount > 0
+              ? `${expiredDoCount} file${expiredDoCount !== 1 ? 's have' : ' has'} an expired DO date — enter a valid future date`
               : `${readyCount} file${readyCount !== 1 ? 's' : ''} ready to upload`}
           </p>
           <div className="flex gap-2">
@@ -240,7 +247,7 @@ export function BulkDOUploadModal({ onClose, onDone }: Props) {
             </button>
             <button
               onClick={handleUpload}
-              disabled={readyCount === 0 || pendingDate > 0 || uploading || !allAnalyzed}
+              disabled={readyCount === 0 || pendingDate > 0 || expiredDoCount > 0 || uploading || !allAnalyzed}
               className="px-4 py-2 text-sm rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2"
             >
               {uploading && <Loader size={14} className="animate-spin" />}
@@ -262,6 +269,7 @@ function openPdf(file: File) {
 function DOFileRow({
   row,
   matchedIds,
+  renewalMode,
   onRemove,
   onMatch,
   onUnmatch,
@@ -270,6 +278,7 @@ function DOFileRow({
 }: {
   row: RowState
   matchedIds: Set<string>
+  renewalMode: boolean
   onRemove: () => void
   onMatch: (shipmentId: string, blNumber: string) => void
   onUnmatch: () => void
@@ -285,7 +294,10 @@ function DOFileRow({
   async function fetchInitial() {
     setLoadingResults(true)
     try {
-      const { data } = await shipmentsApi.list({ limit: 10, my_queue: true, task_type_filter: 'DO' })
+      const params = renewalMode
+        ? { limit: 10, do_expired: true }
+        : { limit: 10, my_queue: true, task_type_filter: 'DO' as const }
+      const { data } = await shipmentsApi.list(params)
       setResults(data.items.filter(s => s.id === row.shipmentId || !matchedIds.has(s.id)))
     } catch {
       setResults([])
@@ -306,7 +318,10 @@ function DOFileRow({
     setLoadingResults(true)
     searchTimeout.current = setTimeout(async () => {
       try {
-        const { data } = await shipmentsApi.list({ search: q, limit: 8, my_queue: true, task_type_filter: 'DO' })
+        const params = renewalMode
+          ? { search: q, limit: 8, do_expired: true }
+          : { search: q, limit: 8, my_queue: true, task_type_filter: 'DO' as const }
+        const { data } = await shipmentsApi.list(params)
         setResults(data.items.filter(s => s.id === row.shipmentId || !matchedIds.has(s.id)))
       } catch {
         setResults([])
@@ -376,7 +391,7 @@ function DOFileRow({
               >
                 change
               </button>
-              {!row.hasExistingDoc && (
+              {(!row.hasExistingDoc || renewalMode) && (
                 <>
                   <span className="text-xs text-gray-500 dark:text-gray-400 ml-1">Valid to:</span>
                   <input
@@ -393,21 +408,28 @@ function DOFileRow({
                   {!row.doDate && (
                     <span className="text-xs text-amber-600 dark:text-amber-400">required</span>
                   )}
-                  <label className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-300 cursor-pointer ml-auto">
-                    <input
-                      type="checkbox"
-                      checked={row.completeTask}
-                      onChange={e => onCompleteChange(e.target.checked)}
-                      className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                    />
-                    Complete task
-                  </label>
+                  {!renewalMode && (
+                    <label className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-300 cursor-pointer ml-auto">
+                      <input
+                        type="checkbox"
+                        checked={row.completeTask}
+                        onChange={e => onCompleteChange(e.target.checked)}
+                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      Complete task
+                    </label>
+                  )}
                 </>
               )}
             </div>
-            {row.hasExistingDoc && (
+            {row.hasExistingDoc && !renewalMode && (
               <p className="text-xs text-amber-600 dark:text-amber-400">
                 ⚠ A DO document already exists for this shipment — delete it first before re-uploading
+              </p>
+            )}
+            {row.hasExistingDoc && renewalMode && (
+              <p className="text-xs text-blue-600 dark:text-blue-400">
+                ↻ Replaces existing DO — enter the new validity date above
               </p>
             )}
           </div>

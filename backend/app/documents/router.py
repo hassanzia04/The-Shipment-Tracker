@@ -50,6 +50,7 @@ async def ai_detect_splits(
 @router.post("/bulk-do/analyze", response_model=list[schemas.DOAnalysisItem])
 async def analyze_do_uploads(
     files: List[UploadFile] = File(...),
+    renewal: bool = Form(False),
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ):
@@ -62,7 +63,7 @@ async def analyze_do_uploads(
         if len(raw) > max_bytes:
             raise HTTPException(status_code=413, detail=f"File '{f.filename}' is too large")
         file_data.append((f.filename or "unknown.pdf", raw))
-    return await service.analyze_do_files(db, file_data, actor)
+    return await service.analyze_do_files(db, file_data, actor, renewal=renewal)
 
 
 @router.post("/bulk-permit/analyze", response_model=list[schemas.PermitAnalysisItem])
@@ -126,10 +127,12 @@ async def upload_document(
     file: UploadFile = File(...),
     task_id: Optional[uuid.UUID] = Form(None),
     container_id: Optional[uuid.UUID] = Form(None),
+    force_replace: bool = Form(False),
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ):
     bl_warning: str | None = None
+    detected_do_date: str | None = None
     if doc_type == DocumentType.CCRO:
         raw = await file.read()
         await file.seek(0)
@@ -140,9 +143,10 @@ async def upload_document(
             shipment_bl = (await db.execute(_select(_Shipment.bl_number).where(_Shipment.id == shipment_id))).scalar_one_or_none()
             if shipment_bl and extracted_bl != shipment_bl.upper().strip():
                 bl_warning = f"BL mismatch: document says {extracted_bl} but shipment is {shipment_bl}"
+        detected_do_date = service._extract_do_validity_date(file.filename or '', raw)
 
-    doc = await service.upload_document(db, actor, shipment_id, doc_type, file, task_id, container_id)
-    return {**schemas.DocumentOut.model_validate(doc).model_dump(), "bl_warning": bl_warning}
+    doc = await service.upload_document(db, actor, shipment_id, doc_type, file, task_id, container_id, force_replace=force_replace)
+    return {**schemas.DocumentOut.model_validate(doc).model_dump(), "bl_warning": bl_warning, "detected_do_date": detected_do_date}
 
 
 @router.post("/split-upload", response_model=list[schemas.DocumentOut])

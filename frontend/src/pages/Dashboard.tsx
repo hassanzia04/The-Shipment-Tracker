@@ -140,13 +140,14 @@ function activityLabel(e: ActivityEvent): string {
   return MAP[e.event_type] ?? e.event_type.toLowerCase().replace(/_/g, ' ')
 }
 
-type DocStatus = 'IN_PROGRESS' | 'ON_HOLD' | 'COMPLETED' | null | undefined
+type DocStatus = 'IN_PROGRESS' | 'ON_HOLD' | 'COMPLETED' | 'EXPIRED' | null | undefined
 
 function DocStatusPill({ label, status }: { label: string; status: DocStatus }) {
   const config = {
-    COMPLETED:   { dot: 'bg-green-500',  text: 'text-green-700 dark:text-green-400',  bg: 'bg-green-50 dark:bg-green-900/20',  icon: <CheckCircle size={11} /> },
-    ON_HOLD:     { dot: 'bg-red-500',    text: 'text-red-700 dark:text-red-400',      bg: 'bg-red-50 dark:bg-red-900/20',      icon: <AlertTriangle size={11} /> },
-    IN_PROGRESS: { dot: 'bg-blue-500',   text: 'text-blue-700 dark:text-blue-400',   bg: 'bg-blue-50 dark:bg-blue-900/20',   icon: <Clock size={11} /> },
+    COMPLETED:   { text: 'text-green-700 dark:text-green-400',  bg: 'bg-green-50 dark:bg-green-900/20',  icon: <CheckCircle size={11} /> },
+    ON_HOLD:     { text: 'text-red-700 dark:text-red-400',      bg: 'bg-red-50 dark:bg-red-900/20',      icon: <AlertTriangle size={11} /> },
+    IN_PROGRESS: { text: 'text-blue-700 dark:text-blue-400',    bg: 'bg-blue-50 dark:bg-blue-900/20',    icon: <Clock size={11} /> },
+    EXPIRED:     { text: 'text-amber-700 dark:text-amber-400',  bg: 'bg-amber-50 dark:bg-amber-900/20',  icon: <AlertTriangle size={11} /> },
   } as const
 
   if (!status) {
@@ -159,7 +160,7 @@ function DocStatusPill({ label, status }: { label: string; status: DocStatus }) 
   const c = config[status]
   return (
     <span className={clsx('inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium', c.bg, c.text)}>
-      {c.icon} {label}
+      {c.icon} {status === 'EXPIRED' ? `${label} Expired` : label}
     </span>
   )
 }
@@ -547,15 +548,15 @@ export function Dashboard() {
                     <div className="flex items-center gap-3 py-1.5">
                       <span className="text-sm font-medium text-blue-700 dark:text-blue-400 w-28 sm:w-48 shrink-0">
                         In Progress
+                        {inProgressContainers > 0 && (
+                          <span className="block text-xs font-normal text-gray-400 dark:text-gray-500 mt-0.5">{inProgressContainers} containers</span>
+                        )}
                       </span>
                       <div className="flex-1 bg-gray-100 dark:bg-gray-700 rounded-full h-2 overflow-hidden">
                         <div className="h-full bg-blue-400 dark:bg-blue-500 rounded-full transition-all" style={{ width: `${pct}%` }} />
                       </div>
                       <span className="text-sm font-semibold text-blue-700 dark:text-blue-400 shrink-0 text-right w-20 sm:w-36">
-                        <span className="block">{inProgressCount} {inProgressCount === 1 ? 'shipment' : 'shipments'}</span>
-                        {inProgressContainers > 0 && (
-                          <span className="block text-xs font-normal opacity-60 mt-0.5">{inProgressContainers} containers</span>
-                        )}
+                        {inProgressCount} {inProgressCount === 1 ? 'shipment' : 'shipments'}
                       </span>
                     </div>
                   )
@@ -567,14 +568,16 @@ export function Dashboard() {
                   const active     = counts.active     ?? 0
                   const onHold     = counts.on_hold    ?? 0
                   const unassigned = counts.unassigned ?? 0
-                  const total = completed + active + onHold + unassigned
+                  const expired    = counts.expired    ?? 0
+                  const total = completed + active + onHold + unassigned + expired
                   if (total === 0) return null
 
                   const completedPct   = Math.round((completed  / totalInPipeline) * 100)
                   const unassignedPct  = Math.round((unassigned / totalInPipeline) * 100)
                   const activePct      = Math.round((active     / totalInPipeline) * 100)
                   const holdPct        = Math.round((onHold     / totalInPipeline) * 100)
-                  const totalPct       = completedPct + unassignedPct + activePct + holdPct
+                  const expiredPct     = Math.round((expired    / totalInPipeline) * 100)
+                  const totalPct       = completedPct + unassignedPct + activePct + holdPct + expiredPct
                   return (
                     <div key={taskType} className="flex items-center gap-3 py-1 pl-4 border-l-2 border-blue-100 dark:border-blue-900 ml-3">
                       <span className="text-sm text-gray-500 dark:text-gray-400 w-24 sm:w-44 shrink-0">
@@ -587,30 +590,25 @@ export function Dashboard() {
                             {unassignedPct > 0 && <div className="h-full bg-amber-400"  style={{ width: `${(unassignedPct / totalPct) * 100}%` }} />}
                             {activePct     > 0 && <div className="h-full bg-blue-500"   style={{ width: `${(activePct     / totalPct) * 100}%` }} />}
                             {holdPct       > 0 && <div className="h-full bg-red-500"    style={{ width: `${(holdPct       / totalPct) * 100}%` }} />}
+                            {expiredPct    > 0 && <div className="h-full bg-orange-500" style={{ width: `${(expiredPct    / totalPct) * 100}%` }} />}
                           </div>
                         )}
                       </div>
-                      <div className="flex items-center gap-1.5 shrink-0 justify-end flex-wrap w-20 sm:w-36">
-                        {completed > 0 && (
-                          <span className="text-xs bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 px-1.5 py-0.5 rounded-full font-medium">
-                            ✓ {completed}
-                          </span>
-                        )}
-                        {unassigned > 0 && (
-                          <span className="text-xs bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 px-1.5 py-0.5 rounded-full font-medium">
-                            {unassigned} unassigned
-                          </span>
-                        )}
-                        {active > 0 && (
-                          <span className="text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 px-1.5 py-0.5 rounded-full font-medium">
-                            {active} active
-                          </span>
-                        )}
-                        {onHold > 0 && (
-                          <span className="text-xs bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded-full font-medium">
-                            {onHold} held
-                          </span>
-                        )}
+                      <div className="flex items-center gap-1 shrink-0 justify-end w-20 sm:w-36 text-xs font-medium tabular-nums">
+                        {(() => {
+                          const parts: { key: string; label: string; cls: string }[] = []
+                          if (onHold     > 0) parts.push({ key: 'h', label: `⚠${onHold}`,         cls: 'text-red-600 dark:text-red-400' })
+                          if (expired    > 0) parts.push({ key: 'e', label: `${expired} exp`,      cls: 'text-orange-500 dark:text-orange-400' })
+                          if (unassigned > 0) parts.push({ key: 'u', label: `${unassigned} pend`,  cls: 'text-amber-500 dark:text-amber-400' })
+                          if (active     > 0) parts.push({ key: 'a', label: `${active} act`,       cls: 'text-blue-600 dark:text-blue-400' })
+                          if (completed  > 0) parts.push({ key: 'c', label: `✓${completed}`,      cls: 'text-green-600 dark:text-green-400' })
+                          return parts.map((p, i) => (
+                            <span key={p.key} className="flex items-center gap-1">
+                              {i > 0 && <span className="text-gray-300 dark:text-gray-600">·</span>}
+                              <span className={p.cls}>{p.label}</span>
+                            </span>
+                          ))
+                        })()}
                       </div>
                     </div>
                   )
@@ -626,6 +624,9 @@ export function Dashboard() {
                     <div className="flex items-center gap-3 py-1.5 mt-1">
                       <span className={clsx('text-sm w-28 sm:w-48 shrink-0', isEmpty ? 'text-gray-400 dark:text-gray-600' : 'text-gray-700 dark:text-gray-300 font-medium')}>
                         {STAGE_LABELS['TRANSPORT']}
+                        {!isEmpty && transportContainers > 0 && (
+                          <span className="block text-xs font-normal text-gray-400 dark:text-gray-500 mt-0.5">{transportContainers} containers</span>
+                        )}
                       </span>
                       <div className="flex-1">
                         {!isEmpty && (
@@ -635,14 +636,7 @@ export function Dashboard() {
                         )}
                       </div>
                       <span className={clsx('text-sm shrink-0 text-right w-20 sm:w-36', isEmpty ? 'text-gray-400 dark:text-gray-600' : 'font-semibold text-gray-800 dark:text-gray-100')}>
-                        {isEmpty ? '—' : (
-                          <>
-                            <span className="block">{count}</span>
-                            {transportContainers > 0 && (
-                              <span className="block text-xs font-normal opacity-60 mt-0.5">{transportContainers} containers</span>
-                            )}
-                          </>
-                        )}
+                        {isEmpty ? '—' : count}
                       </span>
                     </div>
                   )
@@ -659,6 +653,9 @@ export function Dashboard() {
               <div key={stage} className="flex items-center gap-3 py-1.5">
                 <span className={clsx('text-sm w-28 sm:w-48 shrink-0', isEmpty ? 'text-gray-400 dark:text-gray-600' : 'text-gray-700 dark:text-gray-300 font-medium')}>
                   {PIPELINE_LABELS[stage] ?? STAGE_LABELS[stage]}
+                  {!isEmpty && stageContainers > 0 && (
+                    <span className="block text-xs font-normal text-gray-400 dark:text-gray-500 mt-0.5">{stageContainers} containers</span>
+                  )}
                 </span>
                 <div className="flex-1">
                   {!isEmpty && (
@@ -669,20 +666,8 @@ export function Dashboard() {
                 </div>
                 <div className="flex items-center gap-2 shrink-0 justify-end w-20 sm:w-36">
                   <span className={clsx('text-sm text-right', isEmpty ? 'text-gray-400 dark:text-gray-600' : 'font-semibold text-gray-800 dark:text-gray-100')}>
-                    {isEmpty ? '—' : (
-                      <>
-                        <span className="block">{count}</span>
-                        {stageContainers > 0 && (
-                          <span className="block text-xs font-normal opacity-60 mt-0.5">{stageContainers} containers</span>
-                        )}
-                      </>
-                    )}
+                    {isEmpty ? '—' : count}
                   </span>
-                  {stage === 'FFD_REVIEW' && count > 0 && (
-                    <span className="text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap">
-                      under review
-                    </span>
-                  )}
                   {stage === 'CUSTOMER' && extraCount > 0 && (
                     <span className="text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap">
                       {extraCount} payment
@@ -707,6 +692,9 @@ export function Dashboard() {
           </div>
           <div className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
             <span className="w-2.5 h-2.5 rounded-full bg-red-500 shrink-0 inline-block" /> On Hold
+          </div>
+          <div className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
+            <span className="w-2.5 h-2.5 rounded-full bg-orange-500 shrink-0 inline-block" /> DO Expired
           </div>
         </div>
       </div>

@@ -855,6 +855,7 @@ export function ContainerView({ team, historical = false }: Props) {
   const [sort, setSort] = useState<SortState>({ column: null, dir: 'asc' })
 
   // Column-level client-side filters
+  const [cfDoExpired, setCfDoExpired] = useState(false)
   const [cfBl, setCfBl] = useState('')
   const [cfContainer, setCfContainer] = useState('')
   const [cfDoFrom, setCfDoFrom] = useState('')
@@ -954,6 +955,7 @@ export function ContainerView({ team, historical = false }: Props) {
         status: statusFilter || undefined,
         historical,
         amls_only: (amlsOnly && team === 'DC') || undefined,
+        do_expired: cfDoExpired || undefined,
       })
       const url = URL.createObjectURL(new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
       const a = document.createElement('a')
@@ -978,6 +980,10 @@ export function ContainerView({ team, historical = false }: Props) {
     if (cfPort && !c.loading_port_name?.toLowerCase().includes(cfPort.toLowerCase())) return false
     if (cfBayanType && !c.bayan_type_name?.toLowerCase().includes(cfBayanType.toLowerCase())) return false
     if (cfLocation && !c.offloading_point_name?.toLowerCase().includes(cfLocation.toLowerCase())) return false
+    if (cfDoExpired) {
+      const today = new Date().toISOString().slice(0, 10)
+      if (!c.do_validity_date || c.do_validity_date >= today) return false
+    }
     if (cfDoFrom && c.do_validity_date && c.do_validity_date < cfDoFrom) return false
     if (cfDoTo && c.do_validity_date && c.do_validity_date > cfDoTo) return false
     if (cfEtaFrom) {
@@ -1033,6 +1039,19 @@ export function ContainerView({ team, historical = false }: Props) {
                 {ccroReturnedCount} container{ccroReturnedCount !== 1 ? 's' : ''} returned to FFD — action required
               </span>
             </div>
+          )}
+          {!historical && team === 'FFD' && (
+            <button
+              onClick={() => setCfDoExpired(v => !v)}
+              className={clsx(
+                'flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium border transition-colors',
+                cfDoExpired
+                  ? 'bg-red-600 text-white border-red-600'
+                  : 'bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+              )}
+            >
+              DO Expired
+            </button>
           )}
           {!historical && team === 'TRANSPORT' && pendingCcrosCount > 0 && (
             <button

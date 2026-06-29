@@ -46,13 +46,13 @@ async def dashboard(db: AsyncSession = Depends(get_db), _: User = Depends(get_cu
     )
     task_rows = task_breakdown_result.all()
 
-    # Build task pipeline: {task_type: {active, on_hold, completed, unassigned}}
+    # Build task pipeline: {task_type: {active, on_hold, completed, unassigned, expired}}
     # "unassigned" = PRO task that exists but hasn't been picked up by anyone yet
     task_pipeline: dict = {}
     for task_type, status, assigned_team, is_assigned, count in task_rows:
         key = task_type.value
         if key not in task_pipeline:
-            task_pipeline[key] = {"active": 0, "on_hold": 0, "completed": 0, "unassigned": 0}
+            task_pipeline[key] = {"active": 0, "on_hold": 0, "completed": 0, "unassigned": 0, "expired": 0}
         if status == TaskStatus.COMPLETED:
             task_pipeline[key]["completed"] += count
         elif status == TaskStatus.ON_HOLD:
@@ -61,6 +61,25 @@ async def dashboard(db: AsyncSession = Depends(get_db), _: User = Depends(get_cu
             task_pipeline[key]["unassigned"] += count
         else:
             task_pipeline[key]["active"] += count
+
+    # Count DO tasks that are COMPLETED but have an expired validity date
+    from datetime import date as _date
+    _today = _date.today()
+    expired_do_result = await db.execute(
+        select(func.count(ShipmentTask.id))
+        .join(Shipment, Shipment.id == ShipmentTask.shipment_id)
+        .where(
+            Shipment.current_stage == ShipmentStage.IN_PROGRESS,
+            ShipmentTask.task_type == TaskType.DO,
+            ShipmentTask.status == TaskStatus.COMPLETED,
+            Shipment.do_validity_date.isnot(None),
+            Shipment.do_validity_date < _today,
+        )
+    )
+    expired_do_count = expired_do_result.scalar_one_or_none() or 0
+    if expired_do_count and "DO" in task_pipeline:
+        task_pipeline["DO"]["completed"] = max(0, task_pipeline["DO"]["completed"] - expired_do_count)
+        task_pipeline["DO"]["expired"] = expired_do_count
 
     # ── Bayan payment pending (Customer action required) ──────────────────────
     bp_result = await db.execute(
@@ -134,7 +153,7 @@ async def dashboard(db: AsyncSession = Depends(get_db), _: User = Depends(get_cu
         select(Shipment)
         .where(Shipment.current_stage != ShipmentStage.COMPLETED)
         .order_by(Shipment.pull_out_date.asc().nullslast(), Shipment.created_at.asc())
-        .limit(50)
+        .limit(200)
     )
     shipments = shipments_result.scalars().all()
 
@@ -231,7 +250,7 @@ async def dashboard(db: AsyncSession = Depends(get_db), _: User = Depends(get_cu
 
     # ── IN_PROGRESS shipment doc status (Permit / DO / Bayan) ────────────────
     in_progress_ships_result = await db.execute(
-        select(Shipment.id, Shipment.bl_number, Shipment.pull_out_date)
+        select(Shipment.id, Shipment.bl_number, Shipment.pull_out_date, Shipment.do_validity_date)
         .where(Shipment.current_stage == ShipmentStage.IN_PROGRESS)
         .order_by(Shipment.pull_out_date.asc().nullslast(), Shipment.created_at.asc())
     )
@@ -259,13 +278,26 @@ async def dashboard(db: AsyncSession = Depends(get_db), _: User = Depends(get_cu
             s = task_status_map.get((ship_id, task_type_val))
             return s.value if s is not None else None
 
+        from datetime import date as _date
+        _today = _date.today()
+
+        def _do_status_computed(ship_id) -> str | None:
+            raw = _task_status(ship_id, TaskType.DO.value)
+            if raw == TaskStatus.COMPLETED.value:
+                do_date = do_validity_map.get(ship_id)
+                if do_date and do_date < _today:
+                    return "EXPIRED"
+            return raw
+
+        do_validity_map = {r[0]: r[3] for r in in_progress_ships}
+
         in_progress_doc_status = [
             {
                 "shipment_id": str(r[0]),
                 "bl_number": r[1],
                 "pull_out_date": r[2].isoformat() if r[2] else None,
                 "permit": _task_status(r[0], TaskType.PERMIT.value),
-                "do": _task_status(r[0], TaskType.DO.value),
+                "do": _do_status_computed(r[0]),
                 "bayan": _task_status(r[0], TaskType.BAYAN.value),
             }
             for r in in_progress_ships

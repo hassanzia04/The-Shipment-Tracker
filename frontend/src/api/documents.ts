@@ -36,6 +36,7 @@ export interface CcroAnalysisItem {
   filename: string
   detected_bl: string | null
   detected_container: string | null
+  detected_do_date: string | null
   shipment_id: string | null
   bl_number: string | null
   container_count: number | null
@@ -54,6 +55,7 @@ export const documentsApi = {
     file: File
     task_id?: string
     container_id?: string
+    force_replace?: boolean
   }) => {
     const form = new FormData()
     form.append('shipment_id', data.shipment_id)
@@ -61,7 +63,8 @@ export const documentsApi = {
     form.append('file', data.file)
     if (data.task_id) form.append('task_id', data.task_id)
     if (data.container_id) form.append('container_id', data.container_id)
-    return api.post<Document & { bl_warning?: string | null }>('/documents', form, {
+    if (data.force_replace) form.append('force_replace', 'true')
+    return api.post<Document & { bl_warning?: string | null; detected_do_date?: string | null }>('/documents', form, {
       headers: { 'Content-Type': 'multipart/form-data' },
     })
   },
@@ -153,9 +156,10 @@ export const documentsApi = {
     })
   },
 
-  analyzeDOs: (files: File[]) => {
+  analyzeDOs: (files: File[], renewal = false) => {
     const form = new FormData()
     files.forEach(f => form.append('files', f))
+    if (renewal) form.append('renewal', 'true')
     return api.post<DOAnalysisItem[]>('/documents/bulk-do/analyze', form, {
       headers: { 'Content-Type': 'multipart/form-data' },
     })

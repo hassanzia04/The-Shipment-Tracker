@@ -443,8 +443,11 @@ export function ShipmentDetail() {
     c => !documents.some(d => d.container_id === c.id && d.doc_type === 'CCRO')
   )
   const allContainersHaveCcro = shipment.containers.length > 0 && containersMissingCcro.length === 0
+  const _today = new Date().toISOString().slice(0, 10)
+  const isConfirmDoExpired = !!shipment.do_validity_date && shipment.do_validity_date < _today
   const confirmBlockReason: string | null =
     !shipment.do_validity_date ? 'DO validity date must be set first' :
+    isConfirmDoExpired ? 'DO validity date has expired — update it via CCRO upload or DO renewal before sending to Transport' :
     !allContainersHaveCcro ? (
       containersMissingCcro.length === 1
         ? `No CCRO for container ${containersMissingCcro[0].container_number} — upload or delete it`
@@ -1084,6 +1087,7 @@ export function ShipmentDetail() {
                     container={c}
                     taskId={ccroTask.id}
                     ccroDoc={ccroDoc}
+                    doValidityDate={shipment.do_validity_date}
                     onUpdated={refresh}
                   />
                 )}
@@ -1107,6 +1111,11 @@ export function ShipmentDetail() {
                 shipmentId={id!}
                 existingContainers={shipment.containers}
                 onConfirmed={refresh}
+                blockReason={
+                  !shipment.do_validity_date ? 'DO validity date must be set before sending to Transport' :
+                  isConfirmDoExpired ? 'DO validity date has expired — update it via CCRO upload or DO renewal before sending to Transport' :
+                  undefined
+                }
               />
             </div>
           )}
@@ -1281,6 +1290,13 @@ function TaskRow({ task, shipmentId, userTeam, userId, proUsers, doValidityDate,
   const [savingValidity, setSavingValidity] = useState(false)
   const [permitRefInput, setPermitRefInput] = useState(permitRef ?? '')
   const [savingPermitRef, setSavingPermitRef] = useState(false)
+  const [doRenewFile, setDoRenewFile] = useState<File | null>(null)
+  const [doRenewDate, setDoRenewDate] = useState('')
+  const [doRenewAnalyzing, setDoRenewAnalyzing] = useState(false)
+  const [doRenewUploading, setDoRenewUploading] = useState(false)
+
+  const today = new Date().toISOString().slice(0, 10)
+  const isDoExpired = task.task_type === 'DO' && task.status === 'COMPLETED' && !!doValidityDate && doValidityDate < today
 
   const isProTask = task.assigned_team === 'PRO'
   const canAssign = userTeam === 'FFD' && isProTask && task.status !== 'COMPLETED'
@@ -1296,6 +1312,44 @@ function TaskRow({ task, shipmentId, userTeam, userId, proUsers, doValidityDate,
       toast.error(e.response?.data?.detail || 'Failed to save')
     } finally {
       setSavingValidity(false)
+    }
+  }
+
+  async function handleDoRenewSelect(file: File) {
+    setDoRenewFile(file)
+    setDoRenewDate('')
+    setDoRenewAnalyzing(true)
+    try {
+      const results = await documentsApi.analyzeDOs([file])
+      const detected = results.data[0]?.detected_date ?? ''
+      setDoRenewDate(detected)
+    } catch {
+      // analysis failed — user can enter date manually
+    } finally {
+      setDoRenewAnalyzing(false)
+    }
+  }
+
+  async function handleDoRenewUpload() {
+    if (!doRenewFile || !doRenewDate) return
+    setDoRenewUploading(true)
+    try {
+      await documentsApi.upload({
+        shipment_id: shipmentId,
+        doc_type: 'DO',
+        file: doRenewFile,
+        task_id: task.id,
+        force_replace: true,
+      })
+      await shipmentsApi.setDoValidity(shipmentId, doRenewDate)
+      toast.success('DO renewed and validity date updated')
+      setDoRenewFile(null)
+      setDoRenewDate('')
+      onUpdated()
+    } catch (e: any) {
+      toast.error(e.response?.data?.detail || 'Renewal failed')
+    } finally {
+      setDoRenewUploading(false)
     }
   }
 
@@ -1365,8 +1419,16 @@ function TaskRow({ task, shipmentId, userTeam, userId, proUsers, doValidityDate,
       {/* Header */}
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          {task.status === 'COMPLETED' ? <CheckCircle size={15} className="text-green-500" /> : <Clock size={15} className="text-blue-400" />}
+          {isDoExpired
+            ? <AlertTriangle size={15} className="text-amber-500" />
+            : task.status === 'COMPLETED'
+              ? <CheckCircle size={15} className="text-green-500" />
+              : <Clock size={15} className="text-blue-400" />
+          }
           <span className="text-sm font-medium dark:text-gray-100">{TASK_TYPE_LABELS[task.task_type]}</span>
+          {isDoExpired && (
+            <span className="text-xs font-semibold text-amber-700 dark:text-amber-400 bg-amber-100 dark:bg-amber-900/30 px-2 py-0.5 rounded-full">Expired</span>
+          )}
           <span className="text-xs text-gray-400 dark:text-gray-500">({task.assigned_team})</span>
           {task.assigned_to_name && (
             <span className="text-xs bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 px-2 py-0.5 rounded-full">
@@ -1503,6 +1565,50 @@ function TaskRow({ task, shipmentId, userTeam, userId, proUsers, doValidityDate,
             {uploading ? 'Uploading…' : `Re-upload ${DOC_TYPE_LABELS[requiredDocType as DocumentType]}`}
             <input type="file" className="hidden" accept=".pdf,image/*" onChange={e => e.target.files?.[0] && handleUpload(e.target.files[0])} />
           </label>
+        </div>
+      )}
+
+      {/* DO renewal — FFD can re-upload DO when validity has expired */}
+      {isDoExpired && userTeam === 'FFD' && (
+        <div className="border-t dark:border-gray-600 pt-2 space-y-2">
+          <p className="text-xs text-amber-700 dark:text-amber-400 font-medium">DO validity expired — upload a new DO to renew</p>
+          {!doRenewFile ? (
+            <label className={clsx('flex items-center gap-2 border border-dashed border-amber-300 dark:border-amber-700 rounded px-3 py-2 cursor-pointer hover:bg-amber-50 dark:hover:bg-amber-900/20 text-xs text-amber-700 dark:text-amber-400', uploading && 'opacity-50 pointer-events-none')}>
+              <Upload size={13} />
+              Click to upload new DO
+              <input type="file" className="hidden" accept=".pdf,image/*" onChange={e => e.target.files?.[0] && handleDoRenewSelect(e.target.files[0])} />
+            </label>
+          ) : (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300">
+                <span className="font-medium truncate">{doRenewFile.name}</span>
+                <button onClick={() => { setDoRenewFile(null); setDoRenewDate('') }} className="text-gray-400 hover:text-red-500 shrink-0"><X size={12} /></button>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">New validity date:</span>
+                {doRenewAnalyzing ? (
+                  <span className="text-xs text-gray-400">Extracting date…</span>
+                ) : (
+                  <input
+                    type="date"
+                    value={doRenewDate}
+                    onChange={e => setDoRenewDate(e.target.value)}
+                    className={clsx(
+                      'text-xs border rounded px-2 py-0.5 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500',
+                      doRenewDate ? 'border-gray-300 dark:border-gray-600' : 'border-amber-400 ring-1 ring-amber-300'
+                    )}
+                  />
+                )}
+                <button
+                  onClick={handleDoRenewUpload}
+                  disabled={!doRenewDate || doRenewUploading || doRenewAnalyzing}
+                  className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700 disabled:opacity-50 whitespace-nowrap"
+                >
+                  {doRenewUploading ? 'Uploading…' : 'Confirm & Upload'}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1818,14 +1924,21 @@ function AddContainerRow({ shipmentId, onAdded }: { shipmentId: string, onAdded:
   )
 }
 
-function ContainerCcroSlot({ shipmentId, container, taskId, ccroDoc, onUpdated }: {
+function ContainerCcroSlot({ shipmentId, container, taskId, ccroDoc, doValidityDate, onUpdated }: {
   shipmentId: string
   container: Container
   taskId: string
   ccroDoc: ShipmentDoc | undefined
+  doValidityDate: string | null
   onUpdated: () => void
 }) {
   const [uploading, setUploading] = useState(false)
+  const [pendingDoDate, setPendingDoDate] = useState<string | null | ''>(null)
+  const [confirmedDoDate, setConfirmedDoDate] = useState('')
+  const [savingDoDate, setSavingDoDate] = useState(false)
+
+  const today = new Date().toISOString().slice(0, 10)
+  const isDoExpired = !!doValidityDate && doValidityDate < today
 
   async function handleUpload(file: File) {
     setUploading(true)
@@ -1845,7 +1958,12 @@ function ContainerCcroSlot({ shipmentId, container, taskId, ccroDoc, onUpdated }
           style: { background: '#fef3c7', color: '#92400e', border: '1px solid #fbbf24', maxWidth: '420px' },
         })
       }
-      onUpdated()
+      if (isDoExpired) {
+        setPendingDoDate(data.detected_do_date ?? '')
+        setConfirmedDoDate(data.detected_do_date ?? '')
+      } else {
+        onUpdated()
+      }
     } catch (e: any) {
       toast.error(e.response?.data?.detail || 'Upload failed')
     } finally {
@@ -1853,30 +1971,87 @@ function ContainerCcroSlot({ shipmentId, container, taskId, ccroDoc, onUpdated }
     }
   }
 
-  if (ccroDoc) {
+  async function saveDetectedDoDate() {
+    if (!confirmedDoDate) return
+    setSavingDoDate(true)
+    try {
+      await shipmentsApi.setDoValidity(shipmentId, confirmedDoDate)
+      toast.success('DO validity date updated')
+      setPendingDoDate(null)
+      onUpdated()
+    } catch (e: any) {
+      toast.error(e.response?.data?.detail || 'Failed to save DO date')
+    } finally {
+      setSavingDoDate(false)
+    }
+  }
+
+  if (ccroDoc && pendingDoDate === null) {
     return (
-      <div className="flex items-center gap-2 text-xs bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded px-2 py-1.5">
-        <CheckCircle size={12} className="text-green-600 dark:text-green-400 shrink-0" />
-        <span className="text-green-700 dark:text-green-300 font-medium flex-1 truncate">CCRO: {ccroDoc.original_filename}</span>
-        <div className="flex items-center gap-2 shrink-0">
-          <button onClick={() => openDocument(ccroDoc.id)} className="text-blue-600 hover:underline">View</button>
-          <button
-            onClick={async () => { try { await documentsApi.delete(ccroDoc.id); onUpdated(); toast.success('Removed') } catch { toast.error('Failed') } }}
-            className="text-red-400 hover:text-red-600"
-          >
-            <X size={11} />
-          </button>
+      <div className="space-y-1.5">
+        <div className="flex items-center gap-2 text-xs bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded px-2 py-1.5">
+          <CheckCircle size={12} className="text-green-600 dark:text-green-400 shrink-0" />
+          <span className="text-green-700 dark:text-green-300 font-medium flex-1 truncate">CCRO: {ccroDoc.original_filename}</span>
+          <div className="flex items-center gap-2 shrink-0">
+            <button onClick={() => openDocument(ccroDoc.id)} className="text-blue-600 hover:underline">View</button>
+            <button
+              onClick={async () => { try { await documentsApi.delete(ccroDoc.id); onUpdated(); toast.success('Removed') } catch { toast.error('Failed') } }}
+              className="text-red-400 hover:text-red-600"
+            >
+              <X size={11} />
+            </button>
+          </div>
         </div>
       </div>
     )
   }
 
   return (
-    <label className={clsx('flex items-center gap-2 border border-dashed dark:border-gray-600 rounded px-3 py-2 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600 text-xs text-gray-500 dark:text-gray-400', uploading && 'opacity-50 pointer-events-none')}>
-      <Upload size={12} />
-      {uploading ? 'Uploading…' : `Upload CCRO for ${container.container_number}`}
-      <input type="file" className="hidden" accept=".pdf,image/*" onChange={e => e.target.files?.[0] && handleUpload(e.target.files[0])} />
-    </label>
+    <div className="space-y-1.5">
+      {isDoExpired && pendingDoDate === null && (
+        <p className="text-xs text-amber-600 dark:text-amber-400">DO expired — uploading CCRO will update the DO validity date from the document</p>
+      )}
+      {pendingDoDate !== null && (
+        <div className="flex items-center gap-2 p-2 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800">
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-medium text-blue-800 dark:text-blue-200">
+              {confirmedDoDate ? 'New DO validity date detected — confirm before saving' : 'Enter new DO validity date to update and unblock this shipment'}
+            </p>
+            <div className="flex items-center gap-2 mt-1">
+              <input
+                type="date"
+                value={confirmedDoDate}
+                onChange={e => setConfirmedDoDate(e.target.value)}
+                className={clsx(
+                  'text-xs border rounded px-2 py-0.5 bg-white dark:bg-gray-700 text-gray-900 dark:text-white',
+                  confirmedDoDate ? 'border-blue-300 dark:border-blue-600' : 'border-amber-400 ring-1 ring-amber-300'
+                )}
+              />
+              <button
+                onClick={saveDetectedDoDate}
+                disabled={!confirmedDoDate || savingDoDate}
+                className="text-xs bg-blue-600 text-white px-2.5 py-1 rounded hover:bg-blue-700 disabled:opacity-50 whitespace-nowrap"
+              >
+                {savingDoDate ? 'Saving…' : 'Confirm & Save'}
+              </button>
+              <button
+                onClick={() => { setPendingDoDate(null); onUpdated() }}
+                className="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+              >
+                Skip
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {pendingDoDate === null && (
+        <label className={clsx('flex items-center gap-2 border border-dashed dark:border-gray-600 rounded px-3 py-2 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600 text-xs text-gray-500 dark:text-gray-400', uploading && 'opacity-50 pointer-events-none')}>
+          <Upload size={12} />
+          {uploading ? 'Uploading…' : `Upload CCRO for ${container.container_number}`}
+          <input type="file" className="hidden" accept=".pdf,image/*" onChange={e => e.target.files?.[0] && handleUpload(e.target.files[0])} />
+        </label>
+      )}
+    </div>
   )
 }
 

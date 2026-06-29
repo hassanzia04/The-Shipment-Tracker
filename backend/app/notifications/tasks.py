@@ -187,7 +187,7 @@ async def _send_do_expiry_alerts() -> None:
 
 def _build_do_expiry_html(expiring: list[dict], today) -> str:
     from app.notifications.daily_report import _th, _td
-    from app.core.config import settings
+    from app.config import settings
     import html as _html
     tracker_url = _html.escape(settings.FRONTEND_URL)
 

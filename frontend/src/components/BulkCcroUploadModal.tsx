@@ -23,6 +23,9 @@ interface RowState {
   hasActiveCcroTask: boolean
   uploadStatus: UploadStatus
   uploadResult: string | null
+  detectedDoDate: string | null
+  confirmedDoDate: string
+  doDateSaved: boolean
 }
 
 interface Props {
@@ -57,6 +60,9 @@ export function BulkCcroUploadModal({ onClose, onDone }: Props) {
       hasActiveCcroTask: false,
       uploadStatus: 'idle',
       uploadResult: null,
+      detectedDoDate: null,
+      confirmedDoDate: '',
+      doDateSaved: false,
     }))
     setRows(prev => [...prev, ...newRows])
 
@@ -80,6 +86,8 @@ export function BulkCcroUploadModal({ onClose, onDone }: Props) {
               hasExistingDoc: item.has_existing_doc,
               conflictBl: item.conflict_bl,
               hasActiveCcroTask: item.has_active_ccro_task,
+              detectedDoDate: item.detected_do_date ?? null,
+              confirmedDoDate: item.detected_do_date ?? '',
             }
           }
         })
@@ -168,7 +176,27 @@ export function BulkCcroUploadModal({ onClose, onDone }: Props) {
           return updated
         })
 
-        if (shipmentHadSuccess) confirmedShipmentIds.push(shipmentId)
+        if (shipmentHadSuccess) {
+          confirmedShipmentIds.push(shipmentId)
+          // Save DO validity dates for rows that had a detected date confirmed by the user
+          const rowsWithDoDate = rowIndexes.filter(i => {
+            const r = rows[i]
+            return r.confirmedDoDate && r.detectedDoDate
+          })
+          for (const i of rowsWithDoDate) {
+            const r = rows[i]
+            try {
+              await shipmentsApi.setDoValidity(r.shipmentId!, r.confirmedDoDate)
+              setRows(prev => {
+                const u = [...prev]
+                u[i] = { ...u[i], doDateSaved: true }
+                return u
+              })
+            } catch {
+              // non-blocking — user can update manually
+            }
+          }
+        }
       } catch (err: unknown) {
         const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
         const message = typeof detail === 'string' ? detail : 'Upload failed'
@@ -260,6 +288,8 @@ export function BulkCcroUploadModal({ onClose, onDone }: Props) {
   const pendingManual = rows.filter(r => !r.shipmentId && !r.analyzing && r.uploadStatus === 'idle').length
   const unresolvedCount = rows.filter(r => ['duplicate', 'error', 'not_detected'].includes(r.uploadStatus)).length
   const uniqueBLs = new Set(rows.filter(r => r.shipmentId && r.uploadStatus === 'idle' && !r.hasExistingDoc && !r.conflictBl && r.hasActiveCcroTask).map(r => r.blNumber)).size
+  const _today = new Date().toISOString().slice(0, 10)
+  const expiredDoCount = rows.filter(r => r.detectedDoDate && r.confirmedDoDate && r.confirmedDoDate < _today).length
   const isWorking = uploading || confirmingTransport
   const isSettledPhase = rows.some(r => r.uploadStatus !== 'idle' && r.uploadStatus !== 'uploading')
 
@@ -356,6 +386,7 @@ export function BulkCcroUploadModal({ onClose, onDone }: Props) {
                     onRemove={() => removeRow(idx)}
                     onMatch={(sid, bl, cc) => setManualMatch(idx, sid, bl, cc)}
                     onContainerChange={v => setContainerNumber(idx, v)}
+                    onDoDateChange={v => setRows(prev => { const u = [...prev]; u[idx] = { ...u[idx], confirmedDoDate: v }; return u })}
                   />
                 ))}
               </div>
@@ -382,9 +413,11 @@ export function BulkCcroUploadModal({ onClose, onDone }: Props) {
                 ? `${existingDocCount} file${existingDocCount !== 1 ? 's' : ''} already ${existingDocCount !== 1 ? 'have' : 'has'} a CCRO — remove to continue`
                 : pendingManual > 0
                 ? `${pendingManual} file${pendingManual !== 1 ? 's' : ''} need manual assignment — assign or remove before uploading`
+                : expiredDoCount > 0
+                ? `${expiredDoCount} file${expiredDoCount !== 1 ? 's have' : ' has'} an expired DO validity date — update before proceeding`
                 : `${readyCount} file${readyCount !== 1 ? 's' : ''} across ${uniqueBLs} BL${uniqueBLs !== 1 ? 's' : ''} ready`}
             </p>
-            {allAnalyzed && readyCount > 0 && pendingConfirm.length === 0 && (
+            {allAnalyzed && readyCount > 0 && pendingConfirm.length === 0 && expiredDoCount === 0 && (
               <p className="text-xs text-blue-600 dark:text-blue-400">
                 Transport &amp; DC will each receive one summary email
               </p>
@@ -400,7 +433,7 @@ export function BulkCcroUploadModal({ onClose, onDone }: Props) {
             {pendingConfirm.length > 0 ? (
               <button
                 onClick={() => doConfirm(pendingConfirm)}
-                disabled={unresolvedCount > 0 || isWorking}
+                disabled={unresolvedCount > 0 || expiredDoCount > 0 || isWorking}
                 className="px-4 py-2 text-sm rounded-lg bg-teal-600 text-white font-medium hover:bg-teal-700 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2"
               >
                 {isWorking && <Loader size={14} className="animate-spin" />}
@@ -409,7 +442,7 @@ export function BulkCcroUploadModal({ onClose, onDone }: Props) {
             ) : (
               <button
                 onClick={handleUpload}
-                disabled={readyCount === 0 || isWorking || !allAnalyzed || pendingManual > 0 || existingDocCount > 0 || conflictCount > 0 || noTaskCount > 0}
+                disabled={readyCount === 0 || isWorking || !allAnalyzed || pendingManual > 0 || existingDocCount > 0 || conflictCount > 0 || noTaskCount > 0 || expiredDoCount > 0}
                 className="px-4 py-2 text-sm rounded-lg bg-teal-600 text-white font-medium hover:bg-teal-700 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2"
               >
                 {isWorking && <Loader size={14} className="animate-spin" />}
@@ -428,11 +461,13 @@ function CcroFileRow({
   onRemove,
   onMatch,
   onContainerChange,
+  onDoDateChange,
 }: {
   row: RowState
   onRemove: () => void
   onMatch: (shipmentId: string, blNumber: string, containerCount: number | null) => void
   onContainerChange: (value: string) => void
+  onDoDateChange: (value: string) => void
 }) {
   const [searching, setSearching] = useState(false)
   const [loadingResults, setLoadingResults] = useState(false)
@@ -525,13 +560,18 @@ function CcroFileRow({
 
       {/* Result after upload */}
       {isSettled && row.uploadResult && (
-        <p className={clsx(
-          'text-xs ml-7',
-          row.uploadStatus === 'done' ? 'text-green-600 dark:text-green-400' :
-          'text-red-600 dark:text-red-400',
-        )}>
-          {row.uploadResult}
-        </p>
+        <div className="ml-7 space-y-0.5">
+          <p className={clsx(
+            'text-xs',
+            row.uploadStatus === 'done' ? 'text-green-600 dark:text-green-400' :
+            'text-red-600 dark:text-red-400',
+          )}>
+            {row.uploadResult}
+          </p>
+          {row.uploadStatus === 'done' && row.doDateSaved && (
+            <p className="text-xs text-blue-600 dark:text-blue-400">✓ DO validity date updated</p>
+          )}
+        </div>
       )}
 
       {/* Badges before upload */}
@@ -570,6 +610,30 @@ function CcroFileRow({
               <p className="text-xs text-red-600 dark:text-red-400">
                 No active CCRO task on this shipment — remove this file
               </p>
+            )}
+            {row.detectedDoDate && !row.doDateSaved && (() => {
+              const _today = new Date().toISOString().slice(0, 10)
+              const isExpired = !!row.confirmedDoDate && row.confirmedDoDate < _today
+              return (
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="text-xs text-blue-700 dark:text-blue-300">DO validity from CRO:</span>
+                  <input
+                    type="date"
+                    value={row.confirmedDoDate}
+                    onChange={e => onDoDateChange(e.target.value)}
+                    className={clsx(
+                      'text-xs border rounded px-2 py-0.5 bg-white dark:bg-gray-700 text-gray-900 dark:text-white',
+                      isExpired
+                        ? 'border-red-400 dark:border-red-500 ring-1 ring-red-300'
+                        : 'border-blue-300 dark:border-blue-600'
+                    )}
+                  />
+                  {isExpired && <span className="text-xs text-red-600 dark:text-red-400 font-medium">⚠ expired</span>}
+                </div>
+              )
+            })()}
+            {row.doDateSaved && (
+              <p className="text-xs text-green-600 dark:text-green-400 mt-1">✓ DO validity date updated</p>
             )}
           </div>
         ) : (

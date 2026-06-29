@@ -214,6 +214,7 @@ async def upload_document(
     file: UploadFile,
     task_id: uuid.UUID | None = None,
     container_id: uuid.UUID | None = None,
+    force_replace: bool = False,
 ) -> Document:
     await _assert_shipment_access(db, actor, shipment_id)
     raw = await file.read()
@@ -274,11 +275,27 @@ async def upload_document(
                 Document.doc_type == doc_type,
             )
         )
-        if dup_result.scalar_one_or_none():
-            raise HTTPException(
-                status_code=409,
-                detail=f"A {doc_type.value} document already exists for this shipment — delete it first before re-uploading.",
-            )
+        existing_docs = dup_result.scalars().all()
+        if existing_docs:
+            if force_replace:
+                for existing_single in existing_docs:
+                    if client:
+                        try:
+                            await _run_sync(
+                                client.delete_object,
+                                namespace_name=settings.OCI_NAMESPACE,
+                                bucket_name=settings.OCI_BUCKET_NAME,
+                                object_name=existing_single.oci_path,
+                            )
+                        except Exception:
+                            pass
+                    await db.delete(existing_single)
+                await db.flush()
+            else:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"A {doc_type.value} document already exists for this shipment — delete it first before re-uploading.",
+                )
 
     doc = Document(
         shipment_id=shipment_id,
@@ -900,6 +917,7 @@ async def analyze_permit_files(
         return [t.upper() for t in _re.split(r'[^A-Za-z0-9]', stem) if t]
 
     results = []
+    matched_shipment_ids: set[str] = set()
     for filename, raw in files:
         shipment = None
         detected_permit = None
@@ -927,6 +945,11 @@ async def analyze_permit_files(
         if shipment and not await _shipment_in_user_queue(db, shipment, actor, TaskType.PERMIT):
             shipment = None
 
+        if shipment and str(shipment.id) in matched_shipment_ids:
+            shipment = None
+        if shipment:
+            matched_shipment_ids.add(str(shipment.id))
+
         has_existing_doc = False
         if shipment:
             ex = await db.execute(
@@ -935,7 +958,7 @@ async def analyze_permit_files(
                     Document.doc_type == DocumentType.PERMIT,
                 )
             )
-            has_existing_doc = ex.scalar_one_or_none() is not None
+            has_existing_doc = ex.scalars().first() is not None
 
         results.append({
             "filename": filename,
@@ -959,6 +982,7 @@ async def analyze_bayan_files(
     from sqlalchemy.orm import selectinload
 
     results = []
+    matched_shipment_ids: set[str] = set()
     for filename, raw in files:
         shipment = None
         detected_bl = None
@@ -970,7 +994,7 @@ async def analyze_bayan_files(
                 .options(selectinload(Shipment.bayan_type))
                 .where(func.upper(Shipment.bl_number) == token)
             )
-            shipment = result.scalar_one_or_none()
+            shipment = result.scalars().first()
             if shipment:
                 detected_bl = token
                 break
@@ -984,10 +1008,15 @@ async def analyze_bayan_files(
                     .options(selectinload(Shipment.bayan_type))
                     .where(func.upper(Shipment.bl_number) == detected_bl)
                 )
-                shipment = result.scalar_one_or_none()
+                shipment = result.scalars().first()
 
         if shipment and not await _shipment_in_user_queue(db, shipment, actor, TaskType.BAYAN):
             shipment = None
+
+        if shipment and str(shipment.id) in matched_shipment_ids:
+            shipment = None
+        if shipment:
+            matched_shipment_ids.add(str(shipment.id))
 
         has_existing_doc = False
         if shipment:
@@ -997,7 +1026,7 @@ async def analyze_bayan_files(
                     Document.doc_type == DocumentType.BAYAN,
                 )
             )
-            has_existing_doc = ex.scalar_one_or_none() is not None
+            has_existing_doc = ex.scalars().first() is not None
 
         results.append({
             "filename": filename,
@@ -1086,11 +1115,13 @@ async def analyze_do_files(
     db: AsyncSession,
     files: list[tuple[str, bytes]],
     actor: User,
+    renewal: bool = False,
 ) -> list[dict]:
     from app.shipments.models import Shipment
     from sqlalchemy import func
 
     results = []
+    matched_shipment_ids: set[str] = set()
     for filename, raw in files:
         shipment = None
         detected_bl = None
@@ -1112,8 +1143,17 @@ async def analyze_do_files(
                 )
                 shipment = result.scalar_one_or_none()
 
-        if shipment and not await _shipment_in_user_queue(db, shipment, actor, TaskType.DO):
+        if shipment and not renewal and not await _shipment_in_user_queue(db, shipment, actor, TaskType.DO):
             shipment = None
+        if shipment and renewal:
+            from datetime import date as _d
+            if not shipment.do_validity_date or shipment.do_validity_date >= _d.today():
+                shipment = None
+
+        if shipment and str(shipment.id) in matched_shipment_ids:
+            shipment = None
+        if shipment:
+            matched_shipment_ids.add(str(shipment.id))
 
         detected_date = _extract_do_validity_date(filename, raw)
 
@@ -1125,7 +1165,7 @@ async def analyze_do_files(
                     Document.doc_type == DocumentType.DO,
                 )
             )
-            has_existing_doc = ex.scalar_one_or_none() is not None
+            has_existing_doc = ex.scalars().first() is not None
 
         results.append({
             "filename": filename,
@@ -1181,8 +1221,9 @@ async def analyze_ccro_files(
         if shipment and not await _shipment_in_user_queue(db, shipment, actor, TaskType.CCRO):
             shipment = None
 
-        # Extract container number using the validated ISO 6346 extractor
+        # Extract container number and DO validity date from PDF
         detected_container = _extract_container_number(raw)
+        detected_do_date = _extract_do_validity_date(filename, raw)
 
         # Check if a CCRO is already linked to this container (same shipment)
         has_existing_doc = False
@@ -1227,6 +1268,7 @@ async def analyze_ccro_files(
             "filename": filename,
             "detected_bl": detected_bl,
             "detected_container": detected_container,
+            "detected_do_date": detected_do_date,
             "shipment_id": shipment.id if shipment else None,
             "bl_number": shipment.bl_number if shipment else None,
             "container_count": shipment.container_count if shipment else None,

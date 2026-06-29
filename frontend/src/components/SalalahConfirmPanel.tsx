@@ -8,9 +8,10 @@ interface Props {
   shipmentId: string
   existingContainers: Container[]
   onConfirmed: () => void
+  blockReason?: string
 }
 
-export function SalalahConfirmPanel({ shipmentId, existingContainers, onConfirmed }: Props) {
+export function SalalahConfirmPanel({ shipmentId, existingContainers, onConfirmed, blockReason }: Props) {
   const [containerNumbers, setContainerNumbers] = useState<string[]>([])
   const [inputValue, setInputValue] = useState('')
   const [loadingSuggestions, setLoadingSuggestions] = useState(true)
@@ -129,9 +130,14 @@ export function SalalahConfirmPanel({ shipmentId, existingContainers, onConfirme
         </div>
       )}
 
+      {blockReason && (
+        <p className="text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-lg px-3 py-2">
+          ⚠ {blockReason}
+        </p>
+      )}
       <button
         onClick={handleConfirm}
-        disabled={submitting || loadingSuggestions || containerNumbers.length === 0}
+        disabled={submitting || loadingSuggestions || containerNumbers.length === 0 || !!blockReason}
         className="text-sm bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
       >
         {submitting ? 'Sending…' : 'Confirm & Send to Transport'}

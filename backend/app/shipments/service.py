@@ -832,6 +832,7 @@ async def list_shipments(
     do_validity_from=None,
     do_validity_to=None,
     permit_search: str | None = None,
+    do_expired: bool = False,
 ) -> tuple[list[Shipment], int]:
     from sqlalchemy import func as sa_func
 
@@ -1021,6 +1022,10 @@ async def list_shipments(
         base_where.append(Shipment.do_validity_date >= do_validity_from)
     if do_validity_to:
         base_where.append(Shipment.do_validity_date <= do_validity_to)
+    if do_expired:
+        from datetime import date as _date
+        base_where.append(Shipment.do_validity_date.isnot(None))
+        base_where.append(Shipment.do_validity_date < _date.today())
     if permit_search:
         base_where.append(Shipment.permit_ref.ilike(f"%{permit_search}%"))
 
@@ -1657,6 +1662,11 @@ async def confirm_salalah_transport(
         raise HTTPException(status_code=400, detail="Permit task must be completed first")
     if not container_numbers:
         raise HTTPException(status_code=400, detail="At least one container number is required")
+    if not shipment.do_validity_date:
+        raise HTTPException(status_code=400, detail="DO validity date must be set before sending to Transport")
+    from datetime import date as _d
+    if shipment.do_validity_date < _d.today():
+        raise HTTPException(status_code=400, detail="DO validity date has expired — update it before sending to Transport")
 
     # Register any container numbers not already on this shipment
     existing_numbers = {c.container_number.upper() for c in shipment.containers}
@@ -2654,12 +2664,15 @@ async def list_salalah_ready_shipments(db: AsyncSession, actor: User) -> list[di
     )
     shipments = list(result.scalars().unique().all())
 
+    from datetime import date as _date
+    today = _date.today()
     items = []
     for shipment in shipments:
         do_done = _task_completed(shipment, TaskType.DO)
         bayan_done = _task_completed(shipment, TaskType.BAYAN)
         permit_ok = shipment.permit_not_required or _task_completed(shipment, TaskType.PERMIT)
-        if not (do_done and bayan_done and permit_ok):
+        do_valid = shipment.do_validity_date is not None and shipment.do_validity_date >= today
+        if not (do_done and bayan_done and permit_ok and do_valid):
             continue
 
         items.append({
@@ -2869,6 +2882,7 @@ async def export_container_view(
     status: str | None = None,
     historical: bool = False,
     amls_only: bool = False,
+    do_expired: bool = False,
 ) -> bytes:
     from datetime import date as date_type
 
@@ -2877,6 +2891,10 @@ async def export_container_view(
         search=search, status_filter=status, from_date=from_date, to_date=to_date,
         amls_only=amls_only,
     )
+
+    if do_expired:
+        _today = date_type.today().isoformat()
+        rows = [r for r in rows if r.get('do_validity_date') and r['do_validity_date'] < _today]
 
     def _fmt(val) -> str:
         if val is None:
@@ -2937,6 +2955,7 @@ async def export_shipments_list(
     historical: bool = False,
     completed_from=None,
     completed_to=None,
+    do_expired: bool = False,
 ) -> bytes:
     from datetime import date as date_type
 
@@ -2960,6 +2979,7 @@ async def export_shipments_list(
         historical=historical,
         completed_from=completed_from,
         completed_to=completed_to,
+        do_expired=do_expired,
     )
 
     def _fmt(val) -> str:

@@ -68,6 +68,8 @@ function firstName(name: string | null | undefined): string {
 }
 
 function ProgressCell({ s }: { s: ShipmentListItem }) {
+  const today = new Date().toISOString().slice(0, 10)
+  const isDoExpired = !!s.do_validity_date && s.do_validity_date < today
   const items: [string, TaskStatus | boolean | null, string | null][] = [
     ['Docs',   s.docs_approved,                       null],
     ['Permit', s.permit_status as TaskStatus | null,  s.permit_user],
@@ -77,9 +79,12 @@ function ProgressCell({ s }: { s: ShipmentListItem }) {
   return (
     <div className="flex flex-col gap-0.5">
       {items.map(([label, status, user]) => (
-        <span key={label} className="flex items-center gap-1 text-[10px] text-gray-500 dark:text-gray-400 leading-tight whitespace-nowrap">
-          <StatusDot status={status} />
-          {label}
+        <span key={label} className={clsx('flex items-center gap-1 text-[10px] leading-tight whitespace-nowrap', label === 'DO' && isDoExpired ? 'text-amber-600 dark:text-amber-400' : 'text-gray-500 dark:text-gray-400')}>
+          {label === 'DO' && isDoExpired
+            ? <span className="w-2 h-2 rounded-full inline-block bg-amber-500" />
+            : <StatusDot status={status} />
+          }
+          {label === 'DO' && isDoExpired ? 'DO Expired' : label}
           {user && (
             <span className="text-gray-400 dark:text-gray-500">· {firstName(user)}</span>
           )}
@@ -111,7 +116,7 @@ function doValidityStyle(date: string | null): { color: string } {
 }
 
 function urgency(pullOutDate: string | null): { label: string; color: string; days: number | null } {
-  if (!pullOutDate) return { label: 'No date', color: 'text-gray-400', days: null }
+  if (!pullOutDate) return { label: 'No Pull Out Date', color: 'text-gray-400', days: null }
   const date = parseISO(pullOutDate)
   if (!isValid(date)) return { label: 'Invalid date', color: 'text-gray-400', days: null }
   const days = differenceInCalendarDays(date, new Date())
@@ -1823,6 +1828,8 @@ export function ShipmentList() {
   const [showBulkBayan, setShowBulkBayan] = useState(false)
   const [showBulkPermit, setShowBulkPermit] = useState(false)
   const [showBulkDO, setShowBulkDO] = useState(false)
+  const [showBulkDORenewal, setShowBulkDORenewal] = useState(false)
+  const [filterDoExpired, setFilterDoExpired] = useState(false)
   const [showBulkCcro, setShowBulkCcro] = useState(false)
   const [showBulkSalalah, setShowBulkSalalah] = useState(false)
   const [sort, setSort] = useState<SortState>({ column: null, dir: 'asc' })
@@ -1921,6 +1928,7 @@ export function ShipmentList() {
         historical: historical || undefined,
         completed_from: (historical && completedFrom) || undefined,
         completed_to: (historical && completedTo) || undefined,
+        do_expired: filterDoExpired || undefined,
       })
       const url = URL.createObjectURL(new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
       const a = document.createElement('a')
@@ -1959,7 +1967,7 @@ export function ShipmentList() {
   const isMyQueue = !historical && stageFilter === 'my_queue'
 
   const { data, isLoading } = useQuery({
-    queryKey: ['shipments', skip, debouncedSearch, stageFilter, missingDate, debouncedAmlsSearch, missingAmls, pullOutFrom, pullOutTo, sort.column, sort.dir, historical, completedFrom, completedTo, debouncedConsignee, debouncedPort, debouncedOffloading, debouncedBayanType, filterEtaFrom, filterEtaTo, filterDoValidityFrom, filterDoValidityTo, debouncedPermit],
+    queryKey: ['shipments', skip, debouncedSearch, stageFilter, missingDate, debouncedAmlsSearch, missingAmls, pullOutFrom, pullOutTo, sort.column, sort.dir, historical, completedFrom, completedTo, debouncedConsignee, debouncedPort, debouncedOffloading, debouncedBayanType, filterEtaFrom, filterEtaTo, filterDoValidityFrom, filterDoValidityTo, debouncedPermit, filterDoExpired],
     queryFn: () => shipmentsApi.list({
       skip,
       limit: PAGE_SIZE,
@@ -1985,6 +1993,7 @@ export function ShipmentList() {
       do_validity_from: filterDoValidityFrom || undefined,
       do_validity_to: filterDoValidityTo || undefined,
       permit_search: debouncedPermit || undefined,
+      do_expired: filterDoExpired || undefined,
     }).then(r => r.data),
     placeholderData: prev => prev,
   })
@@ -2098,6 +2107,13 @@ export function ShipmentList() {
           onDone={() => qc.invalidateQueries({ queryKey: ['shipments'] })}
         />
       )}
+      {showBulkDORenewal && (
+        <BulkDOUploadModal
+          onClose={() => setShowBulkDORenewal(false)}
+          onDone={() => qc.invalidateQueries({ queryKey: ['shipments'] })}
+          renewalMode
+        />
+      )}
       {showBulkCcro && (
         <BulkCcroUploadModal
           onClose={() => setShowBulkCcro(false)}
@@ -2131,7 +2147,7 @@ export function ShipmentList() {
 
       {/* PRO: My Tasks / All quick-filter chips (active view only) */}
       {isPRO && !historical && (
-        <div className="flex items-center gap-2 mb-3">
+        <div className="flex items-center gap-2 mb-3 flex-wrap">
           <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">Show:</span>
           <button
             onClick={() => setStageFilter('my_queue')}
@@ -2155,6 +2171,25 @@ export function ShipmentList() {
           >
             All Shipments
           </button>
+          <button
+            onClick={() => setFilterDoExpired(v => !v)}
+            className={clsx(
+              'flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors',
+              filterDoExpired
+                ? 'bg-red-600 text-white border-red-600'
+                : 'border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+            )}
+          >
+            DO Expired
+          </button>
+          {filterDoExpired && (
+            <button
+              onClick={() => setShowBulkDORenewal(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors"
+            >
+              ↻ Renew DOs
+            </button>
+          )}
         </div>
       )}
 
@@ -2223,7 +2258,28 @@ export function ShipmentList() {
               )}
             >
               <Calendar size={14} />
-              No date
+              No Pull Out Date
+            </button>
+          )}
+          {!historical && isFFD && (
+            <button
+              onClick={() => setFilterDoExpired(v => !v)}
+              className={clsx(
+                'flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border transition-colors whitespace-nowrap',
+                filterDoExpired
+                  ? 'bg-red-600 text-white border-red-600'
+                  : 'border-gray-300 dark:border-gray-600 text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700'
+              )}
+            >
+              DO Expired
+            </button>
+          )}
+          {!historical && isFFD && filterDoExpired && (
+            <button
+              onClick={() => setShowBulkDORenewal(true)}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors whitespace-nowrap"
+            >
+              ↻ Renew DOs
             </button>
           )}
 

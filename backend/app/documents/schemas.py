@@ -21,6 +21,7 @@ class DocumentOut(BaseModel):
 
 class DocumentUploadOut(DocumentOut):
     bl_warning: str | None = None
+    detected_do_date: str | None = None
 
 
 class DocumentUrlOut(BaseModel):
@@ -61,6 +62,7 @@ class CcroAnalysisItem(BaseModel):
     filename: str
     detected_bl: str | None
     detected_container: str | None
+    detected_do_date: str | None = None
     shipment_id: UUID | None
     bl_number: str | None
     container_count: int | None

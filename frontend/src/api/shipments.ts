@@ -16,7 +16,7 @@ export interface PaginatedContainerView {
 }
 
 export const shipmentsApi = {
-  list: (params?: { skip?: number; limit?: number; search?: string; stage?: string; my_queue?: boolean; task_type_filter?: string; missing_date?: boolean; amls_search?: string; missing_amls?: boolean; pull_out_from?: string; pull_out_to?: string; sort_by?: string; sort_dir?: string; historical?: boolean; completed_from?: string; completed_to?: string; consignee_search?: string; port_search?: string; offloading_search?: string; bayan_type_search?: string; eta_from?: string; eta_to?: string; do_validity_from?: string; do_validity_to?: string; permit_search?: string }) =>
+  list: (params?: { skip?: number; limit?: number; search?: string; stage?: string; my_queue?: boolean; task_type_filter?: string; missing_date?: boolean; amls_search?: string; missing_amls?: boolean; pull_out_from?: string; pull_out_to?: string; sort_by?: string; sort_dir?: string; historical?: boolean; completed_from?: string; completed_to?: string; consignee_search?: string; port_search?: string; offloading_search?: string; bayan_type_search?: string; eta_from?: string; eta_to?: string; do_validity_from?: string; do_validity_to?: string; permit_search?: string; do_expired?: boolean }) =>
     api.get<PaginatedShipments>('/shipments', { params }),
 
   get: (id: string) => api.get<Shipment>(`/shipments/${id}`),
@@ -189,10 +189,10 @@ export const shipmentsApi = {
   exportContainerBilling: (id: string, params?: { search?: string; from_date?: string; to_date?: string }) =>
     api.get(`/shipments/${id}/container-billing-export`, { params, responseType: 'blob' }),
 
-  containerViewExport: (params?: { search?: string; from_date?: string; to_date?: string; status?: string; historical?: boolean; amls_only?: boolean }) =>
+  containerViewExport: (params?: { search?: string; from_date?: string; to_date?: string; status?: string; historical?: boolean; amls_only?: boolean; do_expired?: boolean }) =>
     api.get('/shipments/container-view-export', { params, responseType: 'blob' }),
 
-  blExport: (params?: { search?: string; stage?: string; my_queue?: boolean; missing_date?: boolean; amls_search?: string; missing_amls?: boolean; pull_out_from?: string; pull_out_to?: string; historical?: boolean; completed_from?: string; completed_to?: string }) =>
+  blExport: (params?: { search?: string; stage?: string; my_queue?: boolean; missing_date?: boolean; amls_search?: string; missing_amls?: boolean; pull_out_from?: string; pull_out_to?: string; historical?: boolean; completed_from?: string; completed_to?: string; do_expired?: boolean }) =>
     api.get('/shipments/bl-export', { params, responseType: 'blob' }),
 
   bulkUpdatePullOutDate: (shipment_ids: string[], pull_out_date: string) =>
