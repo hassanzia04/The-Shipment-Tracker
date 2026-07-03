@@ -243,11 +243,25 @@ function MiscFileRow({
   const [results, setResults] = useState<ShipmentListItem[]>([])
   const searchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  // Misc docs can attach to any shipment, including completed ones — search
+  // active and history in parallel and merge
+  async function fetchShipments(q?: string, limit = 8): Promise<ShipmentListItem[]> {
+    const [active, completed] = await Promise.all([
+      shipmentsApi.list({ search: q, limit }),
+      shipmentsApi.list({ search: q, limit, historical: true }).catch(() => null),
+    ])
+    const seen = new Set<string>()
+    const merged: ShipmentListItem[] = []
+    for (const s of [...active.data.items, ...(completed?.data.items ?? [])]) {
+      if (!seen.has(s.id)) { seen.add(s.id); merged.push(s) }
+    }
+    return merged.slice(0, limit + 2)
+  }
+
   async function fetchInitial() {
     setLoadingResults(true)
     try {
-      const { data } = await shipmentsApi.list({ limit: 10 })
-      setResults(data.items)
+      setResults(await fetchShipments(undefined, 10))
     } catch {
       setResults([])
     } finally {
@@ -267,8 +281,7 @@ function MiscFileRow({
     setLoadingResults(true)
     searchTimeout.current = setTimeout(async () => {
       try {
-        const { data } = await shipmentsApi.list({ search: q, limit: 8 })
-        setResults(data.items)
+        setResults(await fetchShipments(q))
       } catch {
         setResults([])
       } finally {
