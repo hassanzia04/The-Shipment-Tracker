@@ -139,7 +139,7 @@ export function Layout({ children }: Props) {
           <LogOut size={16} /> Sign out
         </button>
         <p className="text-center text-[10px] text-gray-400 dark:text-gray-600 mt-2 cursor-default select-none">
-          v1.1.0-beta
+          v2.0.0
         </p>
         <p className="text-center text-[10px] text-gray-400 dark:text-gray-600 cursor-default select-none">
           Developed by Bayanat Technology
