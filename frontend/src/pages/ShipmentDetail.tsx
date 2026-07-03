@@ -1143,8 +1143,10 @@ export function ShipmentDetail() {
         </div>
       )}
 
-      {/* FFD: recall from Transport (TRANSPORT stage, no trucks assigned yet) */}
-      {team === 'FFD' && stage === 'TRANSPORT' && (
+      {/* FFD: recall from Transport (TRANSPORT stage, no trucks assigned yet —
+          neither Transport's AMLS trucks nor FFD-assigned outsourced trucks) */}
+      {team === 'FFD' && stage === 'TRANSPORT' &&
+       !shipment.containers.some(c => c.truck_id || c.outsourced_truck_id) && (
         <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-xl p-4">
           {!showRecall ? (
             <button

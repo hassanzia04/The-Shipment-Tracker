@@ -1782,7 +1782,8 @@ async def recall_from_transport(db: AsyncSession, shipment_id: uuid.UUID, actor:
     _assert_stage(shipment, ShipmentStage.TRANSPORT)
 
     for container in shipment.containers:
-        if container.truck_id is not None:
+        # Outsourced trucks (FFD-assigned after a CCRO return) block recall just like AMLS trucks
+        if container.truck_id is not None or container.outsourced_truck_id is not None:
             raise HTTPException(
                 status_code=400,
                 detail=f"Cannot recall — container {container.container_number} already has a truck assigned",
