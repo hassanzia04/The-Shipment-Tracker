@@ -2966,7 +2966,7 @@ async def export_container_view(
     ws = wb.active
     ws.title = "Containers"
     headers = [
-        "SR#", "Container Number", "BL Number", "Status", "DO Validity Date",
+        "SR#", "Container Number", "BL Number", "Customer", "Status", "DO Validity Date",
         "Port of Loading", "Planned Pull Out Date", "Actual Pull Out Date", "Offloading Date",
         "Truck Plate", "Driver", "Contractor", "Offloading Point", "ETA / Arrived",
     ]
@@ -2979,6 +2979,7 @@ async def export_container_view(
             idx,
             r["container_number"],
             r["bl_number"],
+            r.get("company_name") or "",
             _fmt(r["status"]),
             _fmt(r.get("do_validity_date")),
             r.get("loading_port_name") or "",
@@ -3063,7 +3064,7 @@ async def export_shipments_list(
     ws = wb.active
     ws.title = "Shipments"
     headers = [
-        "SR#", "BL Number", "Invoice Number", "Stage", "Shipping Line", "Port of Loading",
+        "SR#", "BL Number", "Invoice Number", "Customer", "Stage", "Shipping Line", "Port of Loading",
         "Offloading Location", "Bayan Type", "Planned Pull out", "Actual Pull out", "DO Validity Date",
         "AMLS Job#", "Permit", "DO", "Bayan", "Created At",
     ]
@@ -3082,6 +3083,7 @@ async def export_shipments_list(
             idx,
             s.bl_number,
             s.invoice_number,
+            s.company_name or "",
             s.current_stage.value,
             s.shipping_line.name if s.shipping_line else "",
             s.loading_port.name if s.loading_port else "",
