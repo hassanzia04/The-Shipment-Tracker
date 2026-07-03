@@ -924,6 +924,25 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
   const [permitRefValue, setPermitRefValue] = useState('')
   const [savingPermitId, setSavingPermitId] = useState<string | null>(null)
 
+  // Permit complete from the list: enabled once the permit number is filled, inline confirm
+  const [confirmPermitCompleteId, setConfirmPermitCompleteId] = useState<string | null>(null)
+  const [savingPermitCompleteId, setSavingPermitCompleteId] = useState<string | null>(null)
+
+  async function completePermitTask(s: ShipmentListItem) {
+    if (!s.permit_task_id) return
+    setSavingPermitCompleteId(s.id)
+    try {
+      await shipmentsApi.completeTask(s.id, s.permit_task_id)
+      toast.success(`Permit task completed — ${s.bl_number}`)
+      setConfirmPermitCompleteId(null)
+      qc.invalidateQueries({ queryKey: ['shipments'] })
+    } catch (e: any) {
+      toast.error(e.response?.data?.detail || 'Failed to complete permit task')
+    } finally {
+      setSavingPermitCompleteId(null)
+    }
+  }
+
   // Permit "not required" from the list: confirm inline, then fire after a 5s undo window
   const [confirmPermitNaId, setConfirmPermitNaId] = useState<string | null>(null)
   const [pendingPermitNaIds, setPendingPermitNaIds] = useState<Set<string>>(new Set())
@@ -1546,14 +1565,44 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                                     <X size={12} />
                                   </button>
                                 </span>
+                              ) : confirmPermitCompleteId === s.id ? (
+                                <span className="flex items-center gap-0.5">
+                                  <span className="text-[10px] font-medium text-green-600 dark:text-green-400 whitespace-nowrap">Complete task?</span>
+                                  <button
+                                    onClick={() => completePermitTask(s)}
+                                    disabled={savingPermitCompleteId === s.id}
+                                    className="p-1 text-green-600 hover:text-green-700 disabled:opacity-40"
+                                    title="Confirm — complete the Permit task"
+                                  >
+                                    <CheckCircle size={14} />
+                                  </button>
+                                  <button
+                                    onClick={() => setConfirmPermitCompleteId(null)}
+                                    disabled={savingPermitCompleteId === s.id}
+                                    className="p-1 text-gray-400 hover:text-gray-600 disabled:opacity-40"
+                                    title="Cancel"
+                                  >
+                                    <X size={12} />
+                                  </button>
+                                </span>
                               ) : (
-                                <button
-                                  onClick={() => setConfirmPermitNaId(s.id)}
-                                  className="text-[10px] font-semibold px-1.5 py-0.5 rounded border border-dashed border-gray-300 dark:border-gray-600 text-gray-400 dark:text-gray-500 hover:text-amber-600 dark:hover:text-amber-400 hover:border-amber-400 dark:hover:border-amber-500 transition-colors whitespace-nowrap"
-                                  title="Mark permit as not required and complete the Permit task"
-                                >
-                                  N/A
-                                </button>
+                                <>
+                                  <button
+                                    onClick={() => setConfirmPermitNaId(s.id)}
+                                    className="text-[10px] font-semibold px-1.5 py-0.5 rounded border border-dashed border-gray-300 dark:border-gray-600 text-gray-400 dark:text-gray-500 hover:text-amber-600 dark:hover:text-amber-400 hover:border-amber-400 dark:hover:border-amber-500 transition-colors whitespace-nowrap"
+                                    title="Mark permit as not required and complete the Permit task"
+                                  >
+                                    N/A
+                                  </button>
+                                  <button
+                                    onClick={() => setConfirmPermitCompleteId(s.id)}
+                                    disabled={!s.permit_ref}
+                                    className="text-[10px] font-semibold px-1.5 py-0.5 rounded border border-dashed transition-colors whitespace-nowrap border-gray-300 dark:border-gray-600 text-gray-400 dark:text-gray-500 hover:text-green-600 dark:hover:text-green-400 hover:border-green-400 dark:hover:border-green-500 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-gray-400 disabled:hover:border-gray-300 dark:disabled:hover:border-gray-600"
+                                    title={s.permit_ref ? 'Complete the Permit task (permit number is filled)' : 'Enter the Permit No first to complete the task'}
+                                  >
+                                    Complete
+                                  </button>
+                                </>
                               )
                             )}
                           </div>

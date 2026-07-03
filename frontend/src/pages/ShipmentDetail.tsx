@@ -1396,7 +1396,8 @@ function TaskRow({ task, shipmentId, userTeam, userId, proUsers, doValidityDate,
     ? documents.find(d => d.doc_type === requiredDocType)
     : undefined
   const doValidityMissing = task.task_type === 'DO' && !doValidityDate
-  const canComplete = !isCcro && (!requiredDocType || !!uploadedDoc || (task.task_type === 'PERMIT' && permitNotRequired)) && !doValidityMissing
+  // Permit task may complete without a document when a permit number is filled
+  const canComplete = !isCcro && (!requiredDocType || !!uploadedDoc || (task.task_type === 'PERMIT' && (permitNotRequired || !!permitRef))) && !doValidityMissing
   // Allow re-upload if task is done but doc was deleted afterwards
   const canReupload = task.status === 'COMPLETED' && task.assigned_team === userTeam && requiredDocType && !uploadedDoc && !isCcro
 
@@ -1554,6 +1555,11 @@ function TaskRow({ task, shipmentId, userTeam, userId, proUsers, doValidityDate,
                   <input type="checkbox" checked={permitNotRequired} onChange={e => setPermitNotRequired(e.target.checked)} className="rounded" />
                   Permit not required for this shipment
                 </label>
+              )}
+              {task.task_type === 'PERMIT' && permitRef && (
+                <p className="text-xs text-green-600 dark:text-green-400">
+                  Permit No {permitRef} is entered — the task can be completed without uploading a document.
+                </p>
               )}
             </div>
           )}
