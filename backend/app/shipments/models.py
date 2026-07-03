@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, date, timezone
-from sqlalchemy import String, Boolean, DateTime, Date, Integer, Text, ForeignKey, Enum as SAEnum
+from sqlalchemy import String, Boolean, DateTime, Date, Integer, Text, ForeignKey, UniqueConstraint, Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 from app.database import Base
@@ -15,10 +15,15 @@ from app.enums import (
 
 class Shipment(Base):
     __tablename__ = "shipments"
+    # BL numbers are carrier-issued and globally unique; invoice numbers come from
+    # each customer's own systems, so they are only unique within a company.
+    __table_args__ = (
+        UniqueConstraint("company_id", "invoice_number", name="uq_shipments_company_invoice"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     bl_number: Mapped[str] = mapped_column(String(100), nullable=False, index=True, unique=True)
-    invoice_number: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    invoice_number: Mapped[str] = mapped_column(String(100), nullable=False)
     customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"), nullable=False, index=True)
     current_stage: Mapped[ShipmentStage] = mapped_column(

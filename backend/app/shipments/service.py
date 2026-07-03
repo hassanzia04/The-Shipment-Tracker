@@ -154,19 +154,23 @@ async def create_shipment(
     bayan_type_id=None, eta_at_port=None, consignee_id=None,
     remark: str | None = None,
 ) -> Shipment:
+    if actor.company_id is None:
+        raise HTTPException(status_code=403, detail="Only customer accounts linked to a company can create shipments")
+
     existing_bl = await db.execute(select(Shipment).where(Shipment.bl_number == bl_number))
     if existing_bl.scalar_one_or_none():
         raise HTTPException(status_code=400, detail=f"A shipment with BL number '{bl_number}' already exists")
 
-    existing_inv = await db.execute(select(Shipment).where(Shipment.invoice_number == invoice_number))
+    # Invoice numbers are unique per company, not globally
+    existing_inv = await db.execute(select(Shipment).where(
+        Shipment.invoice_number == invoice_number,
+        Shipment.company_id == actor.company_id,
+    ))
     if existing_inv.scalar_one_or_none():
         raise HTTPException(status_code=400, detail=f"A shipment with invoice number '{invoice_number}' already exists")
 
     if container_count < 1 or container_count > 99:
         raise HTTPException(status_code=400, detail="Container count must be between 1 and 99")
-
-    if actor.company_id is None:
-        raise HTTPException(status_code=403, detail="Only customer accounts linked to a company can create shipments")
 
     shipment = Shipment(
         bl_number=bl_number,
@@ -332,7 +336,11 @@ async def update_shipment(db: AsyncSession, shipment_id: uuid.UUID, actor: User,
             raise HTTPException(status_code=400, detail="Invoice number cannot be empty")
         fields['invoice_number'] = new_inv
         if new_inv != shipment.invoice_number:
-            clash = await db.execute(select(Shipment.id).where(Shipment.invoice_number == new_inv, Shipment.id != shipment_id))
+            clash = await db.execute(select(Shipment.id).where(
+                Shipment.invoice_number == new_inv,
+                Shipment.company_id == shipment.company_id,
+                Shipment.id != shipment_id,
+            ))
             if clash.scalar_one_or_none():
                 raise HTTPException(status_code=400, detail="A shipment with this invoice number already exists")
 
@@ -2423,7 +2431,10 @@ async def import_shipments_from_excel(
                 errors.append(f"Row {i}: BL number '{bl_num}' already exists — skipped")
                 skipped += 1
                 continue
-            dup_inv = await db.execute(select(Shipment).where(Shipment.invoice_number == inv_num))
+            dup_inv = await db.execute(select(Shipment).where(
+                Shipment.invoice_number == inv_num,
+                Shipment.company_id == actor.company_id,
+            ))
             if dup_inv.scalar_one_or_none():
                 errors.append(f"Row {i}: Invoice number '{inv_num}' already exists — skipped")
                 skipped += 1
