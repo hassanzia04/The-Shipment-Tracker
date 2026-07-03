@@ -1592,7 +1592,7 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                                     className="text-[10px] font-semibold px-1.5 py-0.5 rounded border border-dashed border-gray-300 dark:border-gray-600 text-gray-400 dark:text-gray-500 hover:text-amber-600 dark:hover:text-amber-400 hover:border-amber-400 dark:hover:border-amber-500 transition-colors whitespace-nowrap"
                                     title="Mark permit as not required and complete the Permit task"
                                   >
-                                    N/A
+                                    Permit Not Required
                                   </button>
                                   <button
                                     onClick={() => setConfirmPermitCompleteId(s.id)}
