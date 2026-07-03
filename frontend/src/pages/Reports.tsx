@@ -45,9 +45,37 @@ const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep
 
 // ── Reusable primitives ────────────────────────────────────────────────────────
 
-function KpiCard({ label, value, sub, icon, accent }: {
+// Period-over-period change. mode 'percent' = relative change; 'points' = absolute
+// difference (for values that are already percentages). invert = lower is better.
+function DeltaBadge({ current, previous, invert = false, mode = 'percent' }: {
+  current: number | null | undefined
+  previous: number | null | undefined
+  invert?: boolean
+  mode?: 'percent' | 'points'
+}) {
+  if (current == null || previous == null) return null
+  if (mode === 'percent' && previous === 0) return null
+  const diff = mode === 'percent'
+    ? Math.round(((current - previous) / previous) * 100)
+    : Math.round(current - previous)
+  if (diff === 0) {
+    return <p className="text-[11px] text-gray-400 dark:text-gray-500 mt-1">= same as previous period</p>
+  }
+  const up = diff > 0
+  const good = invert ? !up : up
+  return (
+    <p className={clsx(
+      'text-[11px] font-semibold mt-1',
+      good ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500 dark:text-red-400'
+    )}>
+      {up ? '▲' : '▼'} {Math.abs(diff)}{mode === 'points' ? 'pp' : '%'} vs previous period
+    </p>
+  )
+}
+
+function KpiCard({ label, value, sub, icon, accent, delta }: {
   label: string; value: string | number; sub?: string
-  icon: React.ReactNode; accent: string
+  icon: React.ReactNode; accent: string; delta?: React.ReactNode
 }) {
   return (
     <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-xl p-5 shadow-sm flex flex-col gap-3">
@@ -58,6 +86,7 @@ function KpiCard({ label, value, sub, icon, accent }: {
       <div>
         <p className="text-3xl font-bold text-gray-900 dark:text-white leading-none">{value}</p>
         {sub && <p className="text-xs text-gray-400 dark:text-gray-500 mt-1.5">{sub}</p>}
+        {delta}
       </div>
     </div>
   )
@@ -574,6 +603,10 @@ function OperationalReports({ data, fromLabel, toLabel, onSelectCompany }: { dat
   const s = data.summary
   const onTimeTotal = (s.on_time + s.late) || 1
   const onTimePct   = Math.round((s.on_time / onTimeTotal) * 100)
+  const prev = data.previous_summary
+  const prevOnTimePct = prev && (prev.on_time + prev.late) > 0
+    ? Math.round((prev.on_time / (prev.on_time + prev.late)) * 100)
+    : null
 
   const rejAtSubmission = data.rejection?.rejected    || 0
   const rejMidProcess   = data.rejection?.mid_process || 0
@@ -601,6 +634,7 @@ function OperationalReports({ data, fromLabel, toLabel, onSelectCompany }: { dat
           sub={`${s.total_completed} completed · ${s.total_active} active`}
           icon={<Package size={16} className="text-blue-600" />}
           accent="bg-blue-50 dark:bg-blue-900/30"
+          delta={<DeltaBadge current={s.total_shipments} previous={prev?.total_shipments} />}
         />
         <KpiCard
           label="Avg Cycle Time"
@@ -608,6 +642,7 @@ function OperationalReports({ data, fromLabel, toLabel, onSelectCompany }: { dat
           sub="creation → completion"
           icon={<Clock size={16} className="text-purple-600" />}
           accent="bg-purple-50 dark:bg-purple-900/30"
+          delta={<DeltaBadge current={s.avg_cycle_days} previous={prev?.avg_cycle_days} invert />}
         />
         <KpiCard
           label="On-Time Delivery"
@@ -615,6 +650,7 @@ function OperationalReports({ data, fromLabel, toLabel, onSelectCompany }: { dat
           sub={`${s.on_time} on-time · ${s.late} late`}
           icon={<CheckCircle size={16} className="text-emerald-600" />}
           accent="bg-emerald-50 dark:bg-emerald-900/30"
+          delta={<DeltaBadge current={(s.on_time + s.late) > 0 ? onTimePct : null} previous={prevOnTimePct} mode="points" />}
         />
         <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-xl p-5 shadow-sm flex flex-col gap-3">
           <div className="flex items-start justify-between">
@@ -634,12 +670,14 @@ function OperationalReports({ data, fromLabel, toLabel, onSelectCompany }: { dat
           value={(s.containers_returned ?? 0).toLocaleString()}
           icon={<Boxes size={16} className="text-teal-600" />}
           accent="bg-teal-50 dark:bg-teal-900/30"
+          delta={<DeltaBadge current={s.containers_returned ?? 0} previous={prev?.containers_returned} />}
         />
         <KpiCard
           label="Containers Moved by Customer"
           value={(s.containers_closed ?? 0).toLocaleString()}
           icon={<Boxes size={16} className="text-orange-600" />}
           accent="bg-orange-50 dark:bg-orange-900/30"
+          delta={<DeltaBadge current={s.containers_closed ?? 0} previous={prev?.containers_closed} />}
         />
       </div>
 

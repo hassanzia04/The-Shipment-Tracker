@@ -856,6 +856,94 @@ async def reports(
         )
     )).scalar() or 0
 
+    # ── Previous period of equal length (for KPI deltas) ─────────────────────
+    def _ym_shift(year: int, month: int, delta: int) -> tuple[int, int]:
+        idx = year * 12 + (month - 1) + delta
+        return idx // 12, idx % 12 + 1
+
+    months_span = (to_year * 12 + to_month) - (from_year * 12 + from_month) + 1
+    prev_from_y, prev_from_m = _ym_shift(from_year, from_month, -months_span)
+    prev_to_y, prev_to_m = _ym_shift(from_year, from_month, -1)
+    prev_from_dt = datetime(prev_from_y, prev_from_m, 1, tzinfo=timezone.utc)
+    prev_to_dt = datetime(prev_to_y, prev_to_m, cal_mod.monthrange(prev_to_y, prev_to_m)[1], 23, 59, 59, tzinfo=timezone.utc)
+    prev_filter = base_filter + [Shipment.created_at >= prev_from_dt, Shipment.created_at <= prev_to_dt]
+
+    prev_total_shipments = (await db.execute(
+        select(func.count(Shipment.id)).where(*prev_filter)
+    )).scalar() or 0
+    prev_total_completed = (await db.execute(
+        select(func.count(Shipment.id)).where(
+            Shipment.current_stage == ShipmentStage.COMPLETED, *prev_filter
+        )
+    )).scalar() or 0
+    prev_avg_seconds = (await db.execute(
+        select(func.avg(
+            func.extract("epoch", Shipment.completed_at) -
+            func.extract("epoch", Shipment.created_at)
+        )).where(Shipment.completed_at != None, *prev_filter)
+    )).scalar()
+    prev_on_time_result = (await db.execute(
+        select(
+            func.count(Shipment.id).label("total"),
+            func.sum(_case(
+                (
+                    _or(
+                        Shipment.pull_out_date == None,
+                        _cast(max_pullout_sq.c.max_actual_pullout, _Date) <= Shipment.pull_out_date,
+                    ),
+                    1,
+                ),
+                else_=0,
+            )).label("on_time"),
+        )
+        .join(max_pullout_sq, max_pullout_sq.c.shipment_id == Shipment.id)
+        .where(
+            Shipment.current_stage == ShipmentStage.COMPLETED,
+            max_pullout_sq.c.max_actual_pullout != None,
+            *prev_filter,
+        )
+    )).one()
+    prev_on_time = int(prev_on_time_result.on_time or 0)
+    prev_late = int(prev_on_time_result.total or 0) - prev_on_time
+    prev_containers_returned = (await db.execute(
+        select(func.count(Container.id))
+        .select_from(Container)
+        .join(Shipment, Shipment.id == Container.shipment_id)
+        .where(
+            Container.status == ContainerStatus.RETURNED,
+            Container.outsourced_truck_id.is_(None),
+            *prev_filter,
+        )
+    )).scalar() or 0
+    prev_containers_closed = (await db.execute(
+        select(func.count(Container.id))
+        .select_from(Container)
+        .join(Shipment, Shipment.id == Container.shipment_id)
+        .where(
+            or_(
+                Container.status == ContainerStatus.CLOSED,
+                and_(
+                    Container.outsourced_truck_id.isnot(None),
+                    Container.status == ContainerStatus.RETURNED,
+                ),
+            ),
+            *prev_filter,
+        )
+    )).scalar() or 0
+    previous_summary = {
+        "from_year": prev_from_y,
+        "from_month": prev_from_m,
+        "to_year": prev_to_y,
+        "to_month": prev_to_m,
+        "total_shipments": prev_total_shipments,
+        "total_completed": prev_total_completed,
+        "avg_cycle_days": round(prev_avg_seconds / 86400, 1) if prev_avg_seconds else None,
+        "on_time": prev_on_time,
+        "late": prev_late,
+        "containers_returned": prev_containers_returned,
+        "containers_closed": prev_containers_closed,
+    }
+
     # ── Per-company breakdown (internal users viewing all customers only) ─────
     by_company = None
     if effective_company is None and company_scope(actor) is None:
@@ -962,6 +1050,7 @@ async def reports(
             "containers_returned": containers_returned,
             "containers_closed": containers_closed,
         },
+        "previous_summary": previous_summary,
         "by_company": by_company,
     }
 
