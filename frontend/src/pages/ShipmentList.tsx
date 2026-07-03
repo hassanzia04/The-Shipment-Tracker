@@ -881,6 +881,59 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
   const [permitRefValue, setPermitRefValue] = useState('')
   const [savingPermitId, setSavingPermitId] = useState<string | null>(null)
 
+  // Permit "not required" from the list: confirm inline, then fire after a 5s undo window
+  const [confirmPermitNaId, setConfirmPermitNaId] = useState<string | null>(null)
+  const [pendingPermitNaIds, setPendingPermitNaIds] = useState<Set<string>>(new Set())
+  const pendingPermitNaRef = useRef<Map<string, { timer: number; fire: () => void }>>(new Map())
+
+  useEffect(() => () => {
+    // Flush pending completions on unmount so a confirmed action isn't silently lost
+    pendingPermitNaRef.current.forEach(({ timer, fire }) => { clearTimeout(timer); fire() })
+    pendingPermitNaRef.current.clear()
+  }, [])
+
+  function schedulePermitNotRequired(s: ShipmentListItem) {
+    const taskId = s.permit_task_id
+    if (!taskId || pendingPermitNaRef.current.has(s.id)) return
+    setConfirmPermitNaId(null)
+    setPendingPermitNaIds(prev => new Set(prev).add(s.id))
+
+    const clearPending = () => {
+      pendingPermitNaRef.current.delete(s.id)
+      setPendingPermitNaIds(prev => { const next = new Set(prev); next.delete(s.id); return next })
+    }
+    const fire = () => {
+      clearPending()
+      shipmentsApi.completeTask(s.id, taskId, undefined, true)
+        .then(() => {
+          toast.success(`Permit marked not required — ${s.bl_number}`)
+          qc.invalidateQueries({ queryKey: ['shipments'] })
+        })
+        .catch((e: any) => toast.error(e.response?.data?.detail || `Failed to mark permit not required — ${s.bl_number}`))
+    }
+    const toastId = toast(
+      t => (
+        <span className="flex items-center gap-3">
+          <span>Permit not required — {s.bl_number}</span>
+          <button
+            onClick={() => {
+              const pending = pendingPermitNaRef.current.get(s.id)
+              if (pending) clearTimeout(pending.timer)
+              clearPending()
+              toast.dismiss(t.id)
+            }}
+            className="font-semibold text-blue-600 dark:text-blue-400 hover:underline"
+          >
+            Undo
+          </button>
+        </span>
+      ),
+      { duration: 5000 }
+    )
+    const timer = window.setTimeout(() => { toast.dismiss(toastId); fire() }, 5000)
+    pendingPermitNaRef.current.set(s.id, { timer, fire })
+  }
+
   const [holdPanelId, setHoldPanelId] = useState<string | null>(null)
 
   async function savePermitRef(shipmentId: string) {
@@ -1358,7 +1411,16 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                       )}
                     </td>
                     <td className={colCls('permit_no', 'hidden lg:table-cell px-3 py-3')}>
-                      {isPRO && s.permit_assigned_to_id === currentUserId ? (
+                      {s.permit_not_required ? (
+                        <span
+                          className="text-xs italic font-medium text-amber-600 dark:text-amber-400"
+                          title="Permit not required for this shipment"
+                        >
+                          Not required
+                        </span>
+                      ) : pendingPermitNaIds.has(s.id) ? (
+                        <span className="text-xs italic text-gray-400 dark:text-gray-500">Marking not required…</span>
+                      ) : isPRO && s.permit_assigned_to_id === currentUserId ? (
                         editingPermitId === s.id ? (
                           <div className="flex items-center gap-1">
                             <input
@@ -1391,16 +1453,47 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                             </button>
                           </div>
                         ) : (
-                          <button
-                            onClick={() => { setEditingPermitId(s.id); setPermitRefValue(s.permit_ref ?? '') }}
-                            className="flex items-center gap-1 text-left border border-dashed border-gray-300 dark:border-gray-600 hover:border-blue-400 dark:hover:border-blue-500 rounded px-1.5 py-0.5 transition-colors group/permit"
-                            title="Edit Permit No"
-                          >
-                            <span className="text-xs text-gray-600 dark:text-gray-300">
-                              {s.permit_ref || <span className="text-gray-400 italic">—</span>}
-                            </span>
-                            <Pencil size={10} className="text-gray-400 group-hover/permit:text-blue-500 shrink-0 transition-colors" />
-                          </button>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              onClick={() => { setEditingPermitId(s.id); setPermitRefValue(s.permit_ref ?? '') }}
+                              className="flex items-center gap-1 text-left border border-dashed border-gray-300 dark:border-gray-600 hover:border-blue-400 dark:hover:border-blue-500 rounded px-1.5 py-0.5 transition-colors group/permit"
+                              title="Edit Permit No"
+                            >
+                              <span className="text-xs text-gray-600 dark:text-gray-300">
+                                {s.permit_ref || <span className="text-gray-400 italic">—</span>}
+                              </span>
+                              <Pencil size={10} className="text-gray-400 group-hover/permit:text-blue-500 shrink-0 transition-colors" />
+                            </button>
+                            {s.permit_status === 'IN_PROGRESS' && s.permit_task_id && (
+                              confirmPermitNaId === s.id ? (
+                                <span className="flex items-center gap-0.5">
+                                  <span className="text-[10px] font-medium text-amber-600 dark:text-amber-400 whitespace-nowrap">Not required?</span>
+                                  <button
+                                    onClick={() => schedulePermitNotRequired(s)}
+                                    className="p-1 text-green-600 hover:text-green-700"
+                                    title="Confirm — mark permit not required and complete the Permit task"
+                                  >
+                                    <CheckCircle size={14} />
+                                  </button>
+                                  <button
+                                    onClick={() => setConfirmPermitNaId(null)}
+                                    className="p-1 text-gray-400 hover:text-gray-600"
+                                    title="Cancel"
+                                  >
+                                    <X size={12} />
+                                  </button>
+                                </span>
+                              ) : (
+                                <button
+                                  onClick={() => setConfirmPermitNaId(s.id)}
+                                  className="text-[10px] font-semibold px-1.5 py-0.5 rounded border border-dashed border-gray-300 dark:border-gray-600 text-gray-400 dark:text-gray-500 hover:text-amber-600 dark:hover:text-amber-400 hover:border-amber-400 dark:hover:border-amber-500 transition-colors whitespace-nowrap"
+                                  title="Mark permit as not required and complete the Permit task"
+                                >
+                                  N/A
+                                </button>
+                              )
+                            )}
+                          </div>
                         )
                       ) : (
                         <span className="text-xs text-gray-600 dark:text-gray-300">

@@ -177,6 +177,8 @@ export interface ShipmentListItem {
   permit_status: TaskStatus | null
   permit_user: string | null
   permit_assigned_to_id: string | null
+  permit_task_id: string | null
+  permit_not_required: boolean
   do_status: TaskStatus | null
   do_user: string | null
   do_assigned_to_id: string | null

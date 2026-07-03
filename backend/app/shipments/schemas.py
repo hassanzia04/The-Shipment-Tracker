@@ -240,6 +240,8 @@ class ShipmentListOut(BaseModel):
     permit_status: Optional[str] = None
     permit_user: Optional[str] = None
     permit_assigned_to_id: Optional[UUID] = None
+    permit_task_id: Optional[UUID] = None
+    permit_not_required: bool = False
     do_status: Optional[str] = None
     do_user: Optional[str] = None
     do_assigned_to_id: Optional[UUID] = None

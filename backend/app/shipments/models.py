@@ -128,6 +128,13 @@ class Shipment(Base):
         return self._best_task_assigned_to_id(TaskType.PERMIT)
 
     @property
+    def permit_task_id(self) -> "uuid.UUID | None":
+        for t in (self.tasks or []):
+            if t.task_type == TaskType.PERMIT and t.status == TaskStatus.IN_PROGRESS:
+                return t.id
+        return None
+
+    @property
     def do_status(self) -> str | None:
         return self._best_task_status(TaskType.DO)
 
