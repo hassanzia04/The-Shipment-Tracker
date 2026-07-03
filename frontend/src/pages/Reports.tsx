@@ -562,7 +562,7 @@ export function Reports() {
           </p>
         </div>
       ) : !data ? null : (
-        <OperationalReports data={data} fromLabel={fromLabel} toLabel={toLabel} />
+        <OperationalReports data={data} fromLabel={fromLabel} toLabel={toLabel} onSelectCompany={showCompanyFilter ? setCompanyFilter : undefined} />
       )}
     </div>
   )
@@ -570,7 +570,7 @@ export function Reports() {
 
 // ── Operational view ───────────────────────────────────────────────────────────
 
-function OperationalReports({ data, fromLabel, toLabel }: { data: any; fromLabel: string; toLabel: string }) {
+function OperationalReports({ data, fromLabel, toLabel, onSelectCompany }: { data: any; fromLabel: string; toLabel: string; onSelectCompany?: (companyId: string) => void }) {
   const s = data.summary
   const onTimeTotal = (s.on_time + s.late) || 1
   const onTimePct   = Math.round((s.on_time / onTimeTotal) * 100)
@@ -636,12 +636,64 @@ function OperationalReports({ data, fromLabel, toLabel }: { data: any; fromLabel
           accent="bg-teal-50 dark:bg-teal-900/30"
         />
         <KpiCard
-          label="Containers Moved by MBRF"
+          label="Containers Moved by Customer"
           value={(s.containers_closed ?? 0).toLocaleString()}
           icon={<Boxes size={16} className="text-orange-600" />}
           accent="bg-orange-50 dark:bg-orange-900/30"
         />
       </div>
+
+      {/* By Customer breakdown — internal users viewing all customers */}
+      {data.by_company?.length > 0 && (
+        <SectionCard title="By Customer" sub={`Per-customer performance — ${periodSub}`} accentClass="bg-orange-500">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b dark:border-gray-700">
+                  <th className="text-left px-3 py-2 text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Customer</th>
+                  <th className="text-right px-3 py-2 text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Shipments</th>
+                  <th className="text-right px-3 py-2 text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Completed</th>
+                  <th className="text-right px-3 py-2 text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider hidden sm:table-cell">Avg Cycle</th>
+                  <th className="text-right px-3 py-2 text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider hidden sm:table-cell">On-Time</th>
+                  <th className="text-right px-3 py-2 text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider hidden md:table-cell">Moved by AMLS</th>
+                  <th className="text-right px-3 py-2 text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider hidden md:table-cell">Moved by Customer</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y dark:divide-gray-700">
+                {(data.by_company as any[]).map((c: any) => {
+                  const onTimeTotalRow = c.on_time + c.late
+                  const onTimePctRow = onTimeTotalRow > 0 ? Math.round((c.on_time / onTimeTotalRow) * 100) : null
+                  return (
+                    <tr key={c.company_id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                      <td className="px-3 py-2.5 font-medium text-gray-900 dark:text-white">
+                        {onSelectCompany ? (
+                          <button
+                            onClick={() => onSelectCompany(c.company_id)}
+                            className="hover:text-blue-600 dark:hover:text-blue-400 hover:underline text-left"
+                            title="Filter reports to this customer"
+                          >
+                            {c.company_name}
+                          </button>
+                        ) : c.company_name}
+                      </td>
+                      <td className="px-3 py-2.5 text-right font-semibold tabular-nums text-gray-800 dark:text-gray-100">{c.total_shipments}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-gray-600 dark:text-gray-300">{c.total_completed}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-gray-600 dark:text-gray-300 hidden sm:table-cell">{c.avg_cycle_days ? `${c.avg_cycle_days}d` : '—'}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums hidden sm:table-cell">
+                        {onTimePctRow !== null
+                          ? <span className={onTimePctRow >= 80 ? 'text-emerald-600 dark:text-emerald-400 font-medium' : 'text-amber-600 dark:text-amber-400 font-medium'}>{onTimePctRow}%</span>
+                          : <span className="text-gray-400 dark:text-gray-600">—</span>}
+                      </td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-gray-600 dark:text-gray-300 hidden md:table-cell">{c.containers_returned || '—'}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-gray-600 dark:text-gray-300 hidden md:table-cell">{c.containers_closed || '—'}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </SectionCard>
+      )}
 
       {/* Row 1: Monthly volume + On-time donut */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">

@@ -795,6 +795,96 @@ async def reports(
         )
     )).scalar() or 0
 
+    # ── Per-company breakdown (internal users viewing all customers only) ─────
+    by_company = None
+    if effective_company is None and company_scope(actor) is None:
+        # Shipments created in the period, aggregated per company
+        ship_agg = (await db.execute(
+            select(
+                Shipment.company_id,
+                Company.name,
+                func.count(Shipment.id).label("total"),
+                func.count(Shipment.id).filter(Shipment.current_stage == ShipmentStage.COMPLETED).label("completed"),
+                func.avg(
+                    func.extract("epoch", Shipment.completed_at) -
+                    func.extract("epoch", Shipment.created_at)
+                ).label("avg_cycle_seconds"),
+            )
+            .join(Company, Company.id == Shipment.company_id)
+            .where(*period_filter)
+            .group_by(Shipment.company_id, Company.name)
+        )).all()
+
+        on_time_agg = {
+            row.company_id: (int(row.on_time or 0), int(row.total or 0))
+            for row in (await db.execute(
+                select(
+                    Shipment.company_id,
+                    func.count(Shipment.id).label("total"),
+                    func.sum(_case(
+                        (
+                            _or(
+                                Shipment.pull_out_date == None,
+                                _cast(max_pullout_sq.c.max_actual_pullout, _Date) <= Shipment.pull_out_date,
+                            ),
+                            1,
+                        ),
+                        else_=0,
+                    )).label("on_time"),
+                )
+                .join(max_pullout_sq, max_pullout_sq.c.shipment_id == Shipment.id)
+                .where(
+                    Shipment.current_stage == ShipmentStage.COMPLETED,
+                    max_pullout_sq.c.max_actual_pullout != None,
+                    *period_filter,
+                )
+                .group_by(Shipment.company_id)
+            )).all()
+        }
+
+        containers_agg = {
+            row.company_id: (int(row.returned or 0), int(row.closed or 0))
+            for row in (await db.execute(
+                select(
+                    Shipment.company_id,
+                    func.count(Container.id).filter(
+                        Container.status == ContainerStatus.RETURNED,
+                        Container.outsourced_truck_id.is_(None),
+                    ).label("returned"),
+                    func.count(Container.id).filter(
+                        or_(
+                            Container.status == ContainerStatus.CLOSED,
+                            and_(
+                                Container.outsourced_truck_id.isnot(None),
+                                Container.status == ContainerStatus.RETURNED,
+                            ),
+                        ),
+                    ).label("closed"),
+                )
+                .select_from(Container)
+                .join(Shipment, Shipment.id == Container.shipment_id)
+                .where(*period_filter)
+                .group_by(Shipment.company_id)
+            )).all()
+        }
+
+        by_company = []
+        for company_id, company_name, c_total, c_completed, c_avg_seconds in ship_agg:
+            c_on_time, c_on_time_total = on_time_agg.get(company_id, (0, 0))
+            c_returned, c_closed = containers_agg.get(company_id, (0, 0))
+            by_company.append({
+                "company_id": str(company_id),
+                "company_name": company_name,
+                "total_shipments": c_total,
+                "total_completed": c_completed,
+                "avg_cycle_days": round(c_avg_seconds / 86400, 1) if c_avg_seconds else None,
+                "on_time": c_on_time,
+                "late": c_on_time_total - c_on_time,
+                "containers_returned": c_returned,
+                "containers_closed": c_closed,
+            })
+        by_company.sort(key=lambda r: r["total_shipments"], reverse=True)
+
     result: dict = {
         "from_year": from_year,
         "from_month": from_month,
@@ -811,6 +901,7 @@ async def reports(
             "containers_returned": containers_returned,
             "containers_closed": containers_closed,
         },
+        "by_company": by_company,
     }
 
     # ── Stage average duration ────────────────────────────────────────────────
