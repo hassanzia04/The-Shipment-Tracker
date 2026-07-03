@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
-import { X, Loader, CheckCircle, Plus, Package, ExternalLink } from 'lucide-react'
+import { X, Loader, CheckCircle, Plus, Package, ExternalLink, AlertTriangle } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { shipmentsApi } from '@/api/shipments'
 import { documentsApi } from '@/api/documents'
+import clsx from 'clsx'
 
 interface SalalahRow {
   shipment_id: string
@@ -23,6 +24,43 @@ export function BulkSalalahConfirmModal({ onClose, onDone }: Props) {
   const [confirming, setConfirming] = useState(false)
   const [done, setDone] = useState(false)
   const [confirmedCount, setConfirmedCount] = useState(0)
+  // Server-reported conflicts, keyed `${shipment_id}:${NUMBER}` → conflicting BL
+  const [conflicts, setConflicts] = useState<Record<string, string>>({})
+  const [validating, setValidating] = useState(false)
+
+  // Numbers appearing under more than one shipment inside this modal
+  const localDups = (() => {
+    const count = new Map<string, number>()
+    rows.forEach(r => new Set(r.containers.map(c => c.toUpperCase())).forEach(c => count.set(c, (count.get(c) ?? 0) + 1)))
+    return new Set([...count.entries()].filter(([, n]) => n > 1).map(([c]) => c))
+  })()
+
+  const conflictCount = rows.reduce(
+    (n, r) => n + r.containers.filter(c =>
+      conflicts[`${r.shipment_id}:${c.toUpperCase()}`] || localDups.has(c.toUpperCase())
+    ).length,
+    0,
+  )
+
+  // Re-validate against active shipments whenever the container lists change
+  const containersKey = JSON.stringify(rows.map(r => [r.shipment_id, r.containers]))
+  useEffect(() => {
+    if (loading || done || rows.length === 0) return
+    const t = setTimeout(async () => {
+      setValidating(true)
+      try {
+        const { data } = await shipmentsApi.validateContainers(
+          rows.map(r => ({ shipment_id: r.shipment_id, container_numbers: r.containers }))
+        )
+        const map: Record<string, string> = {}
+        data.conflicts.forEach(c => { map[`${c.shipment_id}:${c.container_number}`] = c.conflict_bl })
+        setConflicts(map)
+      } catch { /* advisory only — the confirm endpoint stays guarded server-side */ }
+      finally { setValidating(false) }
+    }, 400)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [containersKey, loading, done])
 
   useEffect(() => {
     shipmentsApi.getSalalahReady()
@@ -85,6 +123,10 @@ export function BulkSalalahConfirmModal({ onClose, onDone }: Props) {
     const invalid = rows.filter(r => r.containers.length === 0)
     if (invalid.length > 0) {
       toast.error(`BL ${invalid[0].bl_number} has no containers — add at least one before confirming`)
+      return
+    }
+    if (conflictCount > 0) {
+      toast.error('Remove the highlighted duplicate containers before confirming')
       return
     }
     setConfirming(true)
@@ -171,20 +213,36 @@ export function BulkSalalahConfirmModal({ onClose, onDone }: Props) {
                 {row.containers.length === 0 && (
                   <span className="text-xs text-gray-400 italic">No containers yet — add below</span>
                 )}
-                {row.containers.map((c, ci) => (
-                  <span
-                    key={ci}
-                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-xs font-mono font-medium border border-blue-200 dark:border-blue-700"
-                  >
-                    {c}
-                    <button
-                      onClick={() => removeContainer(rowIdx, ci)}
-                      className="text-blue-400 hover:text-blue-600 dark:hover:text-blue-200 ml-0.5"
+                {row.containers.map((c, ci) => {
+                  const conflictBl = conflicts[`${row.shipment_id}:${c.toUpperCase()}`]
+                  const isLocalDup = localDups.has(c.toUpperCase())
+                  const isDup = !!conflictBl || isLocalDup
+                  return (
+                    <span
+                      key={ci}
+                      title={conflictBl
+                        ? `Duplicate — already active on shipment ${conflictBl}`
+                        : isLocalDup
+                        ? 'Duplicate — this number is also listed under another shipment in this dialog'
+                        : undefined}
+                      className={clsx(
+                        'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-mono font-medium border',
+                        isDup
+                          ? 'bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300 border-red-300 dark:border-red-700'
+                          : 'bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-700',
+                      )}
                     >
-                      <X size={10} />
-                    </button>
-                  </span>
-                ))}
+                      {isDup && <AlertTriangle size={10} />}
+                      {c}
+                      <button
+                        onClick={() => removeContainer(rowIdx, ci)}
+                        className={clsx('ml-0.5', isDup ? 'text-red-400 hover:text-red-600 dark:hover:text-red-200' : 'text-blue-400 hover:text-blue-600 dark:hover:text-blue-200')}
+                      >
+                        <X size={10} />
+                      </button>
+                    </span>
+                  )
+                })}
               </div>
 
               {/* Add container input */}
@@ -212,11 +270,18 @@ export function BulkSalalahConfirmModal({ onClose, onDone }: Props) {
         {/* Footer */}
         {!done && (
           <div className="border-t dark:border-gray-700 p-4 flex items-center justify-between gap-3 bg-gray-50 dark:bg-gray-800/50 rounded-b-xl">
-            <p className="text-xs text-gray-500 dark:text-gray-400">
-              {rows.length > 0
-                ? `${rows.length} shipment${rows.length !== 1 ? 's' : ''} will be confirmed — a combined email goes to Transport and DC.`
-                : 'No eligible shipments found.'}
-            </p>
+            {conflictCount > 0 ? (
+              <p className="flex items-center gap-1.5 text-xs font-medium text-red-600 dark:text-red-400">
+                <AlertTriangle size={13} />
+                {conflictCount} duplicate container{conflictCount !== 1 ? 's' : ''} — remove the highlighted number{conflictCount !== 1 ? 's' : ''} before confirming.
+              </p>
+            ) : (
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                {rows.length > 0
+                  ? `${rows.length} shipment${rows.length !== 1 ? 's' : ''} will be confirmed — a combined email goes to Transport and DC.`
+                  : 'No eligible shipments found.'}
+              </p>
+            )}
             <div className="flex gap-2">
               <button
                 onClick={onClose}
@@ -227,10 +292,11 @@ export function BulkSalalahConfirmModal({ onClose, onDone }: Props) {
               {rows.length > 0 && !loading && (
                 <button
                   onClick={handleConfirm}
-                  disabled={confirming}
+                  disabled={confirming || validating || conflictCount > 0}
+                  title={conflictCount > 0 ? 'Resolve the highlighted duplicate containers first' : undefined}
                   className="flex items-center gap-2 px-4 py-2 bg-orange-600 text-white text-sm font-medium rounded-lg hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {confirming ? <Loader size={14} className="animate-spin" /> : <CheckCircle size={14} />}
+                  {(confirming || validating) ? <Loader size={14} className="animate-spin" /> : <CheckCircle size={14} />}
                   Confirm All & Send to Transport
                 </button>
               )}

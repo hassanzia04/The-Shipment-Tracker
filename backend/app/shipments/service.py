@@ -1567,25 +1567,54 @@ async def open_ccro_rop_task(db: AsyncSession, shipment_id: uuid.UUID, actor: Us
 
 # ── FFD: Add container (with CCRO upload, done via documents module) ──────────
 
-async def _assert_container_not_active(db: AsyncSession, container_number: str, exclude_shipment_id: uuid.UUID | None = None) -> None:
-    """Raise 409 if this container number already exists on any active (non-completed) shipment."""
+async def _find_active_container_conflict(db: AsyncSession, container_number: str, exclude_shipment_id: uuid.UUID | None = None) -> str | None:
+    """Return the BL of the active (non-completed) shipment already holding this
+    container number, or None. Case-insensitive so legacy casing can't slip through."""
     q = (
         select(Shipment.bl_number)
         .join(Container, Container.shipment_id == Shipment.id)
         .where(
-            Container.container_number == container_number,
+            func.upper(Container.container_number) == container_number.strip().upper(),
             Shipment.current_stage != ShipmentStage.COMPLETED,
         )
     )
     if exclude_shipment_id:
         q = q.where(Shipment.id != exclude_shipment_id)
     result = await db.execute(q.limit(1))
-    existing_bl = result.scalar_one_or_none()
+    return result.scalar_one_or_none()
+
+
+async def _assert_container_not_active(db: AsyncSession, container_number: str, exclude_shipment_id: uuid.UUID | None = None) -> None:
+    """Raise 409 if this container number already exists on any active (non-completed) shipment."""
+    existing_bl = await _find_active_container_conflict(db, container_number, exclude_shipment_id)
     if existing_bl:
         raise HTTPException(
             status_code=409,
             detail=f"Container {container_number} is already active on shipment {existing_bl}",
         )
+
+
+async def validate_container_numbers(db: AsyncSession, actor: User, items: list[dict]) -> list[dict]:
+    """Pre-flight check for bulk flows: report every container number that is
+    already active on another shipment, without creating anything."""
+    _assert_team(actor, Team.FFD)
+    conflicts = []
+    for item in items:
+        shipment_id = item["shipment_id"]
+        seen: set[str] = set()
+        for raw_number in item["container_numbers"]:
+            number = raw_number.strip().upper()
+            if not number or number in seen:
+                continue
+            seen.add(number)
+            conflict_bl = await _find_active_container_conflict(db, number, exclude_shipment_id=shipment_id)
+            if conflict_bl:
+                conflicts.append({
+                    "shipment_id": str(shipment_id),
+                    "container_number": number,
+                    "conflict_bl": conflict_bl,
+                })
+    return conflicts
 
 
 async def add_container(db: AsyncSession, shipment_id: uuid.UUID, actor: User, container_number: str) -> Shipment:
@@ -2651,17 +2680,7 @@ async def bulk_upload_ccros(
                 continue
         else:
             # Check if this container is already active on another shipment before creating
-            conflict_q = (
-                select(Shipment.bl_number)
-                .join(Container, Container.shipment_id == Shipment.id)
-                .where(
-                    Container.container_number == container_number,
-                    Shipment.current_stage != ShipmentStage.COMPLETED,
-                    Shipment.id != shipment_id,
-                )
-                .limit(1)
-            )
-            conflict_bl = (await db.execute(conflict_q)).scalar_one_or_none()
+            conflict_bl = await _find_active_container_conflict(db, container_number, exclude_shipment_id=shipment_id)
             if conflict_bl:
                 results.append({
                     "filename": file.filename,

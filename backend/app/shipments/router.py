@@ -274,6 +274,20 @@ async def get_salalah_ready(db: AsyncSession = Depends(get_db), actor: User = De
     return {"items": items}
 
 
+@router.post("/validate-containers")
+async def validate_containers(
+    body: schemas.BulkConfirmSalalahRequest,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+):
+    """Pre-flight duplicate check for bulk container flows — reports conflicts, creates nothing."""
+    conflicts = await service.validate_container_numbers(
+        db, actor,
+        [{"shipment_id": item.shipment_id, "container_numbers": item.container_numbers} for item in body.items],
+    )
+    return {"conflicts": conflicts}
+
+
 @router.post("/bulk-confirm-salalah")
 async def bulk_confirm_salalah(
     body: schemas.BulkConfirmSalalahRequest,

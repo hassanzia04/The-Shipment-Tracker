@@ -210,6 +210,9 @@ export const shipmentsApi = {
   bulkConfirmSalalah: (items: Array<{ shipment_id: string; container_numbers: string[] }>) =>
     api.post<{ confirmed: number }>('/shipments/bulk-confirm-salalah', { items }),
 
+  validateContainers: (items: Array<{ shipment_id: string; container_numbers: string[] }>) =>
+    api.post<{ conflicts: Array<{ shipment_id: string; container_number: string; conflict_bl: string }> }>('/shipments/validate-containers', { items }),
+
   bulkOpenBayan: (shipment_ids: string[]) =>
     api.post('/shipments/bulk-open-bayan', { shipment_ids }),
 
