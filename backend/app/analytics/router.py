@@ -385,6 +385,55 @@ async def dashboard(
     )
     completed_containers = completed_containers_result.scalar() or 0
 
+    # ── Needs-attention counts (company-scoped like everything else) ─────────
+    _attn_today = _date.today()
+    _attn_soon = _attn_today + timedelta(days=3)
+    do_expired_count = (await db.execute(
+        _scoped(select(func.count(Shipment.id)).where(
+            Shipment.current_stage != ShipmentStage.COMPLETED,
+            Shipment.do_validity_date != None,
+            Shipment.do_validity_date < _attn_today,
+        ))
+    )).scalar() or 0
+    do_expiring_count = (await db.execute(
+        _scoped(select(func.count(Shipment.id)).where(
+            Shipment.current_stage != ShipmentStage.COMPLETED,
+            Shipment.do_validity_date != None,
+            Shipment.do_validity_date >= _attn_today,
+            Shipment.do_validity_date <= _attn_soon,
+        ))
+    )).scalar() or 0
+    # Holds older than 7 days — hold start comes from the TASK_HOLD_ASSIGNED event log
+    _hold_ev_sq = (
+        select(ShipmentEvent.task_id, func.max(ShipmentEvent.created_at).label("held_at"))
+        .where(ShipmentEvent.event_type == EventType.TASK_HOLD_ASSIGNED)
+        .group_by(ShipmentEvent.task_id)
+        .subquery()
+    )
+    stale_holds_count = (await db.execute(
+        _scoped(select(func.count(ShipmentTask.id))
+        .join(Shipment, Shipment.id == ShipmentTask.shipment_id)
+        .join(_hold_ev_sq, _hold_ev_sq.c.task_id == ShipmentTask.id)
+        .where(
+            ShipmentTask.status == TaskStatus.ON_HOLD,
+            _hold_ev_sq.c.held_at <= datetime.now(timezone.utc) - timedelta(days=7),
+        ))
+    )).scalar() or 0
+    bayan_payment_pending_count = (await db.execute(
+        _scoped(select(func.count(ShipmentTask.id))
+        .join(Shipment, Shipment.id == ShipmentTask.shipment_id)
+        .where(
+            ShipmentTask.task_type == TaskType.BAYAN_PAYMENT,
+            ShipmentTask.status == TaskStatus.IN_PROGRESS,
+        ))
+    )).scalar() or 0
+    attention = {
+        "do_expired": do_expired_count,
+        "do_expiring_soon": do_expiring_count,
+        "stale_holds": stale_holds_count,
+        "bayan_payment_pending": bayan_payment_pending_count,
+    }
+
     # ── Company-wise breakdown (internal users only) ──────────────────────────
     by_company = None
     if company_scope(actor) is None:
@@ -472,6 +521,7 @@ async def dashboard(
         "containers_by_stage": containers_by_stage,
         "volume_by_date": volume_by_date,
         "by_company": by_company,
+        "attention": attention,
     }
 
 

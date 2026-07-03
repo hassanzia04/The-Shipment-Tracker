@@ -385,6 +385,56 @@ export function Dashboard() {
         <p className="text-xs text-gray-400">Auto-refreshes every 5 min</p>
       </div>
 
+      {/* ── Needs attention strip ── */}
+      {(() => {
+        const attn = (data as any).attention
+        if (!attn) return null
+        const chips = [
+          attn.do_expired > 0 && {
+            label: `${attn.do_expired} DO${attn.do_expired !== 1 ? 's' : ''} expired`,
+            to: '/shipments?do_expired=true',
+            cls: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 hover:bg-red-200 dark:hover:bg-red-900/50',
+          },
+          attn.do_expiring_soon > 0 && {
+            label: `${attn.do_expiring_soon} DO${attn.do_expiring_soon !== 1 ? 's' : ''} expiring ≤3d`,
+            to: '/shipments?do_expiring=true',
+            cls: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 hover:bg-amber-200 dark:hover:bg-amber-900/50',
+          },
+          attn.stale_holds > 0 && {
+            label: `${attn.stale_holds} hold${attn.stale_holds !== 1 ? 's' : ''} >7d`,
+            to: '#active-holds',
+            cls: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 hover:bg-red-200 dark:hover:bg-red-900/50',
+          },
+          attn.bayan_payment_pending > 0 && {
+            label: `${attn.bayan_payment_pending} Bayan payment${attn.bayan_payment_pending !== 1 ? 's' : ''} pending`,
+            to: '/shipments',
+            cls: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 hover:bg-amber-200 dark:hover:bg-amber-900/50',
+          },
+        ].filter(Boolean) as { label: string; to: string; cls: string }[]
+        if (chips.length === 0) return null
+        return (
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+              <AlertTriangle size={13} className="text-amber-500" /> Needs attention
+            </span>
+            {chips.map(chip => chip.to.startsWith('#') ? (
+              <a
+                key={chip.label}
+                href={chip.to}
+                onClick={e => { e.preventDefault(); document.querySelector(chip.to)?.scrollIntoView({ behavior: 'smooth' }) }}
+                className={`text-xs font-semibold px-2.5 py-1 rounded-full transition-colors ${chip.cls}`}
+              >
+                {chip.label}
+              </a>
+            ) : (
+              <Link key={chip.label} to={chip.to} className={`text-xs font-semibold px-2.5 py-1 rounded-full transition-colors ${chip.cls}`}>
+                {chip.label}
+              </Link>
+            ))}
+          </div>
+        )
+      })()}
+
       {/* ── Stat cards ── */}
       {(() => {
         const totalActiveContainers = (Object.values(container_status_counts ?? {}) as number[]).reduce((a, b) => a + b, 0)
@@ -818,7 +868,7 @@ export function Dashboard() {
       )}
 
       {/* ── Active Holds table ── */}
-      <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-xl overflow-hidden">
+      <div id="active-holds" className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-xl overflow-hidden">
         <button
           onClick={() => setHoldsOpen(o => !o)}
           className="w-full px-5 py-4 flex items-center justify-between gap-4 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors text-left"

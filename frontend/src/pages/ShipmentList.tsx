@@ -2034,8 +2034,10 @@ export function ShipmentList() {
   const [showBulkDO, setShowBulkDO] = useState(false)
   const [showBulkDORenewal, setShowBulkDORenewal] = useState(false)
   const [showBulkMisc, setShowBulkMisc] = useState(false)
-  const [filterDoExpired, setFilterDoExpired] = useState(false)
-  const [filterDoExpiringSoon, setFilterDoExpiringSoon] = useState(false)
+  // Initialized from the URL so the dashboard "needs attention" chips can link here
+  const [filterDoExpired, setFilterDoExpired] = useState(() =>
+    searchParams.get('do_expired') === 'true' || searchParams.get('do_expiring') === 'true')
+  const [filterDoExpiringSoon, setFilterDoExpiringSoon] = useState(() => searchParams.get('do_expiring') === 'true')
   const [showBulkCcro, setShowBulkCcro] = useState(false)
   const [showBulkSalalah, setShowBulkSalalah] = useState(false)
   const [sort, setSort] = useState<SortState>({ column: null, dir: 'asc' })
