@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 import { differenceInCalendarDays, parseISO, isValid } from 'date-fns'
@@ -53,6 +53,47 @@ const ALL_COLUMNS = [
 
 // Columns hidden on mobile by default (previously handled by Tailwind responsive classes)
 const MOBILE_DEFAULT_HIDDEN = new Set(['invoice', 'consignee', 'company', 'port', 'offloading_location', 'bayan_type', 'shipping_line', 'pull_out', 'eta', 'do_validity', 'amls', 'permit_no'])
+
+// ── Bulk-selection action bar ─────────────────────────────────────────────────
+// Desktop: centered floating pill. Mobile: full-width dock above the bottom nav
+// with the count + Clear pinned and the actions in a horizontally swipeable row.
+
+function BulkActionBar({ count, countClass, onClear, children }: {
+  count: number
+  countClass: string
+  onClear: () => void
+  children: ReactNode
+}) {
+  const label = (
+    <span className="text-sm whitespace-nowrap">
+      <span className={clsx('font-semibold', countClass)}>{count}</span>
+      {' '}shipment{count !== 1 ? 's' : ''} selected
+    </span>
+  )
+  const clearBtn = (visibility: string) => (
+    <button
+      onClick={onClear}
+      className={clsx('items-center gap-1 text-xs text-gray-400 hover:text-gray-200 px-2 py-1 rounded hover:bg-gray-800 dark:hover:bg-gray-600 shrink-0', visibility)}
+    >
+      <X size={13} /> Clear
+    </button>
+  )
+  return (
+    <div className="fixed z-50 inset-x-2 bottom-[4.5rem] lg:inset-x-auto lg:left-1/2 lg:-translate-x-1/2 lg:bottom-6 pointer-events-none">
+      <div className="pointer-events-auto bg-gray-900 dark:bg-gray-700 text-white border border-gray-700 dark:border-gray-600 rounded-xl lg:rounded-2xl shadow-xl px-3 py-2.5 lg:px-5 lg:py-3">
+        <div className="flex lg:hidden items-center justify-between gap-2 mb-2">
+          {label}
+          {clearBtn('flex')}
+        </div>
+        <div className="flex items-center gap-2 overflow-x-auto lg:overflow-x-visible lg:flex-wrap">
+          <span className="hidden lg:block shrink-0">{label}</span>
+          {children}
+          {clearBtn('hidden lg:flex')}
+        </div>
+      </div>
+    </div>
+  )
+}
 
 // ── Progress status indicator ─────────────────────────────────────────────────
 
@@ -1635,106 +1676,89 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
       </div>
 
       {isCustomer && !historical && selectedIds.size > 0 && (
-        <div className="fixed bottom-20 lg:bottom-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none">
-          <div className="flex items-center gap-3 bg-gray-900 dark:bg-gray-700 text-white px-5 py-3 rounded-2xl shadow-xl border border-gray-700 dark:border-gray-600 pointer-events-auto">
-            <span className="text-sm">
-              <span className="font-semibold text-blue-400">{selectedIds.size}</span>
-              {' '}shipment{selectedIds.size !== 1 ? 's' : ''} selected
-            </span>
-            <input
-              type="date"
-              value={bulkDate}
-              onChange={e => setBulkDate(e.target.value)}
-              className="text-xs border border-gray-600 rounded px-2 py-1.5 bg-gray-800 text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
-            />
-            <button
-              onClick={saveBulkDate}
-              disabled={!bulkDate || savingBulk}
-              className="flex items-center gap-1.5 text-xs bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-4 py-1.5 rounded-lg font-medium"
-            >
-              <CheckCircle size={13} />
-              {savingBulk ? 'Saving…' : 'Set Pull-out Date'}
-            </button>
-            <button
-              onClick={() => { setBulkDownloadIds(Array.from(selectedIds)); setShowBulkDownload(true) }}
-              className="flex items-center gap-1.5 text-xs bg-teal-600 hover:bg-teal-500 text-white px-3 py-1.5 rounded-lg font-medium"
-            >
-              <FileDown size={13} /> Download Docs
-            </button>
-            <button
-              onClick={() => { setSelectedIds(new Set()); setBulkDate('') }}
-              className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-200 px-2 py-1 rounded hover:bg-gray-800 dark:hover:bg-gray-600"
-            >
-              <X size={13} /> Clear
-            </button>
-          </div>
-        </div>
+        <BulkActionBar
+          count={selectedIds.size}
+          countClass="text-blue-400"
+          onClear={() => { setSelectedIds(new Set()); setBulkDate('') }}
+        >
+          <input
+            type="date"
+            value={bulkDate}
+            onChange={e => setBulkDate(e.target.value)}
+            className="text-xs border border-gray-600 rounded px-2 py-1.5 bg-gray-800 text-white focus:outline-none focus:ring-1 focus:ring-blue-500 shrink-0"
+          />
+          <button
+            onClick={saveBulkDate}
+            disabled={!bulkDate || savingBulk}
+            className="flex items-center gap-1.5 text-xs bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-4 py-1.5 rounded-lg font-medium shrink-0 whitespace-nowrap"
+          >
+            <CheckCircle size={13} />
+            {savingBulk ? 'Saving…' : 'Set Pull-out Date'}
+          </button>
+          <button
+            onClick={() => { setBulkDownloadIds(Array.from(selectedIds)); setShowBulkDownload(true) }}
+            className="flex items-center gap-1.5 text-xs bg-teal-600 hover:bg-teal-500 text-white px-3 py-1.5 rounded-lg font-medium shrink-0 whitespace-nowrap"
+          >
+            <FileDown size={13} /> Download Docs
+          </button>
+        </BulkActionBar>
       )}
 
       {isPRO && !historical && selectedProIds.size > 0 && (
-        <div className="fixed bottom-20 lg:bottom-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none">
-          <div className="flex flex-wrap items-center gap-2 bg-gray-900 dark:bg-gray-700 text-white px-5 py-3 rounded-2xl shadow-xl border border-gray-700 dark:border-gray-600 pointer-events-auto">
-            <span className="text-sm">
-              <span className="font-semibold text-blue-400">{selectedProIds.size}</span>
-              {' '}shipment{selectedProIds.size !== 1 ? 's' : ''} selected
-            </span>
-            {/* Bayan payment request hidden — payment is now auto-requested on Bayan task completion */}
-            {(() => {
-              const TASK_BLOCKED_STAGES = ['FFD_REVIEW', 'TRANSPORT', 'DC_TRANSPORT']
-              const stageBlocked = displaySorted.some(s => selectedProIds.has(s.id) && TASK_BLOCKED_STAGES.includes(s.current_stage))
-              const stageTitle = stageBlocked ? 'One or more selected shipments are in a stage where task actions are not applicable' : undefined
-              return (
-                <>
-                  {stageBlocked && (
-                    <button
-                      onClick={() => setSelectedProIds(prev => new Set([...prev].filter(id => !TASK_BLOCKED_STAGES.includes(displaySorted.find(s => s.id === id)?.current_stage ?? ''))))}
-                      className="text-xs text-amber-300 hover:text-amber-100 underline underline-offset-2"
-                    >
-                      Deselect ineligible
-                    </button>
-                  )}
+        <BulkActionBar
+          count={selectedProIds.size}
+          countClass="text-blue-400"
+          onClear={() => setSelectedProIds(new Set())}
+        >
+          {/* Bayan payment request hidden — payment is now auto-requested on Bayan task completion */}
+          {(() => {
+            const TASK_BLOCKED_STAGES = ['FFD_REVIEW', 'TRANSPORT', 'DC_TRANSPORT']
+            const stageBlocked = displaySorted.some(s => selectedProIds.has(s.id) && TASK_BLOCKED_STAGES.includes(s.current_stage))
+            const stageTitle = stageBlocked ? 'One or more selected shipments are in a stage where task actions are not applicable' : undefined
+            return (
+              <>
+                {stageBlocked && (
                   <button
-                    onClick={() => setShowBulkHoldPRO(true)}
-                    disabled={stageBlocked}
-                    title={stageTitle}
-                    className="flex items-center gap-1.5 text-xs bg-amber-600 hover:bg-amber-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-3 py-1.5 rounded-lg font-medium"
+                    onClick={() => setSelectedProIds(prev => new Set([...prev].filter(id => !TASK_BLOCKED_STAGES.includes(displaySorted.find(s => s.id === id)?.current_stage ?? ''))))}
+                    className="text-xs text-amber-300 hover:text-amber-100 underline underline-offset-2 shrink-0 whitespace-nowrap"
                   >
-                    <Pause size={13} /> Put on Hold
+                    Deselect ineligible
                   </button>
-                  <button
-                    onClick={() => setShowBulkReleaseHoldPRO(true)}
-                    disabled={stageBlocked}
-                    title={stageTitle}
-                    className="flex items-center gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-3 py-1.5 rounded-lg font-medium"
-                  >
-                    <Unlock size={13} /> Release Hold
-                  </button>
-                </>
-              )
-            })()}
-            <button
-              onClick={() => { setBulkDownloadIds(Array.from(selectedProIds)); setShowBulkDownload(true) }}
-              className="flex items-center gap-1.5 text-xs bg-teal-600 hover:bg-teal-500 text-white px-3 py-1.5 rounded-lg font-medium"
-            >
-              <FileDown size={13} /> Download Docs
-            </button>
-            <button
-              onClick={() => setSelectedProIds(new Set())}
-              className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-200 px-2 py-1 rounded hover:bg-gray-800 dark:hover:bg-gray-600"
-            >
-              <X size={13} /> Clear
-            </button>
-          </div>
-        </div>
+                )}
+                <button
+                  onClick={() => setShowBulkHoldPRO(true)}
+                  disabled={stageBlocked}
+                  title={stageTitle}
+                  className="flex items-center gap-1.5 text-xs bg-amber-600 hover:bg-amber-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-3 py-1.5 rounded-lg font-medium shrink-0 whitespace-nowrap"
+                >
+                  <Pause size={13} /> Put on Hold
+                </button>
+                <button
+                  onClick={() => setShowBulkReleaseHoldPRO(true)}
+                  disabled={stageBlocked}
+                  title={stageTitle}
+                  className="flex items-center gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-3 py-1.5 rounded-lg font-medium shrink-0 whitespace-nowrap"
+                >
+                  <Unlock size={13} /> Release Hold
+                </button>
+              </>
+            )
+          })()}
+          <button
+            onClick={() => { setBulkDownloadIds(Array.from(selectedProIds)); setShowBulkDownload(true) }}
+            className="flex items-center gap-1.5 text-xs bg-teal-600 hover:bg-teal-500 text-white px-3 py-1.5 rounded-lg font-medium shrink-0 whitespace-nowrap"
+          >
+            <FileDown size={13} /> Download Docs
+          </button>
+        </BulkActionBar>
       )}
 
       {isFFD && !historical && selectedFFDIds.size > 0 && (
-        <div className="fixed bottom-20 lg:bottom-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none">
-          <div className="flex flex-wrap items-center gap-2 bg-gray-900 dark:bg-gray-700 text-white px-5 py-3 rounded-2xl shadow-xl border border-gray-700 dark:border-gray-600 pointer-events-auto">
-            <span className="text-sm">
-              <span className="font-semibold text-purple-400">{selectedFFDIds.size}</span>
-              {' '}shipment{selectedFFDIds.size !== 1 ? 's' : ''} selected
-            </span>
+        <BulkActionBar
+          count={selectedFFDIds.size}
+          countClass="text-purple-400"
+          onClear={() => setSelectedFFDIds(new Set())}
+        >
             {(() => {
               const TASK_BLOCKED_STAGES = ['FFD_REVIEW', 'TRANSPORT', 'DC_TRANSPORT']
               const selectedShips = displaySorted.filter(s => selectedFFDIds.has(s.id))
@@ -1748,7 +1772,7 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                   {stageBlocked && (
                     <button
                       onClick={() => setSelectedFFDIds(prev => new Set([...prev].filter(id => !TASK_BLOCKED_STAGES.includes(displaySorted.find(s => s.id === id)?.current_stage ?? ''))))}
-                      className="text-xs text-amber-300 hover:text-amber-100 underline underline-offset-2"
+                      className="text-xs text-amber-300 hover:text-amber-100 underline underline-offset-2 shrink-0 whitespace-nowrap"
                     >
                       Deselect ineligible
                     </button>
@@ -1757,7 +1781,7 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                     onClick={handleBulkOpenBayan}
                     disabled={savingBulkOpenBayan || bayanBlocked}
                     title={stageBlocked ? stageTitle : bayanBlocked ? 'One or more selected shipments already have a Bayan task open or completed' : undefined}
-                    className="flex items-center gap-1.5 text-xs bg-purple-600 hover:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-3 py-1.5 rounded-lg font-medium"
+                    className="flex items-center gap-1.5 text-xs bg-purple-600 hover:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-3 py-1.5 rounded-lg font-medium shrink-0 whitespace-nowrap"
                   >
                     <ListTodo size={13} />
                     {savingBulkOpenBayan ? 'Opening…' : 'Open Bayan'}
@@ -1766,7 +1790,7 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                     onClick={() => setShowBulkAssignBayan(true)}
                     disabled={assignBayanBlocked}
                     title={stageBlocked ? stageTitle : assignBayanBlocked ? 'All selected shipments must have an open (non-completed) Bayan task' : undefined}
-                    className="flex items-center gap-1.5 text-xs bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-3 py-1.5 rounded-lg font-medium"
+                    className="flex items-center gap-1.5 text-xs bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-3 py-1.5 rounded-lg font-medium shrink-0 whitespace-nowrap"
                   >
                     <UserCheck size={13} /> Assign Bayan →
                   </button>
@@ -1774,7 +1798,7 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                     onClick={() => setShowBulkAssignPermit(true)}
                     disabled={assignPermitBlocked}
                     title={stageBlocked ? stageTitle : assignPermitBlocked ? 'One or more selected shipments have a completed Permit task — cannot reassign' : undefined}
-                    className="flex items-center gap-1.5 text-xs bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-3 py-1.5 rounded-lg font-medium"
+                    className="flex items-center gap-1.5 text-xs bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-3 py-1.5 rounded-lg font-medium shrink-0 whitespace-nowrap"
                   >
                     <UserCheck size={13} /> Assign Permit →
                   </button>
@@ -1782,7 +1806,7 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                     onClick={() => setShowBulkHoldFFD(true)}
                     disabled={stageBlocked}
                     title={stageTitle}
-                    className="flex items-center gap-1.5 text-xs bg-amber-600 hover:bg-amber-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-3 py-1.5 rounded-lg font-medium"
+                    className="flex items-center gap-1.5 text-xs bg-amber-600 hover:bg-amber-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-3 py-1.5 rounded-lg font-medium shrink-0 whitespace-nowrap"
                   >
                     <Pause size={13} /> Put on Hold
                   </button>
@@ -1790,7 +1814,7 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                     onClick={() => setShowBulkReleaseHoldFFD(true)}
                     disabled={stageBlocked}
                     title={stageTitle}
-                    className="flex items-center gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-3 py-1.5 rounded-lg font-medium"
+                    className="flex items-center gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-3 py-1.5 rounded-lg font-medium shrink-0 whitespace-nowrap"
                   >
                     <Unlock size={13} /> Release Hold
                   </button>
@@ -1799,18 +1823,11 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
             })()}
             <button
               onClick={() => { setBulkDownloadIds(Array.from(selectedFFDIds)); setShowBulkDownload(true) }}
-              className="flex items-center gap-1.5 text-xs bg-teal-600 hover:bg-teal-500 text-white px-3 py-1.5 rounded-lg font-medium"
+              className="flex items-center gap-1.5 text-xs bg-teal-600 hover:bg-teal-500 text-white px-3 py-1.5 rounded-lg font-medium shrink-0 whitespace-nowrap"
             >
               <FileDown size={13} /> Download Docs
             </button>
-            <button
-              onClick={() => setSelectedFFDIds(new Set())}
-              className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-200 px-2 py-1 rounded hover:bg-gray-800 dark:hover:bg-gray-600"
-            >
-              <X size={13} /> Clear
-            </button>
-          </div>
-        </div>
+        </BulkActionBar>
       )}
 
       {showBulkAssignBayan && proUsers && (
@@ -1872,56 +1889,40 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
 
       {/* Admin bulk delete floating bar */}
       {isAdmin && !historical && selectedAdminIds.size > 0 && (
-        <div className="fixed bottom-20 lg:bottom-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none">
-          <div className="flex flex-wrap items-center gap-2 bg-gray-900 dark:bg-gray-700 text-white px-5 py-3 rounded-2xl shadow-xl border border-gray-700 dark:border-gray-600 pointer-events-auto">
-            <span className="text-sm">
-              <span className="font-semibold text-red-400">{selectedAdminIds.size}</span>
-              {' '}shipment{selectedAdminIds.size !== 1 ? 's' : ''} selected
-            </span>
-            <button
-              onClick={() => setConfirmBulkDelete(true)}
-              className="flex items-center gap-1.5 text-xs bg-red-600 hover:bg-red-500 text-white px-3 py-1.5 rounded-lg font-medium"
-            >
-              <X size={13} /> Delete Selected
-            </button>
-            <button
-              onClick={() => { setBulkDownloadIds(Array.from(selectedAdminIds)); setShowBulkDownload(true) }}
-              className="flex items-center gap-1.5 text-xs bg-teal-600 hover:bg-teal-500 text-white px-3 py-1.5 rounded-lg font-medium"
-            >
-              <FileDown size={13} /> Download Docs
-            </button>
-            <button
-              onClick={() => setSelectedAdminIds(new Set())}
-              className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-200 px-2 py-1 rounded hover:bg-gray-800 dark:hover:bg-gray-600"
-            >
-              <X size={13} /> Clear
-            </button>
-          </div>
-        </div>
+        <BulkActionBar
+          count={selectedAdminIds.size}
+          countClass="text-red-400"
+          onClear={() => setSelectedAdminIds(new Set())}
+        >
+          <button
+            onClick={() => setConfirmBulkDelete(true)}
+            className="flex items-center gap-1.5 text-xs bg-red-600 hover:bg-red-500 text-white px-3 py-1.5 rounded-lg font-medium shrink-0 whitespace-nowrap"
+          >
+            <X size={13} /> Delete Selected
+          </button>
+          <button
+            onClick={() => { setBulkDownloadIds(Array.from(selectedAdminIds)); setShowBulkDownload(true) }}
+            className="flex items-center gap-1.5 text-xs bg-teal-600 hover:bg-teal-500 text-white px-3 py-1.5 rounded-lg font-medium shrink-0 whitespace-nowrap"
+          >
+            <FileDown size={13} /> Download Docs
+          </button>
+        </BulkActionBar>
       )}
 
       {/* Transport/DC bulk download floating bar */}
       {(isTransport || isDC) && !historical && selectedOpsIds.size > 0 && (
-        <div className="fixed bottom-20 lg:bottom-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none">
-          <div className="flex flex-wrap items-center gap-2 bg-gray-900 dark:bg-gray-700 text-white px-5 py-3 rounded-2xl shadow-xl border border-gray-700 dark:border-gray-600 pointer-events-auto">
-            <span className="text-sm">
-              <span className="font-semibold text-teal-400">{selectedOpsIds.size}</span>
-              {' '}shipment{selectedOpsIds.size !== 1 ? 's' : ''} selected
-            </span>
-            <button
-              onClick={() => { setBulkDownloadIds(Array.from(selectedOpsIds)); setShowBulkDownload(true) }}
-              className="flex items-center gap-1.5 text-xs bg-teal-600 hover:bg-teal-500 text-white px-3 py-1.5 rounded-lg font-medium"
-            >
-              <FileDown size={13} /> Download Docs
-            </button>
-            <button
-              onClick={() => setSelectedOpsIds(new Set())}
-              className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-200 px-2 py-1 rounded hover:bg-gray-800 dark:hover:bg-gray-600"
-            >
-              <X size={13} /> Clear
-            </button>
-          </div>
-        </div>
+        <BulkActionBar
+          count={selectedOpsIds.size}
+          countClass="text-teal-400"
+          onClear={() => setSelectedOpsIds(new Set())}
+        >
+          <button
+            onClick={() => { setBulkDownloadIds(Array.from(selectedOpsIds)); setShowBulkDownload(true) }}
+            className="flex items-center gap-1.5 text-xs bg-teal-600 hover:bg-teal-500 text-white px-3 py-1.5 rounded-lg font-medium shrink-0 whitespace-nowrap"
+          >
+            <FileDown size={13} /> Download Docs
+          </button>
+        </BulkActionBar>
       )}
 
       {showBulkDownload && (
