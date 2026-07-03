@@ -2316,59 +2316,65 @@ export function ShipmentList() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-5">
+      <div className="flex items-start justify-between mb-5 gap-3">
         <h1 className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white">All Shipments</h1>
-        <div className="flex items-center gap-2">
-          {isPRO && (
-            <button
-              onClick={() => setShowBulkPermit(true)}
-              className="flex items-center gap-2 bg-green-600 text-white px-3 sm:px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-700 whitespace-nowrap"
-            >
-              <Files size={16} /> <span className="hidden sm:inline">Bulk Upload Permits</span><span className="sm:hidden">Permits</span>
-            </button>
-          )}
-          {isPRO && (
-            <button
-              onClick={() => setShowBulkBayan(true)}
-              className="flex items-center gap-2 bg-blue-600 text-white px-3 sm:px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 whitespace-nowrap"
-            >
-              <Files size={16} /> <span className="hidden sm:inline">Bulk Upload Bayans</span><span className="sm:hidden">Bayans</span>
-            </button>
-          )}
+        <div className="flex flex-col items-end gap-2">
+          {/* Bulk document uploads */}
+          <div className="flex items-center gap-2 flex-wrap justify-end">
+            {isPRO && (
+              <button
+                onClick={() => setShowBulkPermit(true)}
+                className="flex items-center gap-2 bg-green-600 text-white px-3 sm:px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-700 whitespace-nowrap"
+              >
+                <Files size={16} /> <span className="hidden sm:inline">Bulk Upload Permits</span><span className="sm:hidden">Permits</span>
+              </button>
+            )}
+            {isPRO && (
+              <button
+                onClick={() => setShowBulkBayan(true)}
+                className="flex items-center gap-2 bg-blue-600 text-white px-3 sm:px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 whitespace-nowrap"
+              >
+                <Files size={16} /> <span className="hidden sm:inline">Bulk Upload Bayans</span><span className="sm:hidden">Bayans</span>
+              </button>
+            )}
+            {isFFD && (
+              <>
+                <button
+                  onClick={() => setShowBulkDO(true)}
+                  className="flex items-center gap-2 bg-purple-600 text-white px-3 sm:px-4 py-2 rounded-lg text-sm font-medium hover:bg-purple-700 whitespace-nowrap"
+                >
+                  <Files size={16} /> <span className="hidden sm:inline">Bulk Upload DOs</span><span className="sm:hidden">DOs</span>
+                </button>
+                <button
+                  onClick={() => setShowBulkCcro(true)}
+                  className="flex items-center gap-2 bg-teal-600 text-white px-3 sm:px-4 py-2 rounded-lg text-sm font-medium hover:bg-teal-700 whitespace-nowrap"
+                >
+                  <Files size={16} /> <span className="hidden sm:inline">Bulk Upload CCROs</span><span className="sm:hidden">CCROs</span>
+                </button>
+              </>
+            )}
+            {(isPRO || isFFD) && (
+              <button
+                onClick={() => setShowBulkMisc(true)}
+                className="flex items-center gap-2 bg-gray-600 text-white px-3 sm:px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-700 whitespace-nowrap"
+              >
+                <Files size={16} /> <span className="hidden sm:inline">Bulk Upload Misc</span><span className="sm:hidden">Misc</span>
+              </button>
+            )}
+            {user?.team === 'CUSTOMER' && (
+              <Link to="/shipments/new" className="flex items-center gap-2 bg-blue-600 text-white px-3 sm:px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 whitespace-nowrap">
+                <Plus size={16} /> <span className="hidden sm:inline">New Shipment</span><span className="sm:hidden">New</span>
+              </Link>
+            )}
+          </div>
+          {/* Salalah flow — separate action, its own row */}
           {isFFD && (
-            <>
-              <button
-                onClick={() => setShowBulkDO(true)}
-                className="flex items-center gap-2 bg-purple-600 text-white px-3 sm:px-4 py-2 rounded-lg text-sm font-medium hover:bg-purple-700 whitespace-nowrap"
-              >
-                <Files size={16} /> <span className="hidden sm:inline">Bulk Upload DOs</span><span className="sm:hidden">DOs</span>
-              </button>
-              <button
-                onClick={() => setShowBulkCcro(true)}
-                className="flex items-center gap-2 bg-teal-600 text-white px-3 sm:px-4 py-2 rounded-lg text-sm font-medium hover:bg-teal-700 whitespace-nowrap"
-              >
-                <Files size={16} /> <span className="hidden sm:inline">Bulk Upload CCROs</span><span className="sm:hidden">CCROs</span>
-              </button>
-              <button
-                onClick={() => setShowBulkSalalah(true)}
-                className="flex items-center gap-2 bg-orange-600 text-white px-3 sm:px-4 py-2 rounded-lg text-sm font-medium hover:bg-orange-700 whitespace-nowrap"
-              >
-                <CheckCircle size={16} /> <span className="hidden sm:inline">Salalah Confirmation</span><span className="sm:hidden">Salalah</span>
-              </button>
-            </>
-          )}
-          {(isPRO || isFFD) && (
             <button
-              onClick={() => setShowBulkMisc(true)}
-              className="flex items-center gap-2 bg-gray-600 text-white px-3 sm:px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-700 whitespace-nowrap"
+              onClick={() => setShowBulkSalalah(true)}
+              className="flex items-center gap-2 bg-orange-600 text-white px-3 sm:px-4 py-2 rounded-lg text-sm font-medium hover:bg-orange-700 whitespace-nowrap"
             >
-              <Files size={16} /> <span className="hidden sm:inline">Bulk Upload Misc</span><span className="sm:hidden">Misc</span>
+              <CheckCircle size={16} /> <span className="hidden sm:inline">Salalah Confirmation</span><span className="sm:hidden">Salalah</span>
             </button>
-          )}
-          {user?.team === 'CUSTOMER' && (
-            <Link to="/shipments/new" className="flex items-center gap-2 bg-blue-600 text-white px-3 sm:px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 whitespace-nowrap">
-              <Plus size={16} /> <span className="hidden sm:inline">New Shipment</span><span className="sm:hidden">New</span>
-            </Link>
           )}
         </div>
       </div>
