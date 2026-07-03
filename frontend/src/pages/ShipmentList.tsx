@@ -38,6 +38,7 @@ const ALL_COLUMNS = [
   { key: 'port',                 label: 'Port of Loading' },
   { key: 'offloading_location',  label: 'Offloading Location' },
   { key: 'bayan_type',           label: 'Bayan Type' },
+  { key: 'shipping_line',        label: 'Shipping Line' },
   { key: 'stage',      label: 'Stage' },
   { key: 'progress',   label: 'Progress' },
   { key: 'pull_out',   label: 'Planned Pull Out' },
@@ -48,7 +49,7 @@ const ALL_COLUMNS = [
 ] as const
 
 // Columns hidden on mobile by default (previously handled by Tailwind responsive classes)
-const MOBILE_DEFAULT_HIDDEN = new Set(['invoice', 'consignee', 'port', 'offloading_location', 'bayan_type', 'pull_out', 'eta', 'do_validity', 'amls', 'permit_no'])
+const MOBILE_DEFAULT_HIDDEN = new Set(['invoice', 'consignee', 'port', 'offloading_location', 'bayan_type', 'shipping_line', 'pull_out', 'eta', 'do_validity', 'amls', 'permit_no'])
 
 // ── Progress status indicator ─────────────────────────────────────────────────
 
@@ -617,6 +618,7 @@ interface ColFilters {
   port: string
   offloading: string
   bayan_type: string
+  shipping_line: string
   stage: string
   pull_out_from: string
   pull_out_to: string
@@ -628,7 +630,7 @@ interface ColFilters {
   permit: string
 }
 
-function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCustomer, isPRO, isDC, isAdmin, currentUserId, expandedId, onExpand, proUsers, onRefresh, sort, onSort, hiddenCols = new Set(), isMobile = false, historical = false, colFilters, onColFilter }: {
+function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCustomer, isPRO, isDC, isTransport, isAdmin, currentUserId, expandedId, onExpand, proUsers, onRefresh, sort, onSort, hiddenCols = new Set(), isMobile = false, historical = false, colFilters, onColFilter }: {
   shipments: ShipmentListItem[]
   page: number
   totalPages: number
@@ -638,6 +640,7 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
   isCustomer?: boolean
   isPRO?: boolean
   isDC?: boolean
+  isTransport?: boolean
   isAdmin?: boolean
   currentUserId?: string
   expandedId?: string | null
@@ -654,7 +657,7 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
 }) {
   const qc = useQueryClient()
   const offset = (page - 1) * PAGE_SIZE
-  const colSpan = isFFD ? 15 : (isCustomer || isPRO) ? 15 : isAdmin ? 15 : 14
+  const colSpan = isFFD ? 16 : (isCustomer || isPRO) ? 16 : isAdmin ? 16 : (isDC || isTransport) ? 16 : 15
 
   function colCls(key: string, whenVisible: string): string {
     if (hiddenCols.has(key)) return 'hidden'
@@ -685,6 +688,9 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
   const [selectedAdminIds, setSelectedAdminIds] = useState<Set<string>>(new Set())
   const [savingBulkDelete, setSavingBulkDelete] = useState(false)
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false)
+
+  // Shared between Transport and DC — a user belongs to exactly one team, so these never collide
+  const [selectedOpsIds, setSelectedOpsIds] = useState<Set<string>>(new Set())
 
   const [showBulkDownload, setShowBulkDownload] = useState(false)
   const [bulkDownloadIds, setBulkDownloadIds] = useState<string[]>([])
@@ -801,6 +807,18 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
 
   function toggleSelectAllAdmin(rows: ShipmentListItem[]) {
     setSelectedAdminIds(prev => prev.size === rows.length ? new Set() : new Set(rows.map(s => s.id)))
+  }
+
+  function toggleSelectOps(id: string) {
+    setSelectedOpsIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+
+  function toggleSelectAllOps(rows: ShipmentListItem[]) {
+    setSelectedOpsIds(prev => prev.size === rows.length ? new Set() : new Set(rows.map(s => s.id)))
   }
 
   async function handleBulkDelete() {
@@ -984,6 +1002,16 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                   />
                 </th>
               )}
+              {(isDC || isTransport) && !historical && (
+                <th className="px-3 py-3 w-10">
+                  <input
+                    type="checkbox"
+                    checked={selectedOpsIds.size === displaySorted.length && displaySorted.length > 0}
+                    onChange={() => toggleSelectAllOps(displaySorted)}
+                    className="w-4 h-4 rounded border-gray-300 text-teal-600 focus:ring-teal-500 cursor-pointer"
+                  />
+                </th>
+              )}
               <th className="text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">#</th>
               <SortableHeader label="BL Number" column="bl" sort={sort} onSort={onSort} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide"
                 filter={<ColumnFilterPopover filter={{ type: 'text', value: colFilters.bl, onChange: v => onColFilter('bl', v), placeholder: 'Filter BL…' }} />}
@@ -1000,6 +1028,9 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
               </th>
               <th className={colCls('bayan_type', 'hidden xl:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>
                 <div className="flex items-center gap-1">Bayan Type<ColumnFilterPopover filter={{ type: 'text', value: colFilters.bayan_type, onChange: v => onColFilter('bayan_type', v), placeholder: 'Filter type…' }} /></div>
+              </th>
+              <th className={colCls('shipping_line', 'hidden xl:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>
+                <div className="flex items-center gap-1">Shipping Line<ColumnFilterPopover filter={{ type: 'text', value: colFilters.shipping_line, onChange: v => onColFilter('shipping_line', v), placeholder: 'Filter line…' }} /></div>
               </th>
               <SortableHeader label={isPRO ? 'My Task' : 'Stage'} column="stage" sort={sort} onSort={onSort} className={colCls('stage', 'px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide')}
                 filter={!isPRO && <ColumnFilterPopover filter={{ type: 'select', value: colFilters.stage, onChange: v => onColFilter('stage', v), options: Object.entries(STAGE_LABELS).filter(([v]) => v !== 'COMPLETED').map(([value, label]) => ({ value, label })), allLabel: 'All stages' }} />}
@@ -1095,6 +1126,16 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                         />
                       </td>
                     )}
+                    {(isDC || isTransport) && !historical && (
+                      <td className="px-3 py-3">
+                        <input
+                          type="checkbox"
+                          checked={selectedOpsIds.has(s.id)}
+                          onChange={() => toggleSelectOps(s.id)}
+                          className="w-4 h-4 rounded border-gray-300 text-teal-600 focus:ring-teal-500 cursor-pointer"
+                        />
+                      </td>
+                    )}
                     <td className="px-3 py-3">
                       <div className="flex items-center gap-1.5">
                         {isOverdue && <AlertTriangle size={14} className="text-red-500" />}
@@ -1115,6 +1156,9 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                     </td>
                     <td className={colCls('bayan_type', 'hidden xl:table-cell px-3 py-3 text-xs text-gray-600 dark:text-gray-300 whitespace-nowrap')}>
                       {s.bayan_type_name || <span className="text-gray-400">—</span>}
+                    </td>
+                    <td className={colCls('shipping_line', 'hidden xl:table-cell px-3 py-3 text-xs text-gray-600 dark:text-gray-300 whitespace-nowrap')}>
+                      {s.shipping_line_name || <span className="text-gray-400">—</span>}
                     </td>
                     <td className={colCls('stage', 'px-3 py-3')}>
                       {isPRO && s.current_stage === 'IN_PROGRESS' ? (() => {
@@ -1747,6 +1791,30 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
         </div>
       )}
 
+      {/* Transport/DC bulk download floating bar */}
+      {(isTransport || isDC) && !historical && selectedOpsIds.size > 0 && (
+        <div className="fixed bottom-20 lg:bottom-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none">
+          <div className="flex flex-wrap items-center gap-2 bg-gray-900 dark:bg-gray-700 text-white px-5 py-3 rounded-2xl shadow-xl border border-gray-700 dark:border-gray-600 pointer-events-auto">
+            <span className="text-sm">
+              <span className="font-semibold text-teal-400">{selectedOpsIds.size}</span>
+              {' '}shipment{selectedOpsIds.size !== 1 ? 's' : ''} selected
+            </span>
+            <button
+              onClick={() => { setBulkDownloadIds(Array.from(selectedOpsIds)); setShowBulkDownload(true) }}
+              className="flex items-center gap-1.5 text-xs bg-teal-600 hover:bg-teal-500 text-white px-3 py-1.5 rounded-lg font-medium"
+            >
+              <FileDown size={13} /> Download Docs
+            </button>
+            <button
+              onClick={() => setSelectedOpsIds(new Set())}
+              className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-200 px-2 py-1 rounded hover:bg-gray-800 dark:hover:bg-gray-600"
+            >
+              <X size={13} /> Clear
+            </button>
+          </div>
+        </div>
+      )}
+
       {showBulkDownload && (
         <BulkDownloadModal
           selectedIds={bulkDownloadIds}
@@ -1830,6 +1898,7 @@ export function ShipmentList() {
   const [showBulkDO, setShowBulkDO] = useState(false)
   const [showBulkDORenewal, setShowBulkDORenewal] = useState(false)
   const [filterDoExpired, setFilterDoExpired] = useState(false)
+  const [filterDoExpiringSoon, setFilterDoExpiringSoon] = useState(false)
   const [showBulkCcro, setShowBulkCcro] = useState(false)
   const [showBulkSalalah, setShowBulkSalalah] = useState(false)
   const [sort, setSort] = useState<SortState>({ column: null, dir: 'asc' })
@@ -1847,6 +1916,8 @@ export function ShipmentList() {
   const [debouncedOffloading, setDebouncedOffloading] = useState('')
   const [filterBayanType, setFilterBayanType] = useState('')
   const [debouncedBayanType, setDebouncedBayanType] = useState('')
+  const [filterShippingLine, setFilterShippingLine] = useState('')
+  const [debouncedShippingLine, setDebouncedShippingLine] = useState('')
   const [filterEtaFrom, setFilterEtaFrom] = useState('')
   const [filterEtaTo, setFilterEtaTo] = useState('')
   const [filterDoValidityFrom, setFilterDoValidityFrom] = useState('')
@@ -1928,7 +1999,9 @@ export function ShipmentList() {
         historical: historical || undefined,
         completed_from: (historical && completedFrom) || undefined,
         completed_to: (historical && completedTo) || undefined,
-        do_expired: filterDoExpired || undefined,
+        do_expired: (filterDoExpired && !filterDoExpiringSoon) || undefined,
+        do_validity_from: filterDoExpiringSoon ? new Date().toISOString().slice(0, 10) : undefined,
+        do_validity_to: filterDoExpiringSoon ? (() => { const d = new Date(); d.setDate(d.getDate() + 3); return d.toISOString().slice(0, 10) })() : undefined,
       })
       const url = URL.createObjectURL(new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
       const a = document.createElement('a')
@@ -1955,19 +2028,20 @@ export function ShipmentList() {
   useEffect(() => { const t = setTimeout(() => setDebouncedPort(filterPort), 300); return () => clearTimeout(t) }, [filterPort])
   useEffect(() => { const t = setTimeout(() => setDebouncedOffloading(filterOffloading), 300); return () => clearTimeout(t) }, [filterOffloading])
   useEffect(() => { const t = setTimeout(() => setDebouncedBayanType(filterBayanType), 300); return () => clearTimeout(t) }, [filterBayanType])
+  useEffect(() => { const t = setTimeout(() => setDebouncedShippingLine(filterShippingLine), 300); return () => clearTimeout(t) }, [filterShippingLine])
   useEffect(() => { const t = setTimeout(() => setDebouncedPermit(filterPermit), 300); return () => clearTimeout(t) }, [filterPermit])
 
   const isFirstRender = useRef(true)
   useEffect(() => {
     if (isFirstRender.current) { isFirstRender.current = false; return }
     setPage(1)
-  }, [debouncedSearch, stageFilter, missingDate, debouncedAmlsSearch, missingAmls, pullOutFrom, pullOutTo, completedFrom, completedTo, debouncedConsignee, debouncedPort, debouncedOffloading, debouncedBayanType, filterEtaFrom, filterEtaTo, filterDoValidityFrom, filterDoValidityTo, debouncedPermit])
+  }, [debouncedSearch, stageFilter, missingDate, debouncedAmlsSearch, missingAmls, pullOutFrom, pullOutTo, completedFrom, completedTo, debouncedConsignee, debouncedPort, debouncedOffloading, debouncedBayanType, debouncedShippingLine, filterEtaFrom, filterEtaTo, filterDoValidityFrom, filterDoValidityTo, debouncedPermit])
 
   const skip = (page - 1) * PAGE_SIZE
   const isMyQueue = !historical && stageFilter === 'my_queue'
 
   const { data, isLoading } = useQuery({
-    queryKey: ['shipments', skip, debouncedSearch, stageFilter, missingDate, debouncedAmlsSearch, missingAmls, pullOutFrom, pullOutTo, sort.column, sort.dir, historical, completedFrom, completedTo, debouncedConsignee, debouncedPort, debouncedOffloading, debouncedBayanType, filterEtaFrom, filterEtaTo, filterDoValidityFrom, filterDoValidityTo, debouncedPermit, filterDoExpired],
+    queryKey: ['shipments', skip, debouncedSearch, stageFilter, missingDate, debouncedAmlsSearch, missingAmls, pullOutFrom, pullOutTo, sort.column, sort.dir, historical, completedFrom, completedTo, debouncedConsignee, debouncedPort, debouncedOffloading, debouncedBayanType, debouncedShippingLine, filterEtaFrom, filterEtaTo, filterDoValidityFrom, filterDoValidityTo, debouncedPermit, filterDoExpired, filterDoExpiringSoon],
     queryFn: () => shipmentsApi.list({
       skip,
       limit: PAGE_SIZE,
@@ -1988,12 +2062,13 @@ export function ShipmentList() {
       port_search: debouncedPort || undefined,
       offloading_search: debouncedOffloading || undefined,
       bayan_type_search: debouncedBayanType || undefined,
+      shipping_line_search: debouncedShippingLine || undefined,
       eta_from: filterEtaFrom || undefined,
       eta_to: filterEtaTo || undefined,
-      do_validity_from: filterDoValidityFrom || undefined,
-      do_validity_to: filterDoValidityTo || undefined,
+      do_validity_from: filterDoExpiringSoon ? new Date().toISOString().slice(0, 10) : (filterDoValidityFrom || undefined),
+      do_validity_to: filterDoExpiringSoon ? (() => { const d = new Date(); d.setDate(d.getDate() + 3); return d.toISOString().slice(0, 10) })() : (filterDoValidityTo || undefined),
       permit_search: debouncedPermit || undefined,
-      do_expired: filterDoExpired || undefined,
+      do_expired: (filterDoExpired && !filterDoExpiringSoon) || undefined,
     }).then(r => r.data),
     placeholderData: prev => prev,
   })
@@ -2008,6 +2083,7 @@ export function ShipmentList() {
     port: filterPort,
     offloading: filterOffloading,
     bayan_type: filterBayanType,
+    shipping_line: filterShippingLine,
     stage: stageFilter === 'my_queue' ? '' : stageFilter,
     pull_out_from: pullOutFrom,
     pull_out_to: pullOutTo,
@@ -2026,6 +2102,7 @@ export function ShipmentList() {
       case 'port': setFilterPort(value); break
       case 'offloading': setFilterOffloading(value); break
       case 'bayan_type': setFilterBayanType(value); break
+      case 'shipping_line': setFilterShippingLine(value); break
       case 'stage': setStageFilter(value as typeof stageFilter); break
       case 'pull_out_from': setPullOutFrom(value); break
       case 'pull_out_to': setPullOutTo(value); break
@@ -2172,7 +2249,7 @@ export function ShipmentList() {
             All Shipments
           </button>
           <button
-            onClick={() => setFilterDoExpired(v => !v)}
+            onClick={() => { setFilterDoExpired(v => !v); setFilterDoExpiringSoon(false) }}
             className={clsx(
               'flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors',
               filterDoExpired
@@ -2182,6 +2259,19 @@ export function ShipmentList() {
           >
             DO Expired
           </button>
+          {filterDoExpired && (
+            <button
+              onClick={() => setFilterDoExpiringSoon(v => !v)}
+              className={clsx(
+                'flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors',
+                filterDoExpiringSoon
+                  ? 'bg-amber-500 text-white border-amber-500'
+                  : 'border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20'
+              )}
+            >
+              Expiring in 3 days
+            </button>
+          )}
           {filterDoExpired && (
             <button
               onClick={() => setShowBulkDORenewal(true)}
@@ -2263,7 +2353,7 @@ export function ShipmentList() {
           )}
           {!historical && isFFD && (
             <button
-              onClick={() => setFilterDoExpired(v => !v)}
+              onClick={() => { setFilterDoExpired(v => !v); setFilterDoExpiringSoon(false) }}
               className={clsx(
                 'flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border transition-colors whitespace-nowrap',
                 filterDoExpired
@@ -2272,6 +2362,19 @@ export function ShipmentList() {
               )}
             >
               DO Expired
+            </button>
+          )}
+          {!historical && isFFD && filterDoExpired && (
+            <button
+              onClick={() => setFilterDoExpiringSoon(v => !v)}
+              className={clsx(
+                'flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border transition-colors whitespace-nowrap',
+                filterDoExpiringSoon
+                  ? 'bg-amber-500 text-white border-amber-500'
+                  : 'border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20'
+              )}
+            >
+              Expiring in 3 days
             </button>
           )}
           {!historical && isFFD && filterDoExpired && (
@@ -2449,6 +2552,7 @@ export function ShipmentList() {
           isCustomer={isCustomer}
           isPRO={isPRO}
           isDC={isDC}
+          isTransport={isTransport}
           isAdmin={user?.is_admin}
           currentUserId={user?.id}
           expandedId={expandedId}

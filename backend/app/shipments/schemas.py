@@ -258,6 +258,7 @@ class ShipmentListOut(BaseModel):
     consignee_name: Optional[str] = None
     loading_port_name: Optional[str] = None
     bayan_type_name: Optional[str] = None
+    shipping_line_name: Optional[str] = None
     offloading_date: Optional[datetime] = None
 
 

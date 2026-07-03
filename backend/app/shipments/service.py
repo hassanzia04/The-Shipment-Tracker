@@ -1,6 +1,7 @@
 import io
 import uuid
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from fastapi import HTTPException, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -15,6 +16,8 @@ from app.enums import (
     HoldReason, ContainerStatus, EventType, Team, DocumentType,
     CUSTOMER_REQUIRED_DOCS, TEAM_HOLD_PERMISSIONS, HOLD_REASON_MAP
 )
+
+MUSCAT_TZ = ZoneInfo("Asia/Muscat")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -827,6 +830,7 @@ async def list_shipments(
     port_search: str | None = None,
     offloading_search: str | None = None,
     bayan_type_search: str | None = None,
+    shipping_line_search: str | None = None,
     eta_from=None,
     eta_to=None,
     do_validity_from=None,
@@ -1012,6 +1016,13 @@ async def list_shipments(
             select(BayanType.id).where(
                 BayanType.id == Shipment.bayan_type_id,
                 BayanType.name.ilike(f"%{bayan_type_search}%"),
+            ).correlate(Shipment).exists()
+        )
+    if shipping_line_search:
+        base_where.append(
+            select(ShippingLine.id).where(
+                ShippingLine.id == Shipment.shipping_line_id,
+                ShippingLine.name.ilike(f"%{shipping_line_search}%"),
             ).correlate(Shipment).exists()
         )
     if eta_from:
@@ -2833,7 +2844,7 @@ async def export_container_billing(
         if val is None:
             return ""
         if isinstance(val, datetime):
-            return val.strftime("%d/%m/%Y %H:%M")
+            return val.astimezone(MUSCAT_TZ).strftime("%d/%m/%Y %H:%M")
         if isinstance(val, date_type):
             return val.strftime("%d/%m/%Y")
         return str(val)
@@ -2883,6 +2894,8 @@ async def export_container_view(
     historical: bool = False,
     amls_only: bool = False,
     do_expired: bool = False,
+    do_validity_from: str | None = None,
+    do_validity_to: str | None = None,
 ) -> bytes:
     from datetime import date as date_type
 
@@ -2893,14 +2906,20 @@ async def export_container_view(
     )
 
     if do_expired:
-        _today = date_type.today().isoformat()
+        _today = date_type.today()
         rows = [r for r in rows if r.get('do_validity_date') and r['do_validity_date'] < _today]
+    if do_validity_from or do_validity_to:
+        _from = date_type.fromisoformat(do_validity_from) if do_validity_from else None
+        _to = date_type.fromisoformat(do_validity_to) if do_validity_to else None
+        rows = [r for r in rows if r.get('do_validity_date')
+                and (not _from or r['do_validity_date'] >= _from)
+                and (not _to or r['do_validity_date'] <= _to)]
 
     def _fmt(val) -> str:
         if val is None:
             return ""
         if isinstance(val, datetime):
-            return val.strftime("%d/%m/%Y %H:%M")
+            return val.astimezone(MUSCAT_TZ).strftime("%d/%m/%Y %H:%M")
         if isinstance(val, date_type):
             return val.strftime("%d/%m/%Y")
         if hasattr(val, 'value'):
@@ -2911,7 +2930,7 @@ async def export_container_view(
     ws = wb.active
     ws.title = "Containers"
     headers = [
-        "SR#", "Container Number", "BL Number", "Status",
+        "SR#", "Container Number", "BL Number", "Status", "DO Validity Date",
         "Port of Loading", "Planned Pull Out Date", "Actual Pull Out Date", "Offloading Date",
         "Truck Plate", "Driver", "Contractor", "Offloading Point", "ETA / Arrived",
     ]
@@ -2925,6 +2944,7 @@ async def export_container_view(
             r["container_number"],
             r["bl_number"],
             _fmt(r["status"]),
+            _fmt(r.get("do_validity_date")),
             r.get("loading_port_name") or "",
             _fmt(r.get("pull_out_date")),
             _fmt(r.get("actual_pull_out_date")),
@@ -2956,6 +2976,8 @@ async def export_shipments_list(
     completed_from=None,
     completed_to=None,
     do_expired: bool = False,
+    do_validity_from=None,
+    do_validity_to=None,
 ) -> bytes:
     from datetime import date as date_type
 
@@ -2980,13 +3002,15 @@ async def export_shipments_list(
         completed_from=completed_from,
         completed_to=completed_to,
         do_expired=do_expired,
+        do_validity_from=do_validity_from,
+        do_validity_to=do_validity_to,
     )
 
     def _fmt(val) -> str:
         if val is None:
             return ""
         if isinstance(val, datetime):
-            return val.strftime("%d/%m/%Y %H:%M")
+            return val.astimezone(MUSCAT_TZ).strftime("%d/%m/%Y %H:%M")
         if isinstance(val, date_type):
             return val.strftime("%d/%m/%Y")
         return str(val)
@@ -3002,7 +3026,7 @@ async def export_shipments_list(
     ws.title = "Shipments"
     headers = [
         "SR#", "BL Number", "Invoice Number", "Stage", "Shipping Line", "Port of Loading",
-        "Offloading Location", "Bayan Type", "Planned Pull out", "Actual Pull out",
+        "Offloading Location", "Bayan Type", "Planned Pull out", "Actual Pull out", "DO Validity Date",
         "AMLS Job#", "Permit", "DO", "Bayan", "Created At",
     ]
     if historical:
@@ -3027,6 +3051,7 @@ async def export_shipments_list(
             s.bayan_type.name if s.bayan_type else "",
             _fmt(s.pull_out_date),
             _fmt(actual_pull_out),
+            _fmt(s.do_validity_date),
             s.amls_job_number or "",
             _task_status(s, "PERMIT"),
             _task_status(s, "DO"),

@@ -41,6 +41,7 @@ async def list_shipments(
     port_search: Optional[str] = Query(None),
     offloading_search: Optional[str] = Query(None),
     bayan_type_search: Optional[str] = Query(None),
+    shipping_line_search: Optional[str] = Query(None),
     eta_from: Optional[date] = Query(None),
     eta_to: Optional[date] = Query(None),
     do_validity_from: Optional[date] = Query(None),
@@ -60,6 +61,7 @@ async def list_shipments(
         historical=historical, completed_from=completed_from, completed_to=completed_to,
         consignee_search=consignee_search or None, port_search=port_search or None,
         offloading_search=offloading_search or None, bayan_type_search=bayan_type_search or None,
+        shipping_line_search=shipping_line_search or None,
         eta_from=eta_from, eta_to=eta_to,
         do_validity_from=do_validity_from, do_validity_to=do_validity_to,
         permit_search=permit_search or None,
@@ -204,10 +206,12 @@ async def container_view_export(
     historical: bool = Query(False),
     amls_only: bool = Query(False),
     do_expired: bool = Query(False),
+    do_validity_from: Optional[str] = Query(None),
+    do_validity_to: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ):
-    content = await service.export_container_view(db, actor, search=search, from_date=from_date, to_date=to_date, status=status, historical=historical, amls_only=amls_only, do_expired=do_expired)
+    content = await service.export_container_view(db, actor, search=search, from_date=from_date, to_date=to_date, status=status, historical=historical, amls_only=amls_only, do_expired=do_expired, do_validity_from=do_validity_from, do_validity_to=do_validity_to)
     return Response(
         content=content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -229,10 +233,12 @@ async def bl_export(
     completed_from: Optional[date] = Query(None),
     completed_to: Optional[date] = Query(None),
     do_expired: bool = Query(False),
+    do_validity_from: Optional[date] = Query(None),
+    do_validity_to: Optional[date] = Query(None),
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ):
-    content = await service.export_shipments_list(db, actor, search=search, stage=stage, my_queue=my_queue, missing_date=missing_date, amls_search=amls_search or None, missing_amls=missing_amls, pull_out_from=pull_out_from, pull_out_to=pull_out_to, historical=historical, completed_from=completed_from, completed_to=completed_to, do_expired=do_expired)
+    content = await service.export_shipments_list(db, actor, search=search, stage=stage, my_queue=my_queue, missing_date=missing_date, amls_search=amls_search or None, missing_amls=missing_amls, pull_out_from=pull_out_from, pull_out_to=pull_out_to, historical=historical, completed_from=completed_from, completed_to=completed_to, do_expired=do_expired, do_validity_from=do_validity_from, do_validity_to=do_validity_to)
     return Response(
         content=content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

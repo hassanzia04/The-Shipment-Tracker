@@ -856,6 +856,7 @@ export function ContainerView({ team, historical = false }: Props) {
 
   // Column-level client-side filters
   const [cfDoExpired, setCfDoExpired] = useState(false)
+  const [cfDoExpiringSoon, setCfDoExpiringSoon] = useState(false)
   const [cfBl, setCfBl] = useState('')
   const [cfContainer, setCfContainer] = useState('')
   const [cfDoFrom, setCfDoFrom] = useState('')
@@ -955,7 +956,9 @@ export function ContainerView({ team, historical = false }: Props) {
         status: statusFilter || undefined,
         historical,
         amls_only: (amlsOnly && team === 'DC') || undefined,
-        do_expired: cfDoExpired || undefined,
+        do_expired: (cfDoExpired && !cfDoExpiringSoon) || undefined,
+        do_validity_from: cfDoExpiringSoon ? new Date().toISOString().slice(0, 10) : undefined,
+        do_validity_to: cfDoExpiringSoon ? (() => { const d = new Date(); d.setDate(d.getDate() + 3); return d.toISOString().slice(0, 10) })() : undefined,
       })
       const url = URL.createObjectURL(new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
       const a = document.createElement('a')
@@ -980,9 +983,15 @@ export function ContainerView({ team, historical = false }: Props) {
     if (cfPort && !c.loading_port_name?.toLowerCase().includes(cfPort.toLowerCase())) return false
     if (cfBayanType && !c.bayan_type_name?.toLowerCase().includes(cfBayanType.toLowerCase())) return false
     if (cfLocation && !c.offloading_point_name?.toLowerCase().includes(cfLocation.toLowerCase())) return false
-    if (cfDoExpired) {
+    if (cfDoExpired && !cfDoExpiringSoon) {
       const today = new Date().toISOString().slice(0, 10)
       if (!c.do_validity_date || c.do_validity_date >= today) return false
+    }
+    if (cfDoExpiringSoon) {
+      const today = new Date().toISOString().slice(0, 10)
+      const in3 = new Date(); in3.setDate(in3.getDate() + 3)
+      const in3Str = in3.toISOString().slice(0, 10)
+      if (!c.do_validity_date || c.do_validity_date < today || c.do_validity_date > in3Str) return false
     }
     if (cfDoFrom && c.do_validity_date && c.do_validity_date < cfDoFrom) return false
     if (cfDoTo && c.do_validity_date && c.do_validity_date > cfDoTo) return false
@@ -1042,7 +1051,7 @@ export function ContainerView({ team, historical = false }: Props) {
           )}
           {!historical && team === 'FFD' && (
             <button
-              onClick={() => setCfDoExpired(v => !v)}
+              onClick={() => { setCfDoExpired(v => !v); setCfDoExpiringSoon(false) }}
               className={clsx(
                 'flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium border transition-colors',
                 cfDoExpired
@@ -1051,6 +1060,19 @@ export function ContainerView({ team, historical = false }: Props) {
               )}
             >
               DO Expired
+            </button>
+          )}
+          {!historical && team === 'FFD' && cfDoExpired && (
+            <button
+              onClick={() => setCfDoExpiringSoon(v => !v)}
+              className={clsx(
+                'flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium border transition-colors',
+                cfDoExpiringSoon
+                  ? 'bg-amber-500 text-white border-amber-500'
+                  : 'bg-white dark:bg-gray-800 border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20'
+              )}
+            >
+              Expiring in 3 days
             </button>
           )}
           {!historical && team === 'TRANSPORT' && pendingCcrosCount > 0 && (

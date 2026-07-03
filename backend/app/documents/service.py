@@ -1145,10 +1145,6 @@ async def analyze_do_files(
 
         if shipment and not renewal and not await _shipment_in_user_queue(db, shipment, actor, TaskType.DO):
             shipment = None
-        if shipment and renewal:
-            from datetime import date as _d
-            if not shipment.do_validity_date or shipment.do_validity_date >= _d.today():
-                shipment = None
 
         if shipment and str(shipment.id) in matched_shipment_ids:
             shipment = None

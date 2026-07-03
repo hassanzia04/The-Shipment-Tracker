@@ -295,7 +295,7 @@ function DOFileRow({
     setLoadingResults(true)
     try {
       const params = renewalMode
-        ? { limit: 10, do_expired: true }
+        ? { limit: 10, my_queue: true }
         : { limit: 10, my_queue: true, task_type_filter: 'DO' as const }
       const { data } = await shipmentsApi.list(params)
       setResults(data.items.filter(s => s.id === row.shipmentId || !matchedIds.has(s.id)))
@@ -319,7 +319,7 @@ function DOFileRow({
     searchTimeout.current = setTimeout(async () => {
       try {
         const params = renewalMode
-          ? { search: q, limit: 8, do_expired: true }
+          ? { search: q, limit: 8, my_queue: true }
           : { search: q, limit: 8, my_queue: true, task_type_filter: 'DO' as const }
         const { data } = await shipmentsApi.list(params)
         setResults(data.items.filter(s => s.id === row.shipmentId || !matchedIds.has(s.id)))

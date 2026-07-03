@@ -179,6 +179,7 @@ export interface ShipmentListItem {
   consignee_name: string | null
   loading_port_name: string | null
   bayan_type_name: string | null
+  shipping_line_name: string | null
   offloading_date: string | null
 }
 

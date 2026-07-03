@@ -121,49 +121,61 @@ async def _check_and_maybe_send() -> None:
 
 @celery_app.task(name="notifications.send_do_expiry_alerts")
 def send_do_expiry_alerts() -> None:
-    """Runs at 8:30 AM Muscat daily. Sends DO validity expiry digest to FFD and Transport teams."""
+    """Runs at 8:30 AM Muscat daily. Sends DO validity digest (expired + expiring within 3 days) to FFD and Transport teams."""
     asyncio.run(_send_do_expiry_alerts())
 
 
 async def _send_do_expiry_alerts() -> None:
-    from datetime import date
+    from datetime import date, timedelta
     from zoneinfo import ZoneInfo
     from sqlalchemy import select
     from app.shipments.models import Shipment, Container
+    from app.masters.models import ShippingLine
     from app.auth.models import User
     from app.enums import ShipmentStage, Team
     from app.notifications.tasks import send_email_task
 
     MUSCAT_TZ = ZoneInfo("Asia/Muscat")
     today = date.today()
+    cutoff = today + timedelta(days=3)
 
     factory, engine = await _make_task_session()
     try:
         async with factory() as db:
-            # Find shipments with DO validity in 1, 2, or 3 days
-            expiring = []
-            for days in [1, 2, 3]:
-                target = today + __import__("datetime").timedelta(days=days)
-                result = await db.execute(
-                    select(Shipment.bl_number, Shipment.do_validity_date)
-                    .where(
-                        Shipment.do_validity_date == target,
-                        Shipment.current_stage != ShipmentStage.COMPLETED,
-                    )
-                    .order_by(Shipment.bl_number)
+            # Shipments whose DO validity has already expired, or expires within the next 3 days (inclusive of today)
+            result = await db.execute(
+                select(Shipment.bl_number, Shipment.do_validity_date, ShippingLine.name.label("shipping_line_name"))
+                .outerjoin(ShippingLine, ShippingLine.id == Shipment.shipping_line_id)
+                .where(
+                    Shipment.do_validity_date.isnot(None),
+                    Shipment.do_validity_date <= cutoff,
+                    Shipment.current_stage != ShipmentStage.COMPLETED,
                 )
-                for row in result.all():
-                    expiring.append({
-                        "bl_number": row.bl_number,
-                        "days": days,
-                        "expiry": row.do_validity_date.strftime("%d %b %Y"),
-                    })
+                .order_by(Shipment.do_validity_date, Shipment.bl_number)
+            )
+            expiring = [
+                {
+                    "bl_number": row.bl_number,
+                    "days": (row.do_validity_date - today).days,
+                    "expiry": row.do_validity_date.strftime("%d %b %Y"),
+                    "shipping_line": row.shipping_line_name or "—",
+                }
+                for row in result.all()
+            ]
 
             if not expiring:
                 return
 
-            html = _build_do_expiry_html(expiring, today)
-            subject = f"FFD Tracker — DO Validity Expiring Soon ({len(expiring)} B/L{'s' if len(expiring) != 1 else ''})"
+            expired_count = sum(1 for item in expiring if item["days"] < 0)
+            upcoming_count = len(expiring) - expired_count
+
+            html = _build_do_expiry_html(expiring, today, expired_count, upcoming_count)
+            subject_bits = []
+            if expired_count:
+                subject_bits.append(f"{expired_count} Expired")
+            if upcoming_count:
+                subject_bits.append(f"{upcoming_count} Expiring Soon")
+            subject = f"FFD Tracker — DO Validity Alert: {', '.join(subject_bits)}"
 
             for team in [Team.FFD, Team.TRANSPORT]:
                 from app.notifications.models import AlertCCConfig
@@ -185,26 +197,43 @@ async def _send_do_expiry_alerts() -> None:
         await engine.dispose()
 
 
-def _build_do_expiry_html(expiring: list[dict], today) -> str:
+def _build_do_expiry_html(expiring: list[dict], today, expired_count: int, upcoming_count: int) -> str:
     from app.notifications.daily_report import _th, _td
     from app.config import settings
     import html as _html
     tracker_url = _html.escape(settings.FRONTEND_URL)
 
-    urgency_color = {1: ("#dc2626", "#fee2e2"), 2: ("#c2410c", "#fff7ed"), 3: ("#a16207", "#fef9c3")}
+    def _urgency(days: int) -> tuple[str, str]:
+        if days < 0:
+            return "#991b1b", "#fecaca"  # expired — darkest red
+        if days == 0:
+            return "#dc2626", "#fee2e2"  # today
+        if days == 1:
+            return "#c2410c", "#fff7ed"  # tomorrow
+        return "#a16207", "#fef9c3"      # 2-3 days out
+
+    def _label(days: int) -> str:
+        if days < 0:
+            return "EXPIRED" if days == -1 else f"EXPIRED {abs(days)}D AGO"
+        if days == 0:
+            return "TODAY"
+        if days == 1:
+            return "TOMORROW"
+        return f"{days} days"
+
     rows = ""
     for i, item in enumerate(expiring):
         bg = "#f8fafc" if i % 2 == 0 else "#ffffff"
-        color, badge_bg = urgency_color[item["days"]]
-        days_label = "TODAY" if item["days"] == 1 else f'{item["days"]} days'
+        color, badge_bg = _urgency(item["days"])
         badge = (
             f'<span style="display:inline-block;padding:2px 8px;border-radius:4px;'
             f'font-size:11px;font-weight:700;background-color:{badge_bg};color:{color};">'
-            f'{days_label}</span>'
+            f'{_label(item["days"])}</span>'
         )
         rows += (
             f'<tr style="background-color:{bg};">'
             f'{_td(item["bl_number"], "font-weight:600;white-space:nowrap;")}'
+            f'{_td(item["shipping_line"], "white-space:nowrap;")}'
             f'{_td(item["expiry"], f"font-weight:600;color:{color};white-space:nowrap;")}'
             f'<td style="padding:8px 12px;">{badge}</td>'
             f'</tr>'
@@ -212,10 +241,18 @@ def _build_do_expiry_html(expiring: list[dict], today) -> str:
 
     table = (
         '<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:1px solid #e2e8f0;">'
-        f'<tr>{_th("BL Number")}{_th("DO Expiry Date")}{_th("Time Left")}</tr>'
+        f'<tr>{_th("BL Number")}{_th("Shipping Line")}{_th("DO Expiry Date")}{_th("Status")}</tr>'
         f'{rows}'
         '</table>'
     )
+
+    subtitle_bits = []
+    if expired_count:
+        subtitle_bits.append(f"{expired_count} expired")
+    if upcoming_count:
+        subtitle_bits.append(f"{upcoming_count} expiring within 3 days")
+    subtitle = " &middot; ".join(subtitle_bits)
+
     return f"""<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"></head>
@@ -226,16 +263,16 @@ def _build_do_expiry_html(expiring: list[dict], today) -> str:
   style="background-color:#ffffff;max-width:600px;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.1);">
   <tr><td bgcolor="#dc2626" style="background-color:#dc2626;padding:24px 32px;">
     <p style="margin:0;font-family:Arial,sans-serif;font-size:18px;font-weight:bold;color:#ffffff;">
-      DO Validity Expiry Alert
+      DO Validity Alert
     </p>
     <p style="margin:6px 0 0;font-family:Arial,sans-serif;font-size:13px;color:#fecaca;">
-      {len(expiring)} B/L{'s' if len(expiring) != 1 else ''} with DO expiring within 3 days &mdash; {today.strftime("%d %B %Y")}
+      {subtitle} &mdash; {today.strftime("%d %B %Y")}
     </p>
   </td></tr>
   <tr><td style="padding:24px 32px 8px;">
     <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#374151;">
-      The following B/Ls have DO validity dates expiring within the next 3 days.
-      Please take action to revalidate or complete handover before expiry.
+      The following B/Ls have DO validity dates that have already expired or are expiring within the next 3 days.
+      Please take immediate action on expired DOs, and revalidate or complete handover before expiry for the rest.
     </p>
     {table}
   </td></tr>
