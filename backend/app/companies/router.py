@@ -40,7 +40,11 @@ async def update_company(
     db: AsyncSession = Depends(get_db),
     _: User = Depends(require_admin),
 ):
-    return await service.update_company(db, company_id, name=body.name, is_active=body.is_active)
+    return await service.update_company(
+        db, company_id, name=body.name, is_active=body.is_active,
+        daily_report_enabled=body.daily_report_enabled,
+        daily_report_send_time=body.daily_report_send_time,
+    )
 
 
 @router.delete("/{company_id}", status_code=204)

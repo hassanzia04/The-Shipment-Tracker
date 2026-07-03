@@ -38,6 +38,8 @@ export function Settings() {
   // null = not adding; 'internal' = full-report list; else = company id
   const [reportEmailAdding, setReportEmailAdding] = useState<string | null>(null)
   const [reportEmailSaving, setReportEmailSaving] = useState(false)
+  // Unsaved custom-time edits per company id (kept in parent so rows survive re-renders)
+  const [reportTimeEdits, setReportTimeEdits] = useState<Record<string, string>>({})
 
   const pwMismatch = confirmPw.length > 0 && newPw !== confirmPw
   const pwTooShort = newPw.length > 0 && newPw.length < 8
@@ -138,6 +140,19 @@ export function Settings() {
       toast.success('Recipient removed')
     } catch {
       toast.error('Failed to remove recipient')
+    }
+  }
+
+  async function updateCompanyReport(companyId: string, patch: { daily_report_enabled?: boolean; daily_report_send_time?: string }) {
+    try {
+      const res = await companiesApi.update(companyId, patch)
+      setCompanies(prev => prev.map(c => c.id === companyId
+        ? { ...c, daily_report_enabled: res.data.daily_report_enabled, daily_report_send_time: res.data.daily_report_send_time }
+        : c))
+      setReportTimeEdits(prev => { const next = { ...prev }; delete next[companyId]; return next })
+      toast.success('Report settings updated')
+    } catch (err: any) {
+      toast.error(err.response?.data?.detail || 'Failed to update report settings')
     }
   }
 
@@ -454,25 +469,71 @@ export function Settings() {
 
           {/* Recipients */}
           {(() => {
-            function RecipientRow({ rowKey, label, recipients, companyId }: {
+            function RecipientRow({ rowKey, label, recipients, companyId, company }: {
               rowKey: string
               label: string
               recipients: DailyReportRecipient[]
               companyId?: string
+              company?: Company
             }) {
               const isAdding = reportEmailAdding === rowKey
+              const timeValue = company ? (reportTimeEdits[company.id] ?? company.daily_report_send_time ?? '') : ''
+              const timeDirty = company ? timeValue !== (company.daily_report_send_time ?? '') : false
               return (
-                <div className="py-2 border-b dark:border-gray-700 last:border-0">
-                  <div className="flex items-center justify-between mb-1">
+                <div className={clsx('py-2 border-b dark:border-gray-700 last:border-0', company && !company.daily_report_enabled && 'opacity-60')}>
+                  <div className="flex items-center justify-between gap-2 flex-wrap mb-1">
                     <span className="text-sm font-medium text-gray-700 dark:text-gray-300">{label}</span>
-                    {!isAdding && (
-                      <button
-                        onClick={() => { setReportEmailAdding(rowKey); setNewReportEmail('') }}
-                        className="flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400 hover:underline"
-                      >
-                        <Plus size={12} /> Add recipient
-                      </button>
-                    )}
+                    <span className="flex items-center gap-3">
+                      {company && (
+                        <>
+                          <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-gray-400 cursor-pointer" title="Turn this company's daily report on or off without removing its recipients">
+                            <input
+                              type="checkbox"
+                              checked={company.daily_report_enabled}
+                              onChange={e => updateCompanyReport(company.id, { daily_report_enabled: e.target.checked })}
+                              className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                            />
+                            Enabled
+                          </label>
+                          <span className="flex items-center gap-1" title="Custom send time (Muscat) — blank follows the global time">
+                            <input
+                              type="time"
+                              value={timeValue}
+                              onChange={e => setReportTimeEdits(prev => ({ ...prev, [company.id]: e.target.value }))}
+                              className="text-[11px] border dark:border-gray-600 rounded px-1.5 py-0.5 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300"
+                            />
+                            {timeDirty && (
+                              <button
+                                onClick={() => updateCompanyReport(company.id, { daily_report_send_time: timeValue })}
+                                className="text-[11px] font-medium text-blue-600 dark:text-blue-400 hover:underline"
+                              >
+                                Save
+                              </button>
+                            )}
+                            {!timeDirty && company.daily_report_send_time && (
+                              <button
+                                onClick={() => updateCompanyReport(company.id, { daily_report_send_time: '' })}
+                                className="text-[11px] text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:underline"
+                                title="Clear custom time — follow the global send time"
+                              >
+                                clear
+                              </button>
+                            )}
+                            {!timeDirty && !company.daily_report_send_time && (
+                              <span className="text-[11px] text-gray-400 dark:text-gray-500">global</span>
+                            )}
+                          </span>
+                        </>
+                      )}
+                      {!isAdding && (
+                        <button
+                          onClick={() => { setReportEmailAdding(rowKey); setNewReportEmail('') }}
+                          className="flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                        >
+                          <Plus size={12} /> Add recipient
+                        </button>
+                      )}
+                    </span>
                   </div>
                   <div className="flex flex-wrap gap-2 mt-1">
                     {recipients.map(r => (
@@ -490,6 +551,9 @@ export function Settings() {
                       <span className="text-xs text-gray-400 dark:text-gray-500">
                         {companyId ? 'Not sent — add an email to enable this customer’s report' : 'No recipients yet'}
                       </span>
+                    )}
+                    {recipients.length > 0 && company && !company.daily_report_enabled && (
+                      <span className="text-xs text-amber-600 dark:text-amber-400">Paused — recipients kept, nothing is sent</span>
                     )}
                   </div>
                   {isAdding && (
@@ -550,6 +614,7 @@ export function Settings() {
                       label={company.name}
                       recipients={reportRecipients.filter(r => r.company_id === company.id)}
                       companyId={company.id}
+                      company={company}
                     />
                   ))}
                 </div>

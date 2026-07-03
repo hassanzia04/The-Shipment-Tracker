@@ -71,6 +71,8 @@ export interface Company {
   id: string
   name: string
   is_active: boolean
+  daily_report_enabled: boolean
+  daily_report_send_time: string | null
   created_at: string
   user_count: number
   shipment_count: number

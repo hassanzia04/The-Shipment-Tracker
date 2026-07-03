@@ -56,6 +56,8 @@ async def list_companies(db: AsyncSession, active_only: bool = False) -> list[di
             "id": company.id,
             "name": company.name,
             "is_active": company.is_active,
+            "daily_report_enabled": company.daily_report_enabled,
+            "daily_report_send_time": company.daily_report_send_time,
             "created_at": company.created_at,
             "user_count": user_count,
             "shipment_count": shipment_count,
@@ -79,7 +81,11 @@ async def create_company(db: AsyncSession, name: str) -> Company:
 async def update_company(
     db: AsyncSession, company_id: uuid.UUID,
     name: str | None = None, is_active: bool | None = None,
+    daily_report_enabled: bool | None = None,
+    daily_report_send_time: str | None = None,
 ) -> Company:
+    import re
+
     company = await _get_company(db, company_id)
     if name is not None:
         name = name.strip()
@@ -89,6 +95,16 @@ async def update_company(
         company.name = name
     if is_active is not None:
         company.is_active = is_active
+    if daily_report_enabled is not None:
+        company.daily_report_enabled = daily_report_enabled
+    if daily_report_send_time is not None:
+        cleaned = daily_report_send_time.strip()
+        if cleaned == "":
+            company.daily_report_send_time = None  # back to the global time
+        else:
+            if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", cleaned):
+                raise HTTPException(status_code=400, detail="Send time must be HH:MM (24-hour)")
+            company.daily_report_send_time = cleaned
     await db.commit()
     await db.refresh(company)
     return company

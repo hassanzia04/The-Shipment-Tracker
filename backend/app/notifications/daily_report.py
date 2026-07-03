@@ -713,49 +713,68 @@ def _render_html(data: dict, ai_bullets: list[str], company_name: str | None = N
 
 # ── Orchestrator ───────────────────────────────────────────────────────────────
 
-async def send_daily_report(db: AsyncSession) -> None:
-    """Query data, generate AI summary, render HTML, and dispatch emails.
-
-    Sends the full report to internal recipients (company_id NULL) and a
-    company-scoped edition to each customer company that has recipients."""
-    recipients_result = await db.execute(
-        select(DailyReportRecipient).order_by(DailyReportRecipient.created_at)
+async def get_report_companies(db: AsyncSession) -> list:
+    """Active companies with the report enabled and at least one recipient."""
+    from app.companies.models import Company
+    result = await db.execute(
+        select(Company)
+        .where(
+            Company.is_active == True,
+            Company.daily_report_enabled == True,
+            exists(select(DailyReportRecipient.id).where(DailyReportRecipient.company_id == Company.id)),
+        )
+        .order_by(Company.name)
     )
-    recipients = recipients_result.scalars().all()
+    return list(result.scalars().all())
+
+
+async def send_internal_daily_report(db: AsyncSession) -> None:
+    """The full report (all customers) to the internal recipient list."""
+    recipients = (await db.execute(
+        select(DailyReportRecipient)
+        .where(DailyReportRecipient.company_id == None)
+        .order_by(DailyReportRecipient.created_at)
+    )).scalars().all()
     if not recipients:
-        logger.info("Daily report: no recipients configured, skipping.")
+        logger.info("Daily report: no internal recipients configured, skipping full report.")
         return
 
+    data = await _get_report_data(db)
+    ai_bullets = await _get_ai_summary(data)
+    html = _render_html(data, ai_bullets)
+    subject = f"Shipment Tracker — Daily Operations Report · {data['report_date']}"
+
     from app.notifications.tasks import send_email_task
+    send_email_task.delay([r.email for r in recipients], subject, html)
+    logger.info("Daily report dispatched to %d internal recipient(s).", len(recipients))
 
-    internal = [r for r in recipients if r.company_id is None]
-    by_company: dict = {}
-    for r in recipients:
-        if r.company_id is not None:
-            by_company.setdefault(r.company_id, []).append(r)
 
-    if internal:
-        data = await _get_report_data(db)
-        ai_bullets = await _get_ai_summary(data)
-        html = _render_html(data, ai_bullets)
-        subject = f"Shipment Tracker — Daily Operations Report · {data['report_date']}"
-        send_email_task.delay([r.email for r in internal], subject, html)
-        logger.info("Daily report dispatched to %d internal recipient(s).", len(internal))
+async def send_company_daily_report(db: AsyncSession, company) -> None:
+    """One customer company's scoped edition to its recipient list."""
+    recipients = (await db.execute(
+        select(DailyReportRecipient)
+        .where(DailyReportRecipient.company_id == company.id)
+        .order_by(DailyReportRecipient.created_at)
+    )).scalars().all()
+    if not recipients:
+        return
 
-    if by_company:
-        from app.companies.models import Company
-        companies_result = await db.execute(select(Company).where(Company.id.in_(by_company.keys())))
-        companies = {c.id: c for c in companies_result.scalars().all()}
-        for cid, recs in by_company.items():
-            company = companies.get(cid)
-            if not company or not company.is_active:
-                continue
-            try:
-                data = await _get_report_data(db, company_id=cid)
-                ai_bullets = await _get_ai_summary(data)
-                html = _render_html(data, ai_bullets, company_name=company.name)
-                subject = f"Shipment Tracker — Daily Operations Report · {company.name} · {data['report_date']}"
-                send_email_task.delay([r.email for r in recs], subject, html)
-                logger.info("Daily report (%s edition) dispatched to %d recipient(s).", company.name, len(recs))
-            except Exception:
-                logger.exception("Daily report: failed to build/send edition for company %s", cid)
+    data = await _get_report_data(db, company_id=company.id)
+    ai_bullets = await _get_ai_summary(data)
+    html = _render_html(data, ai_bullets, company_name=company.name)
+    subject = f"Shipment Tracker — Daily Operations Report · {company.name} · {data['report_date']}"
+
+    from app.notifications.tasks import send_email_task
+    send_email_task.delay([r.email for r in recipients], subject, html)
+    logger.info("Daily report (%s edition) dispatched to %d recipient(s).", company.name, len(recipients))
+
+
+async def send_daily_report(db: AsyncSession) -> None:
+    """Manual trigger: send every edition immediately — the internal full report
+    plus each enabled company's edition — regardless of scheduled times."""
+    await send_internal_daily_report(db)
+    for company in await get_report_companies(db):
+        try:
+            await send_company_daily_report(db, company)
+        except Exception:
+            logger.exception("Daily report: failed to build/send edition for company %s", company.id)

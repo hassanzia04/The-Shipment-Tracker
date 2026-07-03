@@ -75,7 +75,12 @@ async def _check_and_maybe_send() -> None:
     from zoneinfo import ZoneInfo
     import redis.asyncio as aioredis
     from app.config import settings
-    from app.notifications.daily_report import get_or_create_config, send_daily_report
+    from app.notifications.daily_report import (
+        get_or_create_config,
+        get_report_companies,
+        send_internal_daily_report,
+        send_company_daily_report,
+    )
 
     MUSCAT_TZ = ZoneInfo("Asia/Muscat")
 
@@ -86,35 +91,47 @@ async def _check_and_maybe_send() -> None:
             now = datetime.now(MUSCAT_TZ)
             today = now.date()
 
-            if config.last_sent_date == today:
-                return
-
-            try:
-                send_h, send_m = map(int, config.send_time.split(":"))
-            except ValueError:
-                logger.error("Invalid daily report send_time: %s", config.send_time)
-                return
-
-            target = now.replace(hour=send_h, minute=send_m, second=0, microsecond=0)
-            if now < target:
-                return
+            def _due(time_str: str) -> bool:
+                try:
+                    send_h, send_m = map(int, time_str.split(":"))
+                except (ValueError, AttributeError):
+                    logger.error("Invalid daily report send_time: %s", time_str)
+                    return False
+                return now >= now.replace(hour=send_h, minute=send_m, second=0, microsecond=0)
 
             r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
             try:
-                acquired = await r.set(
-                    f"daily_report_sent:{today.isoformat()}", "1", nx=True, ex=86400
-                )
+                # ── Internal full report — rides the global send time ──
+                if config.last_sent_date != today and _due(config.send_time):
+                    acquired = await r.set(
+                        f"daily_report_sent:{today.isoformat()}", "1", nx=True, ex=86400
+                    )
+                    if acquired:
+                        config.last_sent_date = today
+                        await db.commit()
+                        await send_internal_daily_report(db)
+                        logger.info("Daily report (internal) sent at %s Muscat time.", now.strftime("%H:%M"))
+
+                # ── Per-company editions — custom time, or the global time as fallback ──
+                for company in await get_report_companies(db):
+                    if company.daily_report_last_sent_date == today:
+                        continue
+                    if not _due(company.daily_report_send_time or config.send_time):
+                        continue
+                    acquired = await r.set(
+                        f"daily_report_sent:{today.isoformat()}:{company.id}", "1", nx=True, ex=86400
+                    )
+                    if not acquired:
+                        continue
+                    company.daily_report_last_sent_date = today
+                    await db.commit()
+                    try:
+                        await send_company_daily_report(db, company)
+                        logger.info("Daily report (%s) sent at %s Muscat time.", company.name, now.strftime("%H:%M"))
+                    except Exception:
+                        logger.exception("Daily report: failed to send %s edition", company.name)
             finally:
                 await r.aclose()
-            if not acquired:
-                return
-
-            config.last_sent_date = today
-            await db.commit()
-
-        async with factory() as db:
-            await send_daily_report(db)
-            logger.info("Daily report sent at %s Muscat time.", now.strftime("%H:%M"))
     finally:
         await engine.dispose()
 
