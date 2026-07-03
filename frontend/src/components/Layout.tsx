@@ -1,11 +1,12 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { ReactNode } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
 import { useTheme } from '@/hooks/useTheme'
-import { Ship, LayoutDashboard, Settings, LogOut, Users, Moon, Sun, BarChart2, Truck, FolderOpen, Menu, X, TrendingUp, Database, ClipboardList } from 'lucide-react'
+import { Ship, LayoutDashboard, Settings, LogOut, Users, Moon, Sun, BarChart2, Truck, FolderOpen, Menu, X, TrendingUp, Database, ClipboardList, Search } from 'lucide-react'
 import clsx from 'clsx'
 import { NotificationBell } from '@/components/NotificationBell'
+import { QuickSearch } from '@/components/QuickSearch'
 import { TEAM_LABELS } from '@/types'
 
 type NavItem = { label: string; href: string; icon: React.ElementType }
@@ -43,6 +44,18 @@ export function Layout({ children }: Props) {
   const location = useLocation()
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
+  const [searchOpen, setSearchOpen] = useState(false)
+
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setSearchOpen(o => !o)
+      }
+    }
+    window.addEventListener('keydown', handleKey)
+    return () => window.removeEventListener('keydown', handleKey)
+  }, [])
 
   async function handleLogout() {
     await logout()
@@ -78,6 +91,13 @@ export function Layout({ children }: Props) {
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{user ? TEAM_LABELS[user.team] : ''}</p>
         </div>
         <div className="flex items-center gap-1">
+          <button
+            onClick={() => { setOpen(false); setSearchOpen(true) }}
+            title="Search shipments (Ctrl+K)"
+            className="p-1.5 rounded text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+          >
+            <Search size={16} />
+          </button>
           <span className="hidden lg:block"><NotificationBell align="left" /></span>
           <button
             onClick={() => setOpen(false)}
@@ -131,6 +151,8 @@ export function Layout({ children }: Props) {
   return (
     <div className="h-screen flex bg-gray-50 dark:bg-gray-900">
 
+      <QuickSearch open={searchOpen} onClose={() => setSearchOpen(false)} />
+
       {/* Mobile backdrop */}
       {open && (
         <div
@@ -161,6 +183,13 @@ export function Layout({ children }: Props) {
           </button>
           <span className="font-semibold text-gray-900 dark:text-white text-sm truncate min-w-0 flex-1">Shipment Tracker</span>
           <div className="ml-auto flex items-center gap-2">
+            <button
+              onClick={() => setSearchOpen(true)}
+              title="Search shipments"
+              className="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
+            >
+              <Search size={18} />
+            </button>
             <NotificationBell />
             <span className="text-xs text-gray-500 dark:text-gray-400">{user ? TEAM_LABELS[user.team] : ''}</span>
           </div>
