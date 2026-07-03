@@ -65,7 +65,8 @@ function ageDays(created_at: string): number {
   return differenceInDays(new Date(), parseISO(created_at))
 }
 
-const COLLAPSED_STORAGE_KEY = 'pro_tasks_collapsed'
+// Groups start collapsed; only the ones the user opened are remembered
+const EXPANDED_STORAGE_KEY = 'pro_tasks_expanded'
 
 export function ProTasks() {
   const navigate = useNavigate()
@@ -95,19 +96,19 @@ export function ProTasks() {
     }
   }
 
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => {
+  const [expanded, setExpanded] = useState<Set<string>>(() => {
     try {
-      const stored = localStorage.getItem(COLLAPSED_STORAGE_KEY)
+      const stored = localStorage.getItem(EXPANDED_STORAGE_KEY)
       return stored ? new Set(JSON.parse(stored) as string[]) : new Set()
     } catch { return new Set() }
   })
 
   function toggleGroup(key: string) {
-    setCollapsed(prev => {
+    setExpanded(prev => {
       const next = new Set(prev)
       if (next.has(key)) next.delete(key)
       else next.add(key)
-      try { localStorage.setItem(COLLAPSED_STORAGE_KEY, JSON.stringify([...next])) } catch { /* ignore */ }
+      try { localStorage.setItem(EXPANDED_STORAGE_KEY, JSON.stringify([...next])) } catch { /* ignore */ }
       return next
     })
   }
@@ -165,7 +166,7 @@ export function ProTasks() {
           {sortedGroups.map(([key, groupTasks]) => {
             const userName = key === '__unassigned__' ? 'Unassigned' : key
             const onHold = groupTasks.filter(t => t.status === 'ON_HOLD').length
-            const isCollapsed = collapsed.has(key)
+            const isCollapsed = !expanded.has(key)
             return (
               <div key={key} className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-xl overflow-hidden shadow-sm">
                 {/* Group header */}
