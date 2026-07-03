@@ -1344,6 +1344,23 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                           {STAGE_LABELS[s.current_stage as ShipmentStage]}
                         </span>
                       )}
+                      {!historical && s.stage_since && (() => {
+                        const days = Math.max(0, differenceInCalendarDays(new Date(), parseISO(s.stage_since)))
+                        if (days < 1) return null
+                        return (
+                          <span
+                            className={clsx(
+                              'mt-1 flex items-center gap-1 text-[10px] font-medium whitespace-nowrap',
+                              days >= 7 ? 'text-red-500 dark:text-red-400' :
+                              days >= 3 ? 'text-amber-500 dark:text-amber-400' :
+                              'text-gray-400 dark:text-gray-500'
+                            )}
+                            title={`In ${STAGE_LABELS[s.current_stage as ShipmentStage]} for ${days} day${days !== 1 ? 's' : ''}`}
+                          >
+                            <Clock size={9} /> {days}d in stage
+                          </span>
+                        )
+                      })()}
                     </td>
                     <td className={colCls('progress', 'px-3 py-3')}>
                       <ProgressCell s={s} />

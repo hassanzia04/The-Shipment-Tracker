@@ -202,6 +202,7 @@ export interface ShipmentListItem {
   shipping_line_name: string | null
   offloading_date: string | null
   company_name: string | null
+  stage_since: string | null
 }
 
 export interface ContainerViewItem {

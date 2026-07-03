@@ -1102,6 +1102,21 @@ async def list_shipments(
     result = await db.execute(q)
     shipments = list(result.scalars().unique().all())
 
+    # Annotate when each shipment entered its current stage (every stage
+    # transition records an event with stage_to set; creation is the fallback)
+    if shipments:
+        ev_res = await db.execute(
+            select(ShipmentEvent.shipment_id, func.max(ShipmentEvent.created_at))
+            .where(
+                ShipmentEvent.shipment_id.in_([s.id for s in shipments]),
+                ShipmentEvent.stage_to.isnot(None),
+            )
+            .group_by(ShipmentEvent.shipment_id)
+        )
+        stage_entered = {row[0]: row[1] for row in ev_res.all()}
+        for s in shipments:
+            s._stage_since = stage_entered.get(s.id)
+
     # Annotate DC shipments with health cert and DN status (two extra queries)
     if actor.team == Team.DC and shipments:
         from app.documents.models import Document as Doc

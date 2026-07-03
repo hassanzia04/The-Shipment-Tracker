@@ -192,6 +192,11 @@ class Shipment(Base):
         return getattr(self, '_dc_health_cert_missing', False)
 
     @property
+    def stage_since(self):
+        # Set by list_shipments service from the latest stage-transition event
+        return getattr(self, '_stage_since', None) or self.created_at
+
+    @property
     def dn_missing(self) -> bool:
         # Set by list_shipments service for AMLS shipments lacking a DN doc — defaults to False
         return getattr(self, '_dn_missing', False)

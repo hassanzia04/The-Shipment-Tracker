@@ -265,6 +265,7 @@ class ShipmentListOut(BaseModel):
     shipping_line_name: Optional[str] = None
     offloading_date: Optional[datetime] = None
     company_name: Optional[str] = None
+    stage_since: Optional[datetime] = None
 
 
 class PaginatedShipments(BaseModel):
