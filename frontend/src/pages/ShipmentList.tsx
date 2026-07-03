@@ -32,6 +32,7 @@ import type { SortState } from '@/lib/sort'
 import { formatDate, formatDateTime } from '@/lib/dates'
 import { SortableHeader } from '@/components/SortableHeader'
 import { ColumnFilterPopover } from '@/components/ColumnFilterPopover'
+import { CopyButton } from '@/components/CopyButton'
 import clsx from 'clsx'
 
 const ALL_COLUMNS = [
@@ -1248,7 +1249,10 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                         <span className="text-xs font-bold text-gray-400 dark:text-gray-500">#{offset + idx + 1}</span>
                       </div>
                     </td>
-                    <td className="px-3 py-3 font-semibold text-gray-900 dark:text-white">{s.bl_number}</td>
+                    <td className="px-3 py-3 font-semibold text-gray-900 dark:text-white whitespace-nowrap">
+                      {s.bl_number}
+                      <CopyButton text={s.bl_number} title="Copy BL number" className="ml-1.5" />
+                    </td>
                     <td className={colCls('invoice', 'hidden md:table-cell px-3 py-3 text-gray-500 dark:text-gray-400')}>{s.invoice_number}</td>
                     <td className={colCls('consignee', 'hidden lg:table-cell px-3 py-3 text-sm text-gray-600 dark:text-gray-300 max-w-[160px]')}>
                       <span className="truncate block" title={s.consignee_name ?? undefined}>{s.consignee_name ?? <span className="text-gray-400 dark:text-gray-500 italic text-xs">—</span>}</span>

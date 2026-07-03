@@ -61,15 +61,23 @@ function ageDays(created_at: string): number {
   return differenceInDays(new Date(), parseISO(created_at))
 }
 
+const COLLAPSED_STORAGE_KEY = 'pro_tasks_collapsed'
+
 export function ProTasks() {
   const navigate = useNavigate()
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => {
+    try {
+      const stored = localStorage.getItem(COLLAPSED_STORAGE_KEY)
+      return stored ? new Set(JSON.parse(stored) as string[]) : new Set()
+    } catch { return new Set() }
+  })
 
   function toggleGroup(key: string) {
     setCollapsed(prev => {
       const next = new Set(prev)
       if (next.has(key)) next.delete(key)
       else next.add(key)
+      try { localStorage.setItem(COLLAPSED_STORAGE_KEY, JSON.stringify([...next])) } catch { /* ignore */ }
       return next
     })
   }

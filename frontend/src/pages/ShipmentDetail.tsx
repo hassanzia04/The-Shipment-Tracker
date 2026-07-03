@@ -7,6 +7,7 @@ import { documentsApi, openDocument } from '@/api/documents'
 import { authApi } from '@/api/auth'
 import { mastersApi } from '@/api/masters'
 import { DocumentUploadPanel } from '@/components/DocumentUploadPanel'
+import { CopyButton } from '@/components/CopyButton'
 import { CreatableSelect } from '@/components/CreatableSelect'
 import { StageTimeline } from '@/components/StageTimeline'
 import { HoldPanel } from '@/components/HoldPanel'
@@ -461,7 +462,10 @@ export function ShipmentDetail() {
       {/* Header */}
       <div className="sticky top-0 z-10 bg-white dark:bg-gray-800 pb-4 border-b border-gray-100 dark:border-gray-700/60 flex items-start justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">BL: {shipment.bl_number}</h1>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
+            BL: {shipment.bl_number}
+            <CopyButton text={shipment.bl_number} title="Copy BL number" size={16} />
+          </h1>
           <p className="text-sm text-gray-500 dark:text-gray-400">Invoice: {shipment.invoice_number}</p>
           {[
             { label: 'Product', value: shipment.product_type_name },
@@ -2248,7 +2252,10 @@ function TransportDcLayout({ shipment, trucks, team, stage, submitting, action, 
         <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-xl p-4 space-y-3 text-sm">
           <div>
             <p className="text-xs text-gray-500 dark:text-gray-400">BL Number</p>
-            <p className="font-semibold text-gray-900 dark:text-white">{shipment.bl_number}</p>
+            <p className="font-semibold text-gray-900 dark:text-white">
+              {shipment.bl_number}
+              <CopyButton text={shipment.bl_number} title="Copy BL number" className="ml-1.5" />
+            </p>
           </div>
           <div>
             <p className="text-xs text-gray-500 dark:text-gray-400">Invoice</p>
