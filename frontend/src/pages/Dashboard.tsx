@@ -339,6 +339,8 @@ export function Dashboard() {
         case 'containers': return r.active_containers
         case 'holds':      return r.active_holds
         case 'completed':  return r.completed_last_30d
+        case 'total':      return r.total_shipments
+        case 'moved':      return r.containers_moved
         default:           return null
       }
     }
@@ -720,7 +722,7 @@ export function Dashboard() {
         <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-xl overflow-hidden">
           <div className="px-5 pt-4 pb-1">
             <h2 className="font-semibold text-gray-800 dark:text-gray-100">By Customer</h2>
-            <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">Shipment breakdown per customer company — click a row to see its shipments</p>
+            <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">Pipeline breakdown and all-time totals per customer company — click a row to see its shipments</p>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -734,6 +736,8 @@ export function Dashboard() {
                   <SortableHeader label="Containers"      column="containers" sort={companySort} onSort={companyToggle} className="px-4 py-2.5 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide hidden md:table-cell" />
                   <SortableHeader label="Holds"           column="holds"      sort={companySort} onSort={companyToggle} className="px-4 py-2.5 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
                   <SortableHeader label="Completed (30d)" column="completed"  sort={companySort} onSort={companyToggle} className="px-4 py-2.5 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide hidden sm:table-cell" />
+                  <SortableHeader label="Total Shipments" column="total"      sort={companySort} onSort={companyToggle} className="px-4 py-2.5 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide border-l dark:border-gray-700" />
+                  <SortableHeader label="Containers Moved" column="moved"     sort={companySort} onSort={companyToggle} className="px-4 py-2.5 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
                 </tr>
               </thead>
               <tbody className="divide-y dark:divide-gray-700">
@@ -755,6 +759,8 @@ export function Dashboard() {
                         : <span className="text-gray-400 dark:text-gray-600">—</span>}
                     </td>
                     <td className="px-4 py-2.5 tabular-nums text-green-700 dark:text-green-400 hidden sm:table-cell">{c.completed_last_30d || '—'}</td>
+                    <td className="px-4 py-2.5 font-semibold tabular-nums text-gray-800 dark:text-gray-100 border-l dark:border-gray-700">{c.total_shipments || '—'}</td>
+                    <td className="px-4 py-2.5 font-semibold tabular-nums text-gray-800 dark:text-gray-100">{c.containers_moved || '—'}</td>
                   </tr>
                 ))}
               </tbody>

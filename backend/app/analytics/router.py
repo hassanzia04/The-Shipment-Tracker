@@ -401,10 +401,18 @@ async def dashboard(
             .group_by(ShipmentTask.shipment_id)
             .subquery()
         )
+        moved_containers_sq = (
+            select(Container.shipment_id, func.count(Container.id).label("cnt"))
+            .where(Container.status.in_([ContainerStatus.RETURNED, ContainerStatus.CLOSED]))
+            .group_by(Container.shipment_id)
+            .subquery()
+        )
         by_company_result = await db.execute(
             select(
                 Company.id,
                 Company.name,
+                func.count(Shipment.id).label("total_shipments"),
+                func.coalesce(func.sum(func.coalesce(moved_containers_sq.c.cnt, 0)), 0).label("containers_moved"),
                 func.count(Shipment.id).filter(Shipment.current_stage != ShipmentStage.COMPLETED).label("active"),
                 func.count(Shipment.id).filter(Shipment.current_stage == ShipmentStage.CUSTOMER).label("awaiting_customer"),
                 func.count(Shipment.id).filter(Shipment.current_stage == ShipmentStage.IN_PROGRESS).label("in_progress"),
@@ -423,6 +431,7 @@ async def dashboard(
             .join(Shipment, Shipment.company_id == Company.id, isouter=True)
             .outerjoin(active_containers_sq, active_containers_sq.c.shipment_id == Shipment.id)
             .outerjoin(holds_sq, holds_sq.c.shipment_id == Shipment.id)
+            .outerjoin(moved_containers_sq, moved_containers_sq.c.shipment_id == Shipment.id)
             .group_by(Company.id, Company.name)
             .order_by(Company.name)
         )
@@ -430,13 +439,15 @@ async def dashboard(
             {
                 "company_id": str(row[0]),
                 "company_name": row[1],
-                "active_shipments": row[2],
-                "awaiting_customer": row[3],
-                "in_progress": row[4],
-                "in_transport": row[5],
-                "active_containers": int(row[6] or 0),
-                "active_holds": int(row[7] or 0),
-                "completed_last_30d": row[8],
+                "total_shipments": row[2],
+                "containers_moved": int(row[3] or 0),
+                "active_shipments": row[4],
+                "awaiting_customer": row[5],
+                "in_progress": row[6],
+                "in_transport": row[7],
+                "active_containers": int(row[8] or 0),
+                "active_holds": int(row[9] or 0),
+                "completed_last_30d": row[10],
             }
             for row in by_company_result.all()
         ]
