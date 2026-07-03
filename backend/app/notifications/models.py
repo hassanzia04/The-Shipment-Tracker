@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, date, timezone
-from sqlalchemy import String, DateTime, Date, ForeignKey, Boolean, CheckConstraint
+from sqlalchemy import String, DateTime, Date, ForeignKey, Boolean, CheckConstraint, UniqueConstraint, Index, text
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
@@ -62,9 +62,23 @@ class DailyReportConfig(Base):
 
 
 class DailyReportRecipient(Base):
-    """Email addresses that receive the daily operations report."""
+    """Email addresses that receive the daily operations report.
+    company_id NULL = the internal full report (all customers); set = that
+    company's scoped edition (only sent for companies with >=1 recipient)."""
     __tablename__ = "daily_report_recipients"
+    __table_args__ = (
+        UniqueConstraint("email", "company_id", name="uq_daily_report_recipients_email_company"),
+        Index("uq_daily_report_recipients_email_internal", "email", unique=True,
+              postgresql_where=text("company_id IS NULL")),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    company_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id", ondelete="CASCADE"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    company = relationship("Company", lazy="selectin")
+
+    @property
+    def company_name(self) -> str | None:
+        return self.company.name if self.company else None

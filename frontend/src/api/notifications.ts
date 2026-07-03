@@ -24,6 +24,8 @@ export interface DailyReportConfig {
 export interface DailyReportRecipient {
   id: string
   email: string
+  company_id: string | null
+  company_name: string | null
 }
 
 export interface AppNotification {
@@ -49,8 +51,9 @@ export const notificationsApi = {
   // Daily report recipients
   listDailyReportRecipients: () =>
     api.get<DailyReportRecipient[]>('/notifications/daily-report/recipients'),
-  addDailyReportRecipient: (email: string) =>
-    api.post<DailyReportRecipient>('/notifications/daily-report/recipients', { email }),
+  addDailyReportRecipient: (email: string, companyId?: string) =>
+    api.post<DailyReportRecipient>('/notifications/daily-report/recipients',
+      { email, ...(companyId ? { company_id: companyId } : {}) }),
   removeDailyReportRecipient: (id: string) =>
     api.delete(`/notifications/daily-report/recipients/${id}`),
 

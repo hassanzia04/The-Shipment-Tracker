@@ -35,7 +35,8 @@ export function Settings() {
   const [reportTimeInput, setReportTimeInput] = useState('17:30')
   const [reportTimeSaving, setReportTimeSaving] = useState(false)
   const [newReportEmail, setNewReportEmail] = useState('')
-  const [reportEmailAdding, setReportEmailAdding] = useState(false)
+  // null = not adding; 'internal' = full-report list; else = company id
+  const [reportEmailAdding, setReportEmailAdding] = useState<string | null>(null)
   const [reportEmailSaving, setReportEmailSaving] = useState(false)
 
   const pwMismatch = confirmPw.length > 0 && newPw !== confirmPw
@@ -113,15 +114,15 @@ export function Settings() {
     }
   }
 
-  async function handleAddReportRecipient(e: FormEvent) {
+  async function handleAddReportRecipient(e: FormEvent, companyId?: string) {
     e.preventDefault()
     if (!newReportEmail.trim()) return
     setReportEmailSaving(true)
     try {
-      const res = await notificationsApi.addDailyReportRecipient(newReportEmail.trim())
+      const res = await notificationsApi.addDailyReportRecipient(newReportEmail.trim(), companyId)
       setReportRecipients(prev => [...prev, res.data])
       setNewReportEmail('')
-      setReportEmailAdding(false)
+      setReportEmailAdding(null)
       toast.success('Recipient added')
     } catch (err: any) {
       toast.error(err.response?.data?.detail || 'Failed to add recipient')
@@ -424,7 +425,7 @@ export function Settings() {
           <div>
             <h2 className="font-semibold text-gray-800 dark:text-gray-100">Daily Operations Report</h2>
             <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              Sent once per day at the configured Muscat time to all recipients below. Includes pipeline overview, active containers, and an AI summary.
+              Sent once per day at the configured Muscat time. Internal recipients get the full report across all customers; enabled customer companies get their own edition covering only their shipments.
             </p>
           </div>
 
@@ -452,65 +453,109 @@ export function Settings() {
           </div>
 
           {/* Recipients */}
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Recipients</p>
-              {!reportEmailAdding && (
-                <button
-                  onClick={() => { setReportEmailAdding(true); setNewReportEmail('') }}
-                  className="flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400 hover:underline"
-                >
-                  <Plus size={12} /> Add recipient
-                </button>
-              )}
-            </div>
-
-            {reportRecipients.length === 0 && !reportEmailAdding && (
-              <p className="text-xs text-gray-400 dark:text-gray-500 py-1">No recipients yet — add at least one email to start receiving reports.</p>
-            )}
-
-            <div className="flex flex-wrap gap-2 mb-2">
-              {reportRecipients.map(r => (
-                <span
-                  key={r.id}
-                  className="inline-flex items-center gap-1 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 text-xs rounded-full px-3 py-1"
-                >
-                  {r.email}
-                  <button onClick={() => handleRemoveReportRecipient(r.id)} className="ml-1 text-gray-400 hover:text-red-500">
-                    <X size={11} />
-                  </button>
-                </span>
-              ))}
-            </div>
-
-            {reportEmailAdding && (
-              <form onSubmit={handleAddReportRecipient} className="flex gap-2 mt-1">
-                <input
-                  type="email"
-                  autoFocus
-                  placeholder="email@example.com"
-                  value={newReportEmail}
-                  onChange={e => setNewReportEmail(e.target.value)}
-                  required
-                  className="flex-1 border dark:border-gray-600 rounded-lg px-3 py-1.5 text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-                <button
-                  type="submit"
-                  disabled={reportEmailSaving}
-                  className="bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-blue-700 disabled:opacity-50"
-                >
-                  Add
-                </button>
-                <button
-                  type="button"
-                  onClick={() => { setReportEmailAdding(false); setNewReportEmail('') }}
-                  className="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 px-2 py-1.5 text-xs"
-                >
-                  Cancel
-                </button>
-              </form>
-            )}
-          </div>
+          {(() => {
+            function RecipientRow({ rowKey, label, recipients, companyId }: {
+              rowKey: string
+              label: string
+              recipients: DailyReportRecipient[]
+              companyId?: string
+            }) {
+              const isAdding = reportEmailAdding === rowKey
+              return (
+                <div className="py-2 border-b dark:border-gray-700 last:border-0">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-sm font-medium text-gray-700 dark:text-gray-300">{label}</span>
+                    {!isAdding && (
+                      <button
+                        onClick={() => { setReportEmailAdding(rowKey); setNewReportEmail('') }}
+                        className="flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                      >
+                        <Plus size={12} /> Add recipient
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap gap-2 mt-1">
+                    {recipients.map(r => (
+                      <span
+                        key={r.id}
+                        className="inline-flex items-center gap-1 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 text-xs rounded-full px-3 py-1"
+                      >
+                        {r.email}
+                        <button onClick={() => handleRemoveReportRecipient(r.id)} className="ml-1 text-gray-400 hover:text-red-500">
+                          <X size={11} />
+                        </button>
+                      </span>
+                    ))}
+                    {recipients.length === 0 && !isAdding && (
+                      <span className="text-xs text-gray-400 dark:text-gray-500">
+                        {companyId ? 'Not sent — add an email to enable this customer’s report' : 'No recipients yet'}
+                      </span>
+                    )}
+                  </div>
+                  {isAdding && (
+                    <form onSubmit={e => handleAddReportRecipient(e, companyId)} className="flex gap-2 mt-2">
+                      <input
+                        type="email"
+                        autoFocus
+                        placeholder="email@example.com"
+                        value={newReportEmail}
+                        onChange={e => setNewReportEmail(e.target.value)}
+                        required
+                        className="flex-1 border dark:border-gray-600 rounded-lg px-3 py-1.5 text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                      <button
+                        type="submit"
+                        disabled={reportEmailSaving}
+                        className="bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-blue-700 disabled:opacity-50"
+                      >
+                        Add
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setReportEmailAdding(null); setNewReportEmail('') }}
+                        className="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 px-2 py-1.5 text-xs"
+                      >
+                        Cancel
+                      </button>
+                    </form>
+                  )}
+                </div>
+              )
+            }
+            return (
+              <>
+                <div className="space-y-1">
+                  <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1">Full Report (all customers)</p>
+                  <p className="text-[11px] text-gray-400 dark:text-gray-500 mb-1">
+                    Your leadership circle — these addresses receive the complete report covering every customer.
+                  </p>
+                  <RecipientRow
+                    rowKey="internal"
+                    label="Internal recipients"
+                    recipients={reportRecipients.filter(r => !r.company_id)}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mt-3 mb-1">Customer Editions</p>
+                  <p className="text-[11px] text-gray-400 dark:text-gray-500 mb-1">
+                    Each company gets the same report filtered to only its shipments — sent only for companies with at least one recipient (key clients).
+                  </p>
+                  {companies.length === 0 && (
+                    <p className="text-xs text-gray-400 dark:text-gray-500 py-1">No active companies found.</p>
+                  )}
+                  {companies.map(company => (
+                    <RecipientRow
+                      key={company.id}
+                      rowKey={company.id}
+                      label={company.name}
+                      recipients={reportRecipients.filter(r => r.company_id === company.id)}
+                      companyId={company.id}
+                    />
+                  ))}
+                </div>
+              </>
+            )
+          })()}
         </div>
       )}
     </div>

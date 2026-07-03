@@ -162,12 +162,15 @@ class DailyReportConfigUpdate(BaseModel):
 class DailyReportRecipientOut(BaseModel):
     id: uuid.UUID
     email: str
+    company_id: uuid.UUID | None = None
+    company_name: str | None = None
 
     model_config = {"from_attributes": True}
 
 
 class DailyReportRecipientCreate(BaseModel):
     email: EmailStr
+    company_id: uuid.UUID | None = None  # NULL = internal full report; set = that company's edition
 
 
 @router.get("/daily-report/config", response_model=DailyReportConfigOut)
@@ -218,12 +221,21 @@ async def add_daily_report_recipient(
     db: AsyncSession = Depends(get_db),
     _admin: User = Depends(require_admin),
 ):
+    if body.company_id is not None:
+        from app.companies.models import Company
+        company_result = await db.execute(select(Company).where(Company.id == body.company_id))
+        if not company_result.scalar_one_or_none():
+            raise HTTPException(status_code=400, detail="Company not found")
+
     existing = await db.execute(
-        select(DailyReportRecipient).where(DailyReportRecipient.email == str(body.email))
+        select(DailyReportRecipient).where(
+            DailyReportRecipient.email == str(body.email),
+            DailyReportRecipient.company_id == body.company_id,
+        )
     )
     if existing.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail="This email is already a report recipient")
-    recipient = DailyReportRecipient(email=str(body.email))
+        raise HTTPException(status_code=409, detail="This email is already a recipient of this report")
+    recipient = DailyReportRecipient(email=str(body.email), company_id=body.company_id)
     db.add(recipient)
     await db.commit()
     await db.refresh(recipient)

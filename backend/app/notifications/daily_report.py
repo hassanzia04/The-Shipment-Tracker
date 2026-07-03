@@ -83,13 +83,19 @@ async def get_or_create_config(db: AsyncSession) -> DailyReportConfig:
 
 # ── Data queries ───────────────────────────────────────────────────────────────
 
-async def _get_report_data(db: AsyncSession) -> dict:
+async def _get_report_data(db: AsyncSession, company_id=None) -> dict:
+    """company_id=None → the full report across all customers; set → only that
+    company's shipments (the per-customer edition)."""
     now = datetime.now(MUSCAT_TZ)
     today = now.date()
 
+    def _scoped(q):
+        """Add the company clause. The query must reference/join Shipment."""
+        return q.where(Shipment.company_id == company_id) if company_id else q
+
     # Pipeline counts by stage
     stage_result = await db.execute(
-        select(Shipment.current_stage, func.count(Shipment.id))
+        _scoped(select(Shipment.current_stage, func.count(Shipment.id)))
         .group_by(Shipment.current_stage)
     )
     stage_counts: dict[str, int] = {row[0].value: row[1] for row in stage_result.all()}
@@ -97,17 +103,17 @@ async def _get_report_data(db: AsyncSession) -> dict:
 
     # New shipments today (Muscat date)
     new_today: int = (await db.execute(
-        select(func.count(Shipment.id)).where(
+        _scoped(select(func.count(Shipment.id)).where(
             func.date(func.timezone("Asia/Muscat", Shipment.created_at)) == today
-        )
+        ))
     )).scalar() or 0
 
     # Completed today
     completed_today: int = (await db.execute(
-        select(func.count(Shipment.id)).where(
+        _scoped(select(func.count(Shipment.id)).where(
             Shipment.current_stage == ShipmentStage.COMPLETED,
             func.date(func.timezone("Asia/Muscat", Shipment.completed_at)) == today,
-        )
+        ))
     )).scalar() or 0
 
     # Active containers (non-terminal, on non-completed shipments)
@@ -127,6 +133,7 @@ async def _get_report_data(db: AsyncSession) -> dict:
         .where(
             Container.status.notin_(_TERMINAL_STATUSES),
             Shipment.current_stage != ShipmentStage.COMPLETED,
+            *( [Shipment.company_id == company_id] if company_id else [] ),
         )
         .order_by(Container.expected_arrival_at.asc().nulls_last())
     )
@@ -156,17 +163,21 @@ async def _get_report_data(db: AsyncSession) -> dict:
         .where(
             Container.status.in_(active_statuses),
             Shipment.current_stage != ShipmentStage.COMPLETED,
+            *( [Shipment.company_id == company_id] if company_id else [] ),
         )
         .group_by(Container.status)
     )
     container_status_counts: dict[str, int] = {row[0].value: row[1] for row in cstatus_result.all()}
 
     # Tasks on hold by entity
-    holds_result = await db.execute(
+    holds_q = (
         select(ShipmentTask.hold_entity, func.count(ShipmentTask.id))
         .where(ShipmentTask.status == TaskStatus.ON_HOLD)
         .group_by(ShipmentTask.hold_entity)
     )
+    if company_id:
+        holds_q = holds_q.join(Shipment, Shipment.id == ShipmentTask.shipment_id).where(Shipment.company_id == company_id)
+    holds_result = await db.execute(holds_q)
     holds_by_entity: dict[str, int] = {
         (row[0].value if row[0] else "OTHER"): row[1]
         for row in holds_result.all()
@@ -176,12 +187,12 @@ async def _get_report_data(db: AsyncSession) -> dict:
     # DOs expiring within 7 days
     expiry_cutoff = today + timedelta(days=7)
     expiring_result = await db.execute(
-        select(Shipment.bl_number, Shipment.do_validity_date)
+        _scoped(select(Shipment.bl_number, Shipment.do_validity_date)
         .where(
             Shipment.do_validity_date >= today,
             Shipment.do_validity_date <= expiry_cutoff,
             Shipment.current_stage != ShipmentStage.COMPLETED,
-        )
+        ))
         .order_by(Shipment.do_validity_date)
     )
     expiring_dos = [
@@ -210,6 +221,7 @@ async def _get_report_data(db: AsyncSession) -> dict:
             Shipment.pull_out_date <= today,
             Shipment.pull_out_date != None,
             Shipment.current_stage.in_(_pre_transport_stages),
+            *( [Shipment.company_id == company_id] if company_id else [] ),
         )
         .order_by(Shipment.pull_out_date.asc(), Shipment.bl_number)
     )
@@ -237,6 +249,7 @@ async def _get_report_data(db: AsyncSession) -> dict:
                     Container.status.in_(_uncollected_statuses),
                 )
             ),
+            *( [Shipment.company_id == company_id] if company_id else [] ),
         )
         .order_by(Shipment.pull_out_date.asc(), Shipment.bl_number)
     )
@@ -269,13 +282,13 @@ async def _get_report_data(db: AsyncSession) -> dict:
     # Upcoming pull-outs: due in the next 3 days, still in pre-transport stages
     upcoming_cutoff = today + timedelta(days=3)
     upcoming_result = await db.execute(
-        select(func.count(Shipment.id.distinct()))
+        _scoped(select(func.count(Shipment.id.distinct()))
         .where(
             Shipment.pull_out_date > today,
             Shipment.pull_out_date <= upcoming_cutoff,
             Shipment.pull_out_date != None,
             Shipment.current_stage.in_(_pre_transport_stages),
-        )
+        ))
     )
     upcoming_pullouts_count: int = upcoming_result.scalar() or 0
 
@@ -379,7 +392,9 @@ def _section_header(title: str) -> str:
     )
 
 
-def _render_html(data: dict, ai_bullets: list[str]) -> str:
+def _render_html(data: dict, ai_bullets: list[str], company_name: str | None = None) -> str:
+    import html as _html_mod
+    company_suffix = f" &mdash; {_html_mod.escape(company_name)}" if company_name else ""
     report_date = data["report_date"]
     report_time = data["report_time"]
     stage_counts = data["stage_counts"]
@@ -639,7 +654,7 @@ def _render_html(data: dict, ai_bullets: list[str]) -> str:
   <!-- Header -->
   <tr><td bgcolor="#1d4ed8" style="background-color:#1d4ed8;padding:28px 32px;">
     <p style="margin:0;font-family:Arial,sans-serif;font-size:20px;font-weight:bold;color:#ffffff;">
-      Shipment Tracker &mdash; Daily Operations Report
+      Shipment Tracker &mdash; Daily Operations Report{company_suffix}
     </p>
     <p style="margin:6px 0 0;font-family:Arial,sans-serif;font-size:13px;color:#bfdbfe;">
       {report_date} &nbsp;&middot;&nbsp; Generated at {report_time} GST
@@ -699,7 +714,10 @@ def _render_html(data: dict, ai_bullets: list[str]) -> str:
 # ── Orchestrator ───────────────────────────────────────────────────────────────
 
 async def send_daily_report(db: AsyncSession) -> None:
-    """Query data, generate AI summary, render HTML, and dispatch emails to all recipients."""
+    """Query data, generate AI summary, render HTML, and dispatch emails.
+
+    Sends the full report to internal recipients (company_id NULL) and a
+    company-scoped edition to each customer company that has recipients."""
     recipients_result = await db.execute(
         select(DailyReportRecipient).order_by(DailyReportRecipient.created_at)
     )
@@ -708,14 +726,36 @@ async def send_daily_report(db: AsyncSession) -> None:
         logger.info("Daily report: no recipients configured, skipping.")
         return
 
-    data = await _get_report_data(db)
-    ai_bullets = await _get_ai_summary(data)
-    html = _render_html(data, ai_bullets)
-
-    subject = f"Shipment Tracker — Daily Operations Report · {data['report_date']}"
-
     from app.notifications.tasks import send_email_task
-    emails = [r.email for r in recipients]
-    send_email_task.delay(emails, subject, html)
 
-    logger.info("Daily report dispatched to %d recipient(s).", len(recipients))
+    internal = [r for r in recipients if r.company_id is None]
+    by_company: dict = {}
+    for r in recipients:
+        if r.company_id is not None:
+            by_company.setdefault(r.company_id, []).append(r)
+
+    if internal:
+        data = await _get_report_data(db)
+        ai_bullets = await _get_ai_summary(data)
+        html = _render_html(data, ai_bullets)
+        subject = f"Shipment Tracker — Daily Operations Report · {data['report_date']}"
+        send_email_task.delay([r.email for r in internal], subject, html)
+        logger.info("Daily report dispatched to %d internal recipient(s).", len(internal))
+
+    if by_company:
+        from app.companies.models import Company
+        companies_result = await db.execute(select(Company).where(Company.id.in_(by_company.keys())))
+        companies = {c.id: c for c in companies_result.scalars().all()}
+        for cid, recs in by_company.items():
+            company = companies.get(cid)
+            if not company or not company.is_active:
+                continue
+            try:
+                data = await _get_report_data(db, company_id=cid)
+                ai_bullets = await _get_ai_summary(data)
+                html = _render_html(data, ai_bullets, company_name=company.name)
+                subject = f"Shipment Tracker — Daily Operations Report · {company.name} · {data['report_date']}"
+                send_email_task.delay([r.email for r in recs], subject, html)
+                logger.info("Daily report (%s edition) dispatched to %d recipient(s).", company.name, len(recs))
+            except Exception:
+                logger.exception("Daily report: failed to build/send edition for company %s", cid)
