@@ -1071,6 +1071,62 @@ async def analyze_bayan_files(
 
     return results
 
+async def analyze_misc_files(
+    db: AsyncSession,
+    files: list[tuple[str, bytes]],
+    actor: User,
+) -> list[dict]:
+    """Match miscellaneous documents to shipments by BL number found in the
+    filename, with PDF text as a fallback. Unlike permits/bayans, several files
+    may target the same shipment, so matches are not de-duplicated."""
+    from app.shipments.models import Shipment
+    from sqlalchemy import func
+
+    results = []
+    for filename, raw in files:
+        shipment = None
+        detected_bl = None
+
+        # 1. Try each filename token directly against the DB — handles any BL format
+        for token in _filename_tokens(filename):
+            result = await db.execute(
+                select(Shipment).where(func.upper(Shipment.bl_number) == token)
+            )
+            shipment = result.scalars().first()
+            if shipment:
+                detected_bl = token
+                break
+
+        # 2. PDF text fallback — only if filename tokens found nothing
+        if not shipment and filename.lower().endswith(".pdf"):
+            detected_bl = _extract_bl_from_pdf(filename, raw)
+            if detected_bl:
+                result = await db.execute(
+                    select(Shipment).where(func.upper(Shipment.bl_number) == detected_bl)
+                )
+                shipment = result.scalars().first()
+
+        existing_misc_count = 0
+        if shipment:
+            cnt = await db.execute(
+                select(func.count()).select_from(Document).where(
+                    Document.shipment_id == shipment.id,
+                    Document.doc_type == DocumentType.MISCELLANEOUS,
+                )
+            )
+            existing_misc_count = cnt.scalar_one()
+
+        results.append({
+            "filename": filename,
+            "detected_bl": detected_bl,
+            "shipment_id": str(shipment.id) if shipment else None,
+            "bl_number": shipment.bl_number if shipment else None,
+            "matched": shipment is not None,
+            "existing_misc_count": existing_misc_count,
+        })
+
+    return results
+
 def _extract_do_validity_date(filename: str, raw: bytes) -> str | None:
     """Extract DO validity date from PDF. Returns ISO YYYY-MM-DD or None."""
     import re

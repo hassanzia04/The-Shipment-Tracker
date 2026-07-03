@@ -48,6 +48,15 @@ class PermitAnalysisItem(BaseModel):
     has_existing_doc: bool = False
 
 
+class MiscAnalysisItem(BaseModel):
+    filename: str
+    detected_bl: str | None
+    shipment_id: UUID | None
+    bl_number: str | None
+    matched: bool
+    existing_misc_count: int = 0
+
+
 class DOAnalysisItem(BaseModel):
     filename: str
     detected_bl: str | None

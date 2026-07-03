@@ -102,6 +102,24 @@ async def analyze_ccro_uploads(
     return await service.analyze_ccro_files(db, file_data, actor)
 
 
+@router.post("/bulk-misc/analyze", response_model=list[schemas.MiscAnalysisItem])
+async def analyze_misc_uploads(
+    files: List[UploadFile] = File(...),
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+):
+    if actor.team not in [Team.PRO, Team.FFD] and not actor.is_admin:
+        raise HTTPException(status_code=403, detail="PRO or FFD access only")
+    max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+    file_data: list[tuple[str, bytes]] = []
+    for f in files:
+        raw = await f.read()
+        if len(raw) > max_bytes:
+            raise HTTPException(status_code=413, detail=f"File '{f.filename}' is too large")
+        file_data.append((f.filename or "unknown.pdf", raw))
+    return await service.analyze_misc_files(db, file_data, actor)
+
+
 @router.post("/bulk-bayan/analyze", response_model=list[schemas.BayanAnalysisItem])
 async def analyze_bayan_uploads(
     files: List[UploadFile] = File(...),

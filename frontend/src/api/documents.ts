@@ -22,6 +22,15 @@ export interface PermitAnalysisItem {
   has_existing_doc: boolean
 }
 
+export interface MiscAnalysisItem {
+  filename: string
+  detected_bl: string | null
+  shipment_id: string | null
+  bl_number: string | null
+  matched: boolean
+  existing_misc_count: number
+}
+
 export interface DOAnalysisItem {
   filename: string
   detected_bl: string | null
@@ -161,6 +170,14 @@ export const documentsApi = {
     files.forEach(f => form.append('files', f))
     if (renewal) form.append('renewal', 'true')
     return api.post<DOAnalysisItem[]>('/documents/bulk-do/analyze', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+  },
+
+  analyzeMisc: (files: File[]) => {
+    const form = new FormData()
+    files.forEach(f => form.append('files', f))
+    return api.post<MiscAnalysisItem[]>('/documents/bulk-misc/analyze', form, {
       headers: { 'Content-Type': 'multipart/form-data' },
     })
   },

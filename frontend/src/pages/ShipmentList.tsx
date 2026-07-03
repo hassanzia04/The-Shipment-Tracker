@@ -9,6 +9,7 @@ import { ContainerView } from '@/components/ContainerView'
 import { BulkBayanUploadModal } from '@/components/BulkBayanUploadModal'
 import { BulkPermitUploadModal } from '@/components/BulkPermitUploadModal'
 import { BulkDOUploadModal } from '@/components/BulkDOUploadModal'
+import { BulkMiscUploadModal } from '@/components/BulkMiscUploadModal'
 import { BulkCcroUploadModal } from '@/components/BulkCcroUploadModal'
 import { BulkSalalahConfirmModal } from '@/components/BulkSalalahConfirmModal'
 import { BulkAssignTaskModal } from '@/components/BulkAssignTaskModal'
@@ -2010,6 +2011,7 @@ export function ShipmentList() {
   const [showBulkPermit, setShowBulkPermit] = useState(false)
   const [showBulkDO, setShowBulkDO] = useState(false)
   const [showBulkDORenewal, setShowBulkDORenewal] = useState(false)
+  const [showBulkMisc, setShowBulkMisc] = useState(false)
   const [filterDoExpired, setFilterDoExpired] = useState(false)
   const [filterDoExpiringSoon, setFilterDoExpiringSoon] = useState(false)
   const [showBulkCcro, setShowBulkCcro] = useState(false)
@@ -2282,6 +2284,14 @@ export function ShipmentList() {
               </button>
             </>
           )}
+          {(isPRO || isFFD) && (
+            <button
+              onClick={() => setShowBulkMisc(true)}
+              className="flex items-center gap-2 bg-gray-600 text-white px-3 sm:px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-700 whitespace-nowrap"
+            >
+              <Files size={16} /> <span className="hidden sm:inline">Bulk Upload Misc</span><span className="sm:hidden">Misc</span>
+            </button>
+          )}
           {user?.team === 'CUSTOMER' && (
             <Link to="/shipments/new" className="flex items-center gap-2 bg-blue-600 text-white px-3 sm:px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 whitespace-nowrap">
               <Plus size={16} /> <span className="hidden sm:inline">New Shipment</span><span className="sm:hidden">New</span>
@@ -2324,6 +2334,12 @@ export function ShipmentList() {
       {showBulkSalalah && (
         <BulkSalalahConfirmModal
           onClose={() => setShowBulkSalalah(false)}
+          onDone={() => qc.invalidateQueries({ queryKey: ['shipments'] })}
+        />
+      )}
+      {showBulkMisc && (
+        <BulkMiscUploadModal
+          onClose={() => setShowBulkMisc(false)}
           onDone={() => qc.invalidateQueries({ queryKey: ['shipments'] })}
         />
       )}
