@@ -14,6 +14,18 @@ from app.enums import ShipmentStage, TaskType
 router = APIRouter(prefix="/shipments", tags=["shipments"])
 
 
+def _parse_company_ids(raw: str | None) -> list[uuid.UUID] | None:
+    """Comma-separated company ids (multi-select filter / focus preference)."""
+    if not raw:
+        return None
+    try:
+        ids = [uuid.UUID(part) for part in raw.split(",") if part.strip()]
+    except ValueError:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=422, detail="company_ids must be comma-separated UUIDs")
+    return ids or None
+
+
 @router.post("", response_model=schemas.ShipmentOut)
 async def create_shipment(body: schemas.ShipmentCreate, db: AsyncSession = Depends(get_db), actor: User = Depends(get_current_user)):
     return await service.create_shipment(db, actor, **body.model_dump())
@@ -26,6 +38,7 @@ async def list_shipments(
     search: Optional[str] = Query(None),
     stage: Optional[ShipmentStage] = Query(None),
     company_id: Optional[uuid.UUID] = Query(None),
+    company_ids: Optional[str] = Query(None),
     my_queue: bool = Query(False),
     task_type_filter: Optional[TaskType] = Query(None),
     missing_date: bool = Query(False),
@@ -54,7 +67,7 @@ async def list_shipments(
 ):
     items, total = await service.list_shipments(
         db, actor, skip=skip, limit=limit, search=search or None, stage=stage,
-        company_id=company_id,
+        company_id=company_id, company_ids=_parse_company_ids(company_ids),
         my_queue=my_queue, task_type_filter=task_type_filter,
         missing_date=missing_date,
         amls_search=amls_search or None, missing_amls=missing_amls,
@@ -188,6 +201,7 @@ async def container_view(
     sort_by: Optional[str] = Query(None),
     sort_dir: str = Query('asc'),
     company_id: Optional[uuid.UUID] = Query(None),
+    company_ids: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ):
@@ -196,7 +210,7 @@ async def container_view(
         search=search or None, status_filter=status or None,
         from_date=from_date or None, to_date=to_date or None,
         amls_only=amls_only, sort_by=sort_by, sort_dir=sort_dir,
-        company_id=company_id,
+        company_id=company_id, company_ids=_parse_company_ids(company_ids),
     )
     return {"items": rows, "total": total, "skip": skip, "limit": limit}
 
@@ -213,10 +227,11 @@ async def container_view_export(
     do_validity_from: Optional[str] = Query(None),
     do_validity_to: Optional[str] = Query(None),
     company_id: Optional[uuid.UUID] = Query(None),
+    company_ids: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ):
-    content = await service.export_container_view(db, actor, search=search, from_date=from_date, to_date=to_date, status=status, historical=historical, amls_only=amls_only, do_expired=do_expired, do_validity_from=do_validity_from, do_validity_to=do_validity_to, company_id=company_id)
+    content = await service.export_container_view(db, actor, search=search, from_date=from_date, to_date=to_date, status=status, historical=historical, amls_only=amls_only, do_expired=do_expired, do_validity_from=do_validity_from, do_validity_to=do_validity_to, company_id=company_id, company_ids=_parse_company_ids(company_ids))
     return Response(
         content=content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -241,10 +256,11 @@ async def bl_export(
     do_validity_from: Optional[date] = Query(None),
     do_validity_to: Optional[date] = Query(None),
     company_id: Optional[uuid.UUID] = Query(None),
+    company_ids: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ):
-    content = await service.export_shipments_list(db, actor, search=search, stage=stage, my_queue=my_queue, missing_date=missing_date, amls_search=amls_search or None, missing_amls=missing_amls, pull_out_from=pull_out_from, pull_out_to=pull_out_to, historical=historical, completed_from=completed_from, completed_to=completed_to, do_expired=do_expired, do_validity_from=do_validity_from, do_validity_to=do_validity_to, company_id=company_id)
+    content = await service.export_shipments_list(db, actor, search=search, stage=stage, my_queue=my_queue, missing_date=missing_date, amls_search=amls_search or None, missing_amls=missing_amls, pull_out_from=pull_out_from, pull_out_to=pull_out_to, historical=historical, completed_from=completed_from, completed_to=completed_to, do_expired=do_expired, do_validity_from=do_validity_from, do_validity_to=do_validity_to, company_id=company_id, company_ids=_parse_company_ids(company_ids))
     return Response(
         content=content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

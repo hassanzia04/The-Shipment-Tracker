@@ -855,15 +855,20 @@ async def list_shipments(
     do_validity_to=None,
     permit_search: str | None = None,
     do_expired: bool = False,
+    company_ids: list | None = None,
 ) -> tuple[list[Shipment], int]:
     from sqlalchemy import func as sa_func
 
     base_where = []
 
-    # Tenant scoping: customer users always see only their company; internal users may filter
+    # Tenant scoping: customer users always see only their company; internal users
+    # may filter by one company (company_id) or several (company_ids — the
+    # multi-select / personal focus filter). Single id wins if both are sent.
     effective_company = effective_company_filter(actor, company_id)
     if effective_company is not None:
         base_where.append(Shipment.company_id == effective_company)
+    elif company_ids:
+        base_where.append(Shipment.company_id.in_(company_ids))
 
     # Active vs historic split — mutually exclusive
     if historical:
@@ -2955,13 +2960,14 @@ async def export_container_view(
     do_validity_from: str | None = None,
     do_validity_to: str | None = None,
     company_id: uuid.UUID | None = None,
+    company_ids: list | None = None,
 ) -> bytes:
     from datetime import date as date_type
 
     rows, _ = await get_container_view(
         db, actor, historical=historical, skip=0, limit=None,
         search=search, status_filter=status, from_date=from_date, to_date=to_date,
-        amls_only=amls_only, company_id=company_id,
+        amls_only=amls_only, company_id=company_id, company_ids=company_ids,
     )
 
     if do_expired:
@@ -3039,6 +3045,7 @@ async def export_shipments_list(
     do_validity_from=None,
     do_validity_to=None,
     company_id: uuid.UUID | None = None,
+    company_ids: list | None = None,
 ) -> bytes:
     from datetime import date as date_type
 
@@ -3054,6 +3061,7 @@ async def export_shipments_list(
         search=search or None,
         stage=stage_enum,
         company_id=company_id,
+        company_ids=company_ids,
         my_queue=my_queue,
         missing_date=missing_date,
         amls_search=amls_search or None,
@@ -3300,6 +3308,7 @@ async def get_container_view(
     sort_by: str | None = None,
     sort_dir: str = 'asc',
     company_id: uuid.UUID | None = None,
+    company_ids: list | None = None,
 ) -> tuple[list[dict], int]:
     from app.masters.models import Truck, OffloadingPoint as OffloadingPointModel
     from sqlalchemy import exists as sa_exists
@@ -3315,10 +3324,13 @@ async def get_container_view(
     # Build filters
     filters = []
 
-    # Tenant scoping: customer users always see only their company; internal users may filter
+    # Tenant scoping: customer users always see only their company; internal users
+    # may filter by one company or several (multi-select / personal focus)
     effective_company = effective_company_filter(actor, company_id)
     if effective_company is not None:
         filters.append(Shipment.company_id == effective_company)
+    elif company_ids:
+        filters.append(Shipment.company_id.in_(company_ids))
 
     if historical:
         # Historical: physically returned to shipping line, offloaded, or FFD-closed

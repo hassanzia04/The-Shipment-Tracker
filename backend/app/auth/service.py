@@ -267,6 +267,30 @@ async def update_user_company(db: AsyncSession, user_id: uuid.UUID, company_id: 
     return user
 
 
+async def update_focus_companies(db: AsyncSession, actor: User, company_ids: list[uuid.UUID]) -> User:
+    """Self-service view preference for internal users: default the shipment
+    list / container view to these customers. Never affects permissions."""
+    from app.tenancy import is_customer_user
+    from app.companies.models import Company
+    from sqlalchemy import func as _func
+
+    if is_customer_user(actor):
+        raise HTTPException(status_code=403, detail="Customer accounts are already scoped to their company")
+
+    unique_ids = list(dict.fromkeys(company_ids))
+    if unique_ids:
+        count = (await db.execute(
+            select(_func.count()).select_from(Company).where(Company.id.in_(unique_ids))
+        )).scalar() or 0
+        if count != len(unique_ids):
+            raise HTTPException(status_code=400, detail="One or more companies not found")
+
+    actor.focus_company_ids = [str(c) for c in unique_ids] or None
+    await db.commit()
+    await db.refresh(actor)
+    return actor
+
+
 async def toggle_user_active(db: AsyncSession, user_id: uuid.UUID, active: bool) -> User:
     user = await get_user_by_id(db, user_id)
     if not user:

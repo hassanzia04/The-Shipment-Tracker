@@ -112,6 +112,16 @@ async def me(user: User = Depends(get_current_user)):
     return user
 
 
+@router.patch("/me/focus-companies", response_model=schemas.UserOut)
+async def update_my_focus_companies(
+    body: schemas.UpdateFocusCompaniesRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Self-service: set the customers this internal user's lists default to."""
+    return await service.update_focus_companies(db, user, body.company_ids)
+
+
 @router.post("/users", response_model=schemas.UserListOut)
 async def create_user(
     body: schemas.CreateUserRequest,

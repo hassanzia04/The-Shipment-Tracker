@@ -47,7 +47,12 @@ class UserOut(BaseModel):
     is_admin: bool
     company_id: Optional[UUID] = None
     company_name: Optional[str] = None
+    focus_company_ids: Optional[list[str]] = None
     created_at: datetime
+
+
+class UpdateFocusCompaniesRequest(BaseModel):
+    company_ids: list[UUID] = []
 
 
 class UserListOut(BaseModel):

@@ -39,6 +39,9 @@ export const authApi = {
   updateCompany: (userId: string, company_id: string | null) =>
     api.patch(`/auth/users/${userId}/company`, { company_id }),
 
+  updateFocusCompanies: (companyIds: string[]) =>
+    api.patch<User>('/auth/me/focus-companies', { company_ids: companyIds }),
+
   changePassword: (current_password: string, new_password: string) =>
     api.post('/auth/change-password', { current_password, new_password }),
 }

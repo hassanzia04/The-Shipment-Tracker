@@ -33,6 +33,7 @@ import { formatDate, formatDateTime } from '@/lib/dates'
 import { SortableHeader } from '@/components/SortableHeader'
 import { ColumnFilterPopover } from '@/components/ColumnFilterPopover'
 import { CopyButton } from '@/components/CopyButton'
+import { CustomerFocusBar } from '@/components/CustomerFocusBar'
 import clsx from 'clsx'
 
 const ALL_COLUMNS = [
@@ -2069,6 +2070,12 @@ export function ShipmentList() {
   // Company (customer) filter — URL-driven so the dashboard can link to /shipments?company_id=…
   const filterCompany = searchParams.get('company_id') ?? ''
   const setFilterCompany = (v: string) => setSearchParams(p => { if (v) p.set('company_id', v); else p.delete('company_id'); p.set('page', '1'); return p })
+  // Personal customer focus (internal users): defaults the list to the user's own
+  // customers. Explicit company filter and "Show all" both override it.
+  const focusIds = (user && !isCustomerTeam(user) && user.focus_company_ids) || []
+  const [showAllCustomers, setShowAllCustomers] = useState(false)
+  const customerFocusActive = focusIds.length > 0 && !showAllCustomers && !filterCompany
+  const focusCompanyIdsParam = customerFocusActive ? focusIds.join(',') : undefined
   const [missingDate, setMissingDate] = useState(false)
   const [amlsSearch, setAmlsSearch] = useState('')
   const [debouncedAmlsSearch, setDebouncedAmlsSearch] = useState('')
@@ -2186,6 +2193,7 @@ export function ShipmentList() {
         search: debouncedSearch || undefined,
         stage: (!historical && !isMyQueue) ? (stageFilter || undefined) : undefined,
         company_id: filterCompany || undefined,
+        company_ids: focusCompanyIdsParam,
         my_queue: isMyQueue || undefined,
         missing_date: (!historical && missingDate) || undefined,
         amls_search: debouncedAmlsSearch || undefined,
@@ -2237,13 +2245,14 @@ export function ShipmentList() {
   const isMyQueue = !historical && stageFilter === 'my_queue'
 
   const { data, isLoading } = useQuery({
-    queryKey: ['shipments', skip, debouncedSearch, stageFilter, filterCompany, missingDate, debouncedAmlsSearch, missingAmls, pullOutFrom, pullOutTo, sort.column, sort.dir, historical, completedFrom, completedTo, debouncedConsignee, debouncedPort, debouncedOffloading, debouncedBayanType, debouncedShippingLine, filterEtaFrom, filterEtaTo, filterDoValidityFrom, filterDoValidityTo, debouncedPermit, filterDoExpired, filterDoExpiringSoon],
+    queryKey: ['shipments', skip, debouncedSearch, stageFilter, filterCompany, focusCompanyIdsParam, missingDate, debouncedAmlsSearch, missingAmls, pullOutFrom, pullOutTo, sort.column, sort.dir, historical, completedFrom, completedTo, debouncedConsignee, debouncedPort, debouncedOffloading, debouncedBayanType, debouncedShippingLine, filterEtaFrom, filterEtaTo, filterDoValidityFrom, filterDoValidityTo, debouncedPermit, filterDoExpired, filterDoExpiringSoon],
     queryFn: () => shipmentsApi.list({
       skip,
       limit: PAGE_SIZE,
       search: debouncedSearch || undefined,
       stage: (!historical && !isMyQueue) ? (stageFilter || undefined) : undefined,
       company_id: filterCompany || undefined,
+      company_ids: focusCompanyIdsParam,
       my_queue: isMyQueue || undefined,
       missing_date: (!historical && missingDate) || undefined,
       amls_search: debouncedAmlsSearch || undefined,
@@ -2422,6 +2431,13 @@ export function ShipmentList() {
           onDone={() => qc.invalidateQueries({ queryKey: ['shipments'] })}
         />
       )}
+
+      {/* Personal customer focus (internal users) — explicit company filter overrides it */}
+      <CustomerFocusBar
+        showingAll={showAllCustomers}
+        onShowingAllChange={setShowAllCustomers}
+        suppressed={!!filterCompany}
+      />
 
       {/* Active / History toggle */}
       <div className="flex items-center gap-1 mb-3 border dark:border-gray-600 rounded-lg overflow-hidden w-fit">
@@ -2759,7 +2775,7 @@ export function ShipmentList() {
           {[...Array(4)].map((_, i) => <div key={i} className="h-16 bg-gray-100 dark:bg-gray-700 animate-pulse rounded-xl" />)}
         </div>
       ) : view === 'containers' ? (
-        <ContainerView team={user!.team} historical={historical} />
+        <ContainerView team={user!.team} historical={historical} focusCompanyIds={focusCompanyIdsParam} />
       ) : (
         <PriorityTable
           shipments={items}

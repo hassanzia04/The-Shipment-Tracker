@@ -64,6 +64,7 @@ export interface User {
   is_admin: boolean
   company_id: string | null
   company_name: string | null
+  focus_company_ids: string[] | null
   created_at: string
 }
 

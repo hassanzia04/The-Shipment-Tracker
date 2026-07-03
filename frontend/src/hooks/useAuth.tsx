@@ -7,6 +7,7 @@ interface AuthContext {
   loading: boolean
   login: (email: string, password: string) => Promise<void>
   logout: () => Promise<void>
+  refresh: () => Promise<void>
 }
 
 const Ctx = createContext<AuthContext | null>(null)
@@ -34,7 +35,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null)
   }
 
-  return <Ctx.Provider value={{ user, loading, login, logout }}>{children}</Ctx.Provider>
+  async function refresh() {
+    try {
+      const { data } = await authApi.me()
+      setUser(data)
+    } catch { /* session gone — keep current state */ }
+  }
+
+  return <Ctx.Provider value={{ user, loading, login, logout, refresh }}>{children}</Ctx.Provider>
 }
 
 export function useAuth() {

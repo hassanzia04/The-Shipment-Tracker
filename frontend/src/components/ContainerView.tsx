@@ -24,6 +24,9 @@ const HISTORICAL_PAGE_SIZE = 25
 interface Props {
   team: string   // any non-PRO team; action buttons guard themselves to TRANSPORT/DC
   historical?: boolean
+  // Comma-separated company ids from the user's personal focus; applied only
+  // while no explicit company is selected in the toolbar
+  focusCompanyIds?: string
 }
 
 // ── DO validity urgency ───────────────────────────────────────────────────────
@@ -842,7 +845,7 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export function ContainerView({ team, historical = false }: Props) {
+export function ContainerView({ team, historical = false, focusCompanyIds }: Props) {
   const qc = useQueryClient()
   const showCompanyFilter = team !== 'CUSTOMER' && team !== 'CUSTOMER_MANAGEMENT'
   const [downloadingCcros, setDownloadingCcros] = useState(false)
@@ -896,8 +899,11 @@ export function ContainerView({ team, historical = false }: Props) {
   const skip = historical ? (page - 1) * HISTORICAL_PAGE_SIZE : 0
   const limit = historical ? HISTORICAL_PAGE_SIZE : 500
 
+  // Personal focus applies only while no explicit company is picked in the toolbar
+  const effectiveFocusIds = !companyFilter ? focusCompanyIds : undefined
+
   const { data, isLoading, refetch } = useQuery({
-    queryKey: ['container-view', historical, debouncedSearch, statusFilter, companyFilter, filterFrom, filterTo, amlsOnly, skip, sort.column, sort.dir],
+    queryKey: ['container-view', historical, debouncedSearch, statusFilter, companyFilter, effectiveFocusIds, filterFrom, filterTo, amlsOnly, skip, sort.column, sort.dir],
     queryFn: () => shipmentsApi.containerView({
       historical,
       skip,
@@ -905,6 +911,7 @@ export function ContainerView({ team, historical = false }: Props) {
       search: debouncedSearch || undefined,
       status: statusFilter || undefined,
       company_id: companyFilter || undefined,
+      company_ids: effectiveFocusIds,
       from_date: filterFrom || undefined,
       to_date: filterTo || undefined,
       amls_only: (amlsOnly && team === 'DC') || undefined,
@@ -965,6 +972,7 @@ export function ContainerView({ team, historical = false }: Props) {
         to_date: filterTo || undefined,
         status: statusFilter || undefined,
         company_id: companyFilter || undefined,
+        company_ids: effectiveFocusIds,
         historical,
         amls_only: (amlsOnly && team === 'DC') || undefined,
         do_expired: (cfDoExpired && !cfDoExpiringSoon) || undefined,
