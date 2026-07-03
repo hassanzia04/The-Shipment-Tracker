@@ -9,7 +9,7 @@ from sqlalchemy import select, func, exists
 from app.shipments.models import Shipment, ShipmentTask, Container
 from app.masters.models import Truck, OffloadingPoint
 from app.enums import ShipmentStage, TaskStatus, ContainerStatus
-from sqlalchemy import and_
+from sqlalchemy import and_, or_
 from app.notifications.models import DailyReportConfig, DailyReportRecipient, DAILY_REPORT_CONFIG_ID
 from app.config import settings
 
@@ -117,6 +117,7 @@ async def _get_report_data(db: AsyncSession, company_id=None) -> dict:
     )).scalar() or 0
 
     # Active containers (non-terminal, on non-completed shipments)
+    from app.companies.models import Company
     containers_result = await db.execute(
         select(
             Container.container_number,
@@ -126,10 +127,12 @@ async def _get_report_data(db: AsyncSession, company_id=None) -> dict:
             Truck.plate_number,
             Truck.driver_name,
             OffloadingPoint.name.label("offloading_point"),
+            Company.name.label("customer"),
         )
         .join(Shipment, Shipment.id == Container.shipment_id)
         .outerjoin(Truck, Truck.id == Container.truck_id)
         .outerjoin(OffloadingPoint, OffloadingPoint.id == Container.offloading_point_id)
+        .outerjoin(Company, Company.id == Shipment.company_id)
         .where(
             Container.status.notin_(_TERMINAL_STATUSES),
             Shipment.current_stage != ShipmentStage.COMPLETED,
@@ -150,6 +153,7 @@ async def _get_report_data(db: AsyncSession, company_id=None) -> dict:
             "driver": row.driver_name or "—",
             "expected_arrival": arrival,
             "offloading_point": row.offloading_point or "—",
+            "customer": row.customer or "—",
         })
 
     # Container counts by status (active statuses only)
@@ -292,6 +296,87 @@ async def _get_report_data(db: AsyncSession, company_id=None) -> dict:
     )
     upcoming_pullouts_count: int = upcoming_result.scalar() or 0
 
+    # Customer-wise breakup — internal full report only
+    by_company = None
+    if company_id is None:
+        ship_agg = (await db.execute(
+            select(
+                Company.name,
+                func.count(Shipment.id).filter(Shipment.current_stage != ShipmentStage.COMPLETED).label("active"),
+                func.count(Shipment.id).filter(
+                    func.date(func.timezone("Asia/Muscat", Shipment.created_at)) == today
+                ).label("new_today"),
+                func.count(Shipment.id).filter(
+                    Shipment.current_stage == ShipmentStage.COMPLETED,
+                    func.date(func.timezone("Asia/Muscat", Shipment.completed_at)) == today,
+                ).label("completed_today"),
+                func.count(Shipment.id).filter(
+                    Shipment.pull_out_date != None,
+                    Shipment.pull_out_date <= today,
+                    or_(
+                        Shipment.current_stage.in_(_pre_transport_stages),
+                        and_(
+                            Shipment.current_stage.in_(_transport_stages),
+                            exists(
+                                select(Container.id).where(
+                                    Container.shipment_id == Shipment.id,
+                                    Container.status.in_(_uncollected_statuses),
+                                )
+                            ),
+                        ),
+                    ),
+                ).label("overdue_pullouts"),
+                func.count(Shipment.id).filter(
+                    Shipment.do_validity_date >= today,
+                    Shipment.do_validity_date <= expiry_cutoff,
+                    Shipment.current_stage != ShipmentStage.COMPLETED,
+                ).label("expiring_dos"),
+            )
+            .join(Shipment, Shipment.company_id == Company.id)
+            .group_by(Company.id, Company.name)
+        )).all()
+
+        containers_agg = {
+            row[0]: row[1]
+            for row in (await db.execute(
+                select(Company.name, func.count(Container.id))
+                .join(Shipment, Shipment.company_id == Company.id)
+                .join(Container, Container.shipment_id == Shipment.id)
+                .where(
+                    Container.status.notin_(_TERMINAL_STATUSES),
+                    Shipment.current_stage != ShipmentStage.COMPLETED,
+                )
+                .group_by(Company.name)
+            )).all()
+        }
+        holds_agg = {
+            row[0]: row[1]
+            for row in (await db.execute(
+                select(Company.name, func.count(ShipmentTask.id))
+                .join(Shipment, Shipment.company_id == Company.id)
+                .join(ShipmentTask, ShipmentTask.shipment_id == Shipment.id)
+                .where(ShipmentTask.status == TaskStatus.ON_HOLD)
+                .group_by(Company.name)
+            )).all()
+        }
+        by_company = sorted(
+            (
+                {
+                    "name": row.name,
+                    "active": row.active,
+                    "new_today": row.new_today,
+                    "completed_today": row.completed_today,
+                    "overdue_pullouts": row.overdue_pullouts,
+                    "expiring_dos": row.expiring_dos,
+                    "containers": containers_agg.get(row.name, 0),
+                    "on_hold": holds_agg.get(row.name, 0),
+                }
+                for row in ship_agg
+            ),
+            key=lambda r: r["active"],
+            reverse=True,
+        )
+
     return {
         "report_date": now.strftime("%d %B %Y"),
         "report_time": now.strftime("%H:%M"),
@@ -306,6 +391,7 @@ async def _get_report_data(db: AsyncSession, company_id=None) -> dict:
         "holds_by_entity": holds_by_entity,
         "total_on_hold": total_on_hold,
         "expiring_dos": expiring_dos,
+        "by_company": by_company,
     }
 
 
@@ -329,12 +415,26 @@ async def _get_ai_summary(data: dict) -> list[str]:
         pullouts_in_progress = sum(1 for p in pullouts if p["stage"] == "IN_PROGRESS")
         pullouts_transport  = sum(1 for p in pullouts if p["stage"] in ("TRANSPORT", "DC_TRANSPORT"))
 
+        by_company = data.get("by_company") or []
+        pipeline_instruction = (
+            "• Point 3: overall pipeline picture only, naming any customer that stands out. Do not mention overdue or holds.\n\n"
+            if by_company else
+            "• Point 3: overall pipeline picture only. Do not mention overdue or holds.\n\n"
+        )
+        company_context = ""
+        if by_company:
+            company_context = "- Per-customer breakdown: " + "; ".join(
+                f"{c['name']}: {c['active']} active, {c['overdue_pullouts']} overdue pull-outs, "
+                f"{c['on_hold']} on hold, {c['containers']} active containers"
+                for c in by_company
+            ) + "\n"
+
         prompt = (
-            "You are a senior logistics analyst for a freight forwarding company.\n\n"
+            "You are a senior logistics analyst for a freight forwarding company serving multiple customer companies.\n\n"
             "Write exactly 3 bullet points. Each under 20 words. Start each with •. No markdown, no headers, no bold.\n"
             "• Point 1: overdue pull-outs only. Nothing else.\n"
             "• Point 2: active holds only. Nothing else.\n"
-            "• Point 3: overall pipeline picture only. Do not mention overdue or holds.\n\n"
+            + pipeline_instruction +
             "Note: 'Customer' stage = customer has not submitted documents yet, not a completed delivery.\n\n"
             "Today's data:\n"
             f"- Overdue pull-outs: {len(pullouts)} "
@@ -353,6 +453,7 @@ async def _get_ai_summary(data: dict) -> list[str]:
             f"- Completed today: {data['completed_today']}\n"
             f"- DOs expiring in 7 days: {len(data['expiring_dos'])}\n"
             f"- Upcoming pull-outs due in next 3 days (still need CCRO): {data.get('upcoming_pullouts_count', 0)}\n"
+            + company_context
         )
 
         client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
@@ -452,7 +553,54 @@ def _render_html(data: dict, ai_bullets: list[str], company_name: str | None = N
         '</table></td></tr>'
     )
 
+    # ── By Customer breakup (internal full report only) ──
+    by_company = data.get("by_company") or []
+    if by_company:
+        def _num(v, highlight: str | None = None) -> str:
+            if not v:
+                return _td('<span style="color:#cbd5e1;">&mdash;</span>', "text-align:right;")
+            style = f"text-align:right;font-weight:bold;color:{highlight};" if highlight else "text-align:right;font-weight:600;"
+            return _td(str(v), style)
+
+        bc_rows = ""
+        for i, c in enumerate(by_company):
+            bg = "#f8fafc" if i % 2 == 0 else "#ffffff"
+            bc_rows += (
+                f'<tr style="background-color:{bg};">'
+                f'{_td(_html_mod.escape(c["name"]), "font-weight:600;white-space:nowrap;")}'
+                f'{_num(c["active"], "#1d4ed8")}'
+                f'{_num(c["new_today"])}'
+                f'{_num(c["completed_today"], "#15803d")}'
+                f'{_num(c["containers"])}'
+                f'{_num(c["on_hold"], "#dc2626")}'
+                f'{_num(c["overdue_pullouts"], "#dc2626")}'
+                f'{_num(c["expiring_dos"], "#a16207")}'
+                f'</tr>'
+            )
+        by_customer_section = (
+            _section_header("By Customer") +
+            '<tr><td style="padding:0 32px 8px;overflow-x:auto;">'
+            '<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:1px solid #e2e8f0;">'
+            f'<tr>'
+            f'{_th("Customer")}'
+            f'{_th("Active", "text-align:right;")}'
+            f'{_th("New Today", "text-align:right;")}'
+            f'{_th("Completed Today", "text-align:right;")}'
+            f'{_th("Containers", "text-align:right;")}'
+            f'{_th("On Hold", "text-align:right;")}'
+            f'{_th("Overdue Pull-outs", "text-align:right;")}'
+            f'{_th("DOs Expiring &le;7d", "text-align:right;")}'
+            f'</tr>'
+            f'{bc_rows}'
+            '</table></td></tr>'
+            '<tr><td style="height:8px;"></td></tr>'
+        )
+    else:
+        by_customer_section = ""
+
     # ── Active Containers ──
+    # Customer column only on the internal full report — a company's own edition doesn't need it
+    show_customer_col = company_name is None
     if containers:
         container_rows = ""
         for i, c in enumerate(containers):
@@ -463,9 +611,11 @@ def _render_html(data: dict, ai_bullets: list[str], company_name: str | None = N
                 f'font-size:11px;font-weight:600;background-color:{status_bg};color:{status_color};">'
                 f'{_STATUS_LABELS.get(c["status"], c["status"])}</span>'
             )
+            customer_cell = _td(c.get("customer", "—"), "white-space:nowrap;") if show_customer_col else ""
             container_rows += (
                 f'<tr style="background-color:{bg};">'
                 f'{_td(c["bl_number"], "font-weight:600;white-space:nowrap;")}'
+                f'{customer_cell}'
                 f'{_td(c["container_number"], "white-space:nowrap;font-family:monospace,Arial;")}'
                 f'<td style="padding:8px 12px;">{status_badge}</td>'
                 f'{_td(c["truck"])}'
@@ -474,10 +624,12 @@ def _render_html(data: dict, ai_bullets: list[str], company_name: str | None = N
                 f'{_td(c["offloading_point"])}'
                 f'</tr>'
             )
+        customer_th = _th("Customer") if show_customer_col else ""
         containers_inner = (
             '<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:1px solid #e2e8f0;">'
             f'<tr>'
             f'{_th("BL Number")}'
+            f'{customer_th}'
             f'{_th("Container")}'
             f'{_th("Status")}'
             f'{_th("Truck / Plate")}'
@@ -671,6 +823,9 @@ def _render_html(data: dict, ai_bullets: list[str], company_name: str | None = N
   {pipeline_section}
   <tr><td style="height:8px;"></td></tr>
 
+  <!-- By Customer (internal full report only) -->
+  {by_customer_section}
+
   <!-- Active Containers -->
   {containers_section}
   <tr><td style="height:8px;"></td></tr>
@@ -742,7 +897,7 @@ async def send_internal_daily_report(db: AsyncSession) -> None:
     data = await _get_report_data(db)
     ai_bullets = await _get_ai_summary(data)
     html = _render_html(data, ai_bullets)
-    subject = f"Shipment Tracker — Daily Operations Report · {data['report_date']}"
+    subject = f"Shipment Tracker — FFD Daily Operations Report · {data['report_date']}"
 
     from app.notifications.tasks import send_email_task
     send_email_task.delay([r.email for r in recipients], subject, html)
