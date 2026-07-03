@@ -22,9 +22,12 @@ export function AdminMasters() {
   const { user } = useAuth()
   const [newName, setNewName] = useState<Record<MasterKey, string>>({ productTypes: '', offloadingPoints: '', loadingPorts: '', shippingLines: '', bayanTypes: '', consignees: '' })
 
+  // Transport only works with trucks — the other masters aren't theirs to manage
+  const trucksOnly = user?.team === 'TRANSPORT' && !user?.is_admin
+
   const queries = MASTER_CONFIG.map(m => ({
     ...m,
-    query: useQuery({ queryKey: [m.key], queryFn: () => m.api.list().then((r: any) => r.data) }),
+    query: useQuery({ queryKey: [m.key], queryFn: () => m.api.list().then((r: any) => r.data), enabled: !trucksOnly }),
   }))
 
   async function addItem(cfg: typeof MASTER_CONFIG[0]) {
@@ -66,15 +69,24 @@ export function AdminMasters() {
     URL.revokeObjectURL(url)
   }
 
+  if (trucksOnly) {
+    return (
+      <div className="space-y-6">
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Master Data</h1>
+        <TrucksMaster />
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Master Data</h1>
 
-      {/* Trucks — not shown to CUSTOMER team */}
-      {user?.team !== 'CUSTOMER' && <TrucksMaster />}
+      {/* Trucks — not shown to customer teams */}
+      {user?.team !== 'CUSTOMER' && user?.team !== 'CUSTOMER_MANAGEMENT' && <TrucksMaster />}
 
-      {/* Outsourced Trucks — not shown to CUSTOMER team */}
-      {user?.team !== 'CUSTOMER' && <OutsourcedTrucksMaster />}
+      {/* Outsourced Trucks — not shown to customer teams */}
+      {user?.team !== 'CUSTOMER' && user?.team !== 'CUSTOMER_MANAGEMENT' && <OutsourcedTrucksMaster />}
 
       {queries.map(({ key, label, api, query }) => (
         <div key={key} className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-xl p-4 space-y-3">

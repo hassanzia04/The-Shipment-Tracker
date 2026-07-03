@@ -11,7 +11,6 @@ import { Settings } from './pages/Settings'
 import { AdminUsers } from './pages/admin/Users'
 import { AdminMasters } from './pages/admin/Masters'
 import { Productivity } from './pages/Productivity'
-import { Trucks } from './pages/Trucks'
 import { ImportShipments } from './pages/customer/ImportShipments'
 import { Reports } from './pages/Reports'
 import { ProTasks } from './pages/ProTasks'
@@ -42,15 +41,9 @@ function ProductivityAccess({ children }: { children: ReactNode }) {
   return <>{children}</>
 }
 
-function TransportOrAdmin({ children }: { children: ReactNode }) {
-  const { user } = useAuth()
-  if (user?.team !== 'TRANSPORT' && !user?.is_admin) return <Navigate to="/" replace />
-  return <>{children}</>
-}
-
 function MastersAccess({ children }: { children: ReactNode }) {
   const { user } = useAuth()
-  if (user?.team !== 'FFD' && user?.team !== 'CUSTOMER' && !user?.is_admin) return <Navigate to="/" replace />
+  if (user?.team !== 'FFD' && user?.team !== 'CUSTOMER' && user?.team !== 'TRANSPORT' && !user?.is_admin) return <Navigate to="/" replace />
   return <>{children}</>
 }
 
@@ -100,7 +93,6 @@ export default function App() {
             <Route path="/admin/users" element={<Protected><AdminOnly><AdminUsers /></AdminOnly></Protected>} />
             <Route path="/masters" element={<Protected><MastersAccess><AdminMasters /></MastersAccess></Protected>} />
             <Route path="/admin/masters" element={<Protected><AdminOnly><AdminMasters /></AdminOnly></Protected>} />
-            <Route path="/trucks" element={<Protected><TransportOrAdmin><Trucks /></TransportOrAdmin></Protected>} />
             <Route path="/pro-tasks" element={<Protected><ProTasksAccess><ProTasks /></ProTasksAccess></Protected>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

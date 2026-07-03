@@ -14,7 +14,7 @@ function getBottomNavItems(user: { team: string; is_admin: boolean } | null): Na
   const D = { label: 'Dashboard',   href: '/',           icon: LayoutDashboard }
   const S = { label: 'Shipments',   href: '/shipments',  icon: Ship }
   const R = { label: 'Reports',     href: '/reports',    icon: TrendingUp }
-  const T = { label: 'Trucks',      href: '/trucks',     icon: Truck }
+  const T = { label: 'Trucks',      href: '/masters',    icon: Truck }
   const P = { label: 'PRO Tasks',   href: '/pro-tasks',  icon: ClipboardList }
   const Y = { label: 'Productivity',href: '/productivity',icon: BarChart2 }
 
@@ -94,8 +94,8 @@ export function Layout({ children }: Props) {
         {(user?.team === 'FFD' || user?.team === 'MANAGEMENT' || user?.team === 'CUSTOMER' || user?.team === 'CUSTOMER_MANAGEMENT' || user?.team === 'TRANSPORT' || user?.is_admin) && navLink('/reports', 'Reports', TrendingUp)}
         {(user?.team === 'FFD' || user?.team === 'MANAGEMENT' || user?.is_admin) && navLink('/pro-tasks', 'PRO Tasks', ClipboardList)}
         {(user?.team === 'FFD' || user?.team === 'CUSTOMER' || user?.is_admin) && navLink('/masters', 'Masters', Database)}
+        {user?.team === 'TRANSPORT' && navLink('/masters', 'Trucks', Truck)}
         {user?.team === 'CUSTOMER' && navLink('/import', 'Create Shipment', FolderOpen)}
-        {(user?.team === 'TRANSPORT' || user?.is_admin) && navLink('/trucks', 'Trucks', Truck)}
         {user?.is_admin && navLink('/admin/users', 'Admin', Users, false)}
         {navLink('/settings', 'Settings', Settings)}
       </nav>
