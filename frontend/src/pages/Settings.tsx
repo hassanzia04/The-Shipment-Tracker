@@ -3,13 +3,14 @@ import { useTheme } from '@/hooks/useTheme'
 import { useAuth } from '@/hooks/useAuth'
 import { authApi } from '@/api/auth'
 import { notificationsApi, CCConfig, DailyReportRecipient } from '@/api/notifications'
-import type { User } from '@/types'
+import { companiesApi } from '@/api/companies'
+import type { User, Company } from '@/types'
 import { TEAM_LABELS } from '@/types'
 import { Moon, Sun, Plus, X, Clock } from 'lucide-react'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 
-const CC_TEAMS = ['FFD', 'TRANSPORT', 'DC', 'CUSTOMER'] as const
+const CC_TEAMS = ['FFD', 'TRANSPORT', 'DC'] as const
 
 export function Settings() {
   const { theme, setTheme } = useTheme()
@@ -23,6 +24,7 @@ export function Settings() {
   // CC config state (admin only)
   const [ccConfigs, setCCConfigs] = useState<CCConfig[]>([])
   const [proUsers, setProUsers] = useState<User[]>([])
+  const [companies, setCompanies] = useState<Company[]>([])
   const [addingFor, setAddingFor] = useState<string | null>(null)
   const [newCCEmail, setNewCCEmail] = useState('')
   const [ccSaving, setCCSaving] = useState(false)
@@ -44,6 +46,7 @@ export function Settings() {
     if (!user?.is_admin) return
     notificationsApi.listCCConfigs().then(r => setCCConfigs(r.data)).catch(() => {})
     authApi.listTeamMembers('PRO').then(r => setProUsers(r.data)).catch(() => {})
+    companiesApi.list(true).then(r => setCompanies(r.data)).catch(() => {})
     notificationsApi.listDailyReportRecipients().then(r => setReportRecipients(r.data)).catch(() => {})
     notificationsApi.getDailyReportConfig().then(r => {
       setReportSendTime(r.data.send_time)
@@ -66,13 +69,13 @@ export function Settings() {
     }
   }
 
-  async function handleAddCC(e: FormEvent, team: string | null, proUserId: string | null) {
+  async function handleAddCC(e: FormEvent, team: string | null, proUserId: string | null, companyId?: string) {
     e.preventDefault()
     if (!newCCEmail.trim()) return
     setCCSaving(true)
     try {
       const payload = team
-        ? { team, cc_email: newCCEmail.trim() }
+        ? { team, cc_email: newCCEmail.trim(), ...(companyId ? { company_id: companyId } : {}) }
         : { pro_user_id: proUserId!, cc_email: newCCEmail.trim() }
       const res = await notificationsApi.createCCConfig(payload)
       setCCConfigs(prev => [...prev, res.data])
@@ -143,12 +146,14 @@ export function Settings() {
     configs,
     team,
     proUserId,
+    companyId,
   }: {
     rowKey: string
     label: string
     configs: CCConfig[]
     team: string | null
     proUserId: string | null
+    companyId?: string
   }) {
     const isAdding = addingFor === rowKey
     return (
@@ -179,7 +184,7 @@ export function Settings() {
         </div>
         {isAdding && (
           <form
-            onSubmit={e => handleAddCC(e, team, proUserId)}
+            onSubmit={e => handleAddCC(e, team, proUserId, companyId)}
             className="flex gap-2 mt-2"
           >
             <input
@@ -369,6 +374,27 @@ export function Settings() {
                 configs={ccConfigs.filter(c => c.team === team)}
                 team={team}
                 proUserId={null}
+              />
+            ))}
+          </div>
+
+          <div className="space-y-1">
+            <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mt-3 mb-1">Customer Companies</p>
+            <p className="text-[11px] text-gray-400 dark:text-gray-500 mb-1">
+              CC'd only on emails about that company's shipments — never across companies.
+            </p>
+            {companies.length === 0 && (
+              <p className="text-xs text-gray-400 dark:text-gray-500 py-1">No active companies found.</p>
+            )}
+            {companies.map(company => (
+              <CCRow
+                key={company.id}
+                rowKey={`customer-${company.id}`}
+                label={company.name}
+                configs={ccConfigs.filter(c => c.team === 'CUSTOMER' && c.company_id === company.id)}
+                team="CUSTOMER"
+                proUserId={null}
+                companyId={company.id}
               />
             ))}
           </div>

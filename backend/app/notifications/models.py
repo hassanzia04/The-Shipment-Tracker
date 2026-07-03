@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, date, timezone
 from sqlalchemy import String, DateTime, Date, ForeignKey, Boolean, CheckConstraint
 from sqlalchemy.dialects.postgresql import UUID, JSONB
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
 
@@ -23,7 +23,9 @@ class Notification(Base):
 
 
 class AlertCCConfig(Base):
-    """CC email addresses the admin wants copied on alerts, keyed by team or individual PRO user."""
+    """CC email addresses the admin wants copied on alerts, keyed by team or individual PRO user.
+    Customer-team entries additionally carry company_id so a CC address is only
+    copied on that company's emails (never across companies)."""
     __tablename__ = "alert_cc_configs"
     __table_args__ = (
         CheckConstraint(
@@ -35,8 +37,15 @@ class AlertCCConfig(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     team: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
     pro_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
+    company_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id", ondelete="CASCADE"), nullable=True, index=True)
     cc_email: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    company = relationship("Company", lazy="selectin")
+
+    @property
+    def company_name(self) -> str | None:
+        return self.company.name if self.company else None
 
 
 # Fixed UUID used as the single-row primary key for DailyReportConfig

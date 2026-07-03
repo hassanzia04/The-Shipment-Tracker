@@ -4,12 +4,15 @@ export interface CCConfig {
   id: string
   team: string | null
   pro_user_id: string | null
+  company_id: string | null
+  company_name: string | null
   cc_email: string
 }
 
 export interface CCConfigCreate {
   team?: string
   pro_user_id?: string
+  company_id?: string
   cc_email: string
 }
 

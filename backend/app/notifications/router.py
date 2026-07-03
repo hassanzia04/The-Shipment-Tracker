@@ -64,6 +64,7 @@ async def mark_notifications_read(
 class CCConfigCreate(BaseModel):
     team: str | None = None
     pro_user_id: uuid.UUID | None = None
+    company_id: uuid.UUID | None = None
     cc_email: EmailStr
 
 
@@ -71,6 +72,8 @@ class CCConfigOut(BaseModel):
     id: uuid.UUID
     team: str | None
     pro_user_id: uuid.UUID | None
+    company_id: uuid.UUID | None = None
+    company_name: str | None = None
     cc_email: str
 
     model_config = {"from_attributes": True}
@@ -105,9 +108,22 @@ async def create_cc_config(
         if not user_result.scalar_one_or_none():
             raise HTTPException(status_code=400, detail="pro_user_id must refer to an active PRO team member")
 
+    # Customer-team CC entries are always tied to one company; internal/PRO entries never are
+    _customer_teams = {Team.CUSTOMER.value, Team.CUSTOMER_MANAGEMENT.value}
+    if body.team in _customer_teams:
+        if body.company_id is None:
+            raise HTTPException(status_code=400, detail="company_id is required for customer-team CC entries")
+        from app.companies.models import Company
+        company_result = await db.execute(select(Company).where(Company.id == body.company_id))
+        if not company_result.scalar_one_or_none():
+            raise HTTPException(status_code=400, detail="Company not found")
+    elif body.company_id is not None:
+        raise HTTPException(status_code=400, detail="company_id is only valid for customer-team CC entries")
+
     config = AlertCCConfig(
         team=body.team,
         pro_user_id=body.pro_user_id,
+        company_id=body.company_id,
         cc_email=str(body.cc_email),
     )
     db.add(config)

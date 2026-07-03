@@ -168,8 +168,14 @@ async def _get_team_users(db: AsyncSession, team: Team, company_id: uuid.UUID | 
     return list(result.scalars().all())
 
 
-async def _get_cc_emails_for_team(db: AsyncSession, team: Team) -> list[str]:
-    result = await db.execute(select(AlertCCConfig).where(AlertCCConfig.team == team.value))
+async def _get_cc_emails_for_team(db: AsyncSession, team: Team, company_id: uuid.UUID | None = None) -> list[str]:
+    """CC list for a team. Customer-team lookups must pass the shipment's
+    company_id — only that company's CC entries are returned, so addresses
+    never leak across companies. Internal-team rows have company_id NULL."""
+    result = await db.execute(select(AlertCCConfig).where(
+        AlertCCConfig.team == team.value,
+        AlertCCConfig.company_id == company_id,
+    ))
     return [row.cc_email for row in result.scalars().all()]
 
 
@@ -260,12 +266,12 @@ async def notify_team(db: AsyncSession, shipment, team: Team, template_key: str,
     from app.notifications.tasks import send_email_task
 
     template = TEMPLATES.get(template_key, {})
-    # Customer-team notifications go only to the shipment's company; team CC lists
-    # are skipped for them so emails never leak across companies.
+    # Customer-team notifications go only to the shipment's company; their CC
+    # list is likewise company-scoped so emails never leak across companies.
     _customer_teams = {Team.CUSTOMER, Team.CUSTOMER_MANAGEMENT}
     if team in _customer_teams:
         users = await _get_team_users(db, team, company_id=shipment.company_id)
-        cc_emails = []
+        cc_emails = await _get_cc_emails_for_team(db, team, company_id=shipment.company_id)
     else:
         users = await _get_team_users(db, team)
         cc_emails = await _get_cc_emails_for_team(db, team)
@@ -492,7 +498,7 @@ async def notify_bayan_payment_requested(db: AsyncSession, shipment) -> None:
     from app.enums import DocumentType
 
     users = await _get_team_users(db, Team.CUSTOMER, company_id=shipment.company_id)
-    cc_emails: list[str] = []  # no team-level CC for customer emails — would leak across companies
+    cc_emails = await _get_cc_emails_for_team(db, Team.CUSTOMER, company_id=shipment.company_id)
 
     template = TEMPLATES["bayan_payment_requested"]
     subject = template["subject"]
@@ -632,7 +638,7 @@ async def notify_bulk_bayan_payment_requested(
         return
 
     users = await _get_team_users(db, Team.CUSTOMER, company_id=shipments[0].company_id)
-    cc_emails: list[str] = []  # no team-level CC for customer emails — would leak across companies
+    cc_emails = await _get_cc_emails_for_team(db, Team.CUSTOMER, company_id=shipments[0].company_id)
     count = len(shipments)
     plural = "s" if count != 1 else ""
     bl_list = ", ".join(_html.escape(s.bl_number) for s in shipments)
