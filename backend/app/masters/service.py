@@ -5,8 +5,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from openpyxl import load_workbook, Workbook
 
+from sqlalchemy import or_
+
+from app.auth.models import User
 from app.masters.models import Truck, OutsourcedTruck, ProductType, RopInspectionType, BayanType, Consignee, OffloadingPoint, LoadingPort, ShippingLine
 from app.masters.schemas import ExcelImportResult
+from app.tenancy import company_scope
 
 
 async def deactivate_truck(db: AsyncSession, truck_id: uuid.UUID) -> Truck:
@@ -173,27 +177,57 @@ def build_trucks_template() -> bytes:
     return buf.getvalue()
 
 
-async def _list_simple(db: AsyncSession, model):
-    result = await db.execute(select(model).where(model.is_active == True).order_by(model.name))
+async def _list_simple(db: AsyncSession, model, actor: User | None = None):
+    q = select(model).where(model.is_active == True).order_by(model.name)
+    # Company-scoped masters: customer users see shared rows (NULL) + their own
+    if actor is not None and hasattr(model, "company_id"):
+        scope = company_scope(actor)
+        if scope is not None:
+            q = q.where(or_(model.company_id == None, model.company_id == scope))
+    result = await db.execute(q)
     return list(result.scalars().all())
 
 
-async def _create_simple(db: AsyncSession, model, name: str):
-    existing = await db.execute(select(model).where(model.name == name))
-    if existing.scalar_one_or_none():
+def _creation_company(model, actor: User | None) -> "uuid.UUID | None":
+    """Rows created by customer users belong to their company; rows created by
+    internal users are shared (visible to everyone)."""
+    if actor is not None and hasattr(model, "company_id"):
+        return company_scope(actor)
+    return None
+
+
+async def _assert_name_available(db: AsyncSession, model, name: str, company_id) -> bool:
+    """A name clashes with shared rows and rows of the same company, but is free
+    to repeat across different companies. Returns True if taken."""
+    q = select(model.id).where(model.name == name)
+    if hasattr(model, "company_id"):
+        if company_id is None:
+            q = q.where(model.company_id == None)
+        else:
+            q = q.where(or_(model.company_id == None, model.company_id == company_id))
+    return (await db.execute(q)).scalar_one_or_none() is not None
+
+
+async def _create_simple(db: AsyncSession, model, name: str, actor: User | None = None):
+    creation_company = _creation_company(model, actor)
+    if await _assert_name_available(db, model, name, creation_company):
         raise HTTPException(status_code=400, detail=f"{name} already exists")
     obj = model(name=name)
+    if hasattr(model, "company_id"):
+        obj.company_id = creation_company
     db.add(obj)
     await db.commit()
     await db.refresh(obj)
     return obj
 
 
-async def _import_simple_excel(db: AsyncSession, model, file: UploadFile) -> ExcelImportResult:
+async def _import_simple_excel(db: AsyncSession, model, file: UploadFile, actor: User | None = None) -> ExcelImportResult:
     content = await file.read()
     wb = load_workbook(io.BytesIO(content), read_only=True)
     ws = wb.active
     rows = list(ws.iter_rows(min_row=2, values_only=True))
+
+    creation_company = _creation_company(model, actor)
 
     inserted, skipped, errors = 0, 0, []
     for i, row in enumerate(rows, start=2):
@@ -201,11 +235,13 @@ async def _import_simple_excel(db: AsyncSession, model, file: UploadFile) -> Exc
             continue
         try:
             name = str(row[0]).strip()
-            existing = await db.execute(select(model).where(model.name == name))
-            if existing.scalar_one_or_none():
+            if await _assert_name_available(db, model, name, creation_company):
                 skipped += 1
                 continue
-            db.add(model(name=name))
+            obj = model(name=name)
+            if hasattr(model, "company_id"):
+                obj.company_id = creation_company
+            db.add(obj)
             inserted += 1
         except Exception as e:
             errors.append(f"Row {i}: {e}")
@@ -225,17 +261,18 @@ def build_simple_template(sheet_name: str, column: str) -> bytes:
 
 
 # Convenience wrappers for each simple master
-async def list_product_types(db): return await _list_simple(db, ProductType)
-async def create_product_type(db, name): return await _create_simple(db, ProductType, name)
-async def import_product_types(db, file): return await _import_simple_excel(db, ProductType, file)
+# (company-scoped masters take the actor; global masters ignore it)
+async def list_product_types(db, actor=None): return await _list_simple(db, ProductType, actor)
+async def create_product_type(db, name, actor=None): return await _create_simple(db, ProductType, name, actor)
+async def import_product_types(db, file, actor=None): return await _import_simple_excel(db, ProductType, file, actor)
 
 async def list_rop_types(db): return await _list_simple(db, RopInspectionType)
 async def create_rop_type(db, name): return await _create_simple(db, RopInspectionType, name)
 async def import_rop_types(db, file): return await _import_simple_excel(db, RopInspectionType, file)
 
-async def list_offloading_points(db): return await _list_simple(db, OffloadingPoint)
-async def create_offloading_point(db, name): return await _create_simple(db, OffloadingPoint, name)
-async def import_offloading_points(db, file): return await _import_simple_excel(db, OffloadingPoint, file)
+async def list_offloading_points(db, actor=None): return await _list_simple(db, OffloadingPoint, actor)
+async def create_offloading_point(db, name, actor=None): return await _create_simple(db, OffloadingPoint, name, actor)
+async def import_offloading_points(db, file, actor=None): return await _import_simple_excel(db, OffloadingPoint, file, actor)
 
 async def list_loading_ports(db): return await _list_simple(db, LoadingPort)
 async def create_loading_port(db, name): return await _create_simple(db, LoadingPort, name)
@@ -249,9 +286,9 @@ async def list_bayan_types(db): return await _list_simple(db, BayanType)
 async def create_bayan_type(db, name): return await _create_simple(db, BayanType, name)
 async def import_bayan_types(db, file): return await _import_simple_excel(db, BayanType, file)
 
-async def list_consignees(db): return await _list_simple(db, Consignee)
-async def create_consignee(db, name): return await _create_simple(db, Consignee, name)
-async def import_consignees(db, file): return await _import_simple_excel(db, Consignee, file)
+async def list_consignees(db, actor=None): return await _list_simple(db, Consignee, actor)
+async def create_consignee(db, name, actor=None): return await _create_simple(db, Consignee, name, actor)
+async def import_consignees(db, file, actor=None): return await _import_simple_excel(db, Consignee, file, actor)
 
 async def list_outsourced_trucks(db: AsyncSession) -> list[OutsourcedTruck]:
     result = await db.execute(select(OutsourcedTruck).where(OutsourcedTruck.is_active == True).order_by(OutsourcedTruck.plate_number))

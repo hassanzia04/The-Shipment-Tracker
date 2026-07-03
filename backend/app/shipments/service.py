@@ -2336,6 +2336,7 @@ async def _lookup_master(
     name: str,
     field_label: str,
     cache: dict,
+    actor: User | None = None,
 ) -> tuple[uuid.UUID | None, str | None]:
     """Return (id, None) if found, or (None, error_message) if name provided but not matched."""
     if not name:
@@ -2343,10 +2344,17 @@ async def _lookup_master(
     key = (model.__tablename__, name.lower())
     if key in cache:
         return cache[key], None
-    result = await db.execute(
-        select(model).where(func.lower(model.name) == name.lower(), model.is_active == True)
-    )
-    obj = result.scalar_one_or_none()
+    q = select(model).where(func.lower(model.name) == name.lower(), model.is_active == True)
+    # Company-scoped masters: customers may only match shared rows or their own;
+    # when a name exists both shared and company-owned, prefer the company row
+    if actor is not None and hasattr(model, "company_id"):
+        scope = company_scope(actor)
+        if scope is not None:
+            from sqlalchemy import or_
+            q = q.where(or_(model.company_id == None, model.company_id == scope))
+        q = q.order_by(model.company_id.nullslast())
+    result = await db.execute(q)
+    obj = result.scalars().first()
     if obj is None:
         return None, f'"{name}" not found in {field_label} — add it in Masters first'
     cache[key] = obj.id
@@ -2444,17 +2452,17 @@ async def import_shipments_from_excel(
             eta_at_port   = _parse_date(eta_raw)
 
             field_errors: list[str] = []
-            product_type_id, err = await _lookup_master(db, ProductType, prod_raw, "Product Types", master_cache)
+            product_type_id, err = await _lookup_master(db, ProductType, prod_raw, "Product Types", master_cache, actor)
             if err: field_errors.append(err)
-            loading_port_id, err = await _lookup_master(db, LoadingPort, port_raw, "Loading Ports", master_cache)
+            loading_port_id, err = await _lookup_master(db, LoadingPort, port_raw, "Loading Ports", master_cache, actor)
             if err: field_errors.append(err)
-            shipping_line_id, err = await _lookup_master(db, ShippingLine, sl_raw, "Shipping Lines", master_cache)
+            shipping_line_id, err = await _lookup_master(db, ShippingLine, sl_raw, "Shipping Lines", master_cache, actor)
             if err: field_errors.append(err)
-            offloading_point_id, err = await _lookup_master(db, OffloadingPoint, op_raw, "Offloading Locations", master_cache)
+            offloading_point_id, err = await _lookup_master(db, OffloadingPoint, op_raw, "Offloading Locations", master_cache, actor)
             if err: field_errors.append(err)
-            bayan_type_id, err = await _lookup_master(db, BayanType, bayan_raw, "Bayan Types", master_cache)
+            bayan_type_id, err = await _lookup_master(db, BayanType, bayan_raw, "Bayan Types", master_cache, actor)
             if err: field_errors.append(err)
-            consignee_id, err = await _lookup_master(db, Consignee, consign_raw, "Consignees", master_cache)
+            consignee_id, err = await _lookup_master(db, Consignee, consign_raw, "Consignees", master_cache, actor)
             if err: field_errors.append(err)
 
             if field_errors:

@@ -3,18 +3,29 @@ from fastapi import APIRouter, Depends, UploadFile, File
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from fastapi import HTTPException
+
 from app.database import get_db
 from app.auth.dependencies import require_admin, get_current_user
 from app.auth.models import User
 from app.masters import service, schemas
+from app.tenancy import is_customer_user
 
 router = APIRouter(prefix="/masters", tags=["masters"])
+
+
+def _require_internal(actor: User) -> User:
+    """Fleet data is internal-only — customer users have no business reading it."""
+    if is_customer_user(actor):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    return actor
 
 
 # ── Trucks ────────────────────────────────────────────────────────────────────
 
 @router.get("/trucks", response_model=list[schemas.TruckOut])
-async def list_trucks(db: AsyncSession = Depends(get_db), _=Depends(get_current_user)):
+async def list_trucks(db: AsyncSession = Depends(get_db), actor: User = Depends(get_current_user)):
+    _require_internal(actor)
     return await service.list_trucks(db)
 
 
@@ -48,18 +59,18 @@ async def trucks_template(_=Depends(require_admin)):
 # ── Product Types ─────────────────────────────────────────────────────────────
 
 @router.get("/product-types", response_model=list[schemas.SimpleMasterOut])
-async def list_product_types(db: AsyncSession = Depends(get_db), _=Depends(get_current_user)):
-    return await service.list_product_types(db)
+async def list_product_types(db: AsyncSession = Depends(get_db), actor: User = Depends(get_current_user)):
+    return await service.list_product_types(db, actor)
 
 
 @router.post("/product-types", response_model=schemas.SimpleMasterOut)
-async def create_product_type(body: schemas.SimpleMasterIn, db: AsyncSession = Depends(get_db), _=Depends(get_current_user)):
-    return await service.create_product_type(db, body.name)
+async def create_product_type(body: schemas.SimpleMasterIn, db: AsyncSession = Depends(get_db), actor: User = Depends(get_current_user)):
+    return await service.create_product_type(db, body.name, actor)
 
 
 @router.post("/product-types/import", response_model=schemas.ExcelImportResult)
-async def import_product_types(file: UploadFile = File(...), db: AsyncSession = Depends(get_db), _=Depends(get_current_user)):
-    return await service.import_product_types(db, file)
+async def import_product_types(file: UploadFile = File(...), db: AsyncSession = Depends(get_db), actor: User = Depends(get_current_user)):
+    return await service.import_product_types(db, file, actor)
 
 
 @router.delete("/product-types/{record_id}", status_code=204)
@@ -103,18 +114,18 @@ async def deactivate_rop_type(record_id: uuid.UUID, db: AsyncSession = Depends(g
 # ── Offloading Points ─────────────────────────────────────────────────────────
 
 @router.get("/offloading-points", response_model=list[schemas.SimpleMasterOut])
-async def list_offloading_points(db: AsyncSession = Depends(get_db), _=Depends(get_current_user)):
-    return await service.list_offloading_points(db)
+async def list_offloading_points(db: AsyncSession = Depends(get_db), actor: User = Depends(get_current_user)):
+    return await service.list_offloading_points(db, actor)
 
 
 @router.post("/offloading-points", response_model=schemas.SimpleMasterOut)
-async def create_offloading_point(body: schemas.SimpleMasterIn, db: AsyncSession = Depends(get_db), _=Depends(get_current_user)):
-    return await service.create_offloading_point(db, body.name)
+async def create_offloading_point(body: schemas.SimpleMasterIn, db: AsyncSession = Depends(get_db), actor: User = Depends(get_current_user)):
+    return await service.create_offloading_point(db, body.name, actor)
 
 
 @router.post("/offloading-points/import", response_model=schemas.ExcelImportResult)
-async def import_offloading_points(file: UploadFile = File(...), db: AsyncSession = Depends(get_db), _=Depends(get_current_user)):
-    return await service.import_offloading_points(db, file)
+async def import_offloading_points(file: UploadFile = File(...), db: AsyncSession = Depends(get_db), actor: User = Depends(get_current_user)):
+    return await service.import_offloading_points(db, file, actor)
 
 
 @router.delete("/offloading-points/{record_id}", status_code=204)
@@ -224,13 +235,13 @@ async def deactivate_bayan_type(record_id: uuid.UUID, db: AsyncSession = Depends
 # ── Consignees ────────────────────────────────────────────────────────────────
 
 @router.get("/consignees", response_model=list[schemas.SimpleMasterOut])
-async def list_consignees(db: AsyncSession = Depends(get_db), _=Depends(get_current_user)):
-    return await service.list_consignees(db)
+async def list_consignees(db: AsyncSession = Depends(get_db), actor: User = Depends(get_current_user)):
+    return await service.list_consignees(db, actor)
 
 
 @router.post("/consignees", response_model=schemas.SimpleMasterOut)
-async def create_consignee(body: schemas.SimpleMasterIn, db: AsyncSession = Depends(get_db), _=Depends(get_current_user)):
-    return await service.create_consignee(db, body.name)
+async def create_consignee(body: schemas.SimpleMasterIn, db: AsyncSession = Depends(get_db), actor: User = Depends(get_current_user)):
+    return await service.create_consignee(db, body.name, actor)
 
 
 @router.delete("/consignees/{record_id}", status_code=204)
@@ -246,7 +257,8 @@ async def deactivate_consignee(record_id: uuid.UUID, db: AsyncSession = Depends(
 # ── Outsourced Trucks ──────────────────────────────────────────────────────────
 
 @router.get("/outsourced-trucks", response_model=list[schemas.OutsourcedTruckOut])
-async def list_outsourced_trucks(db: AsyncSession = Depends(get_db), _=Depends(get_current_user)):
+async def list_outsourced_trucks(db: AsyncSession = Depends(get_db), actor: User = Depends(get_current_user)):
+    _require_internal(actor)
     return await service.list_outsourced_trucks(db)
 
 
