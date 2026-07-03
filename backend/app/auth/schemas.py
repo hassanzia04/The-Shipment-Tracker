@@ -1,12 +1,14 @@
 from pydantic import BaseModel, EmailStr
 from uuid import UUID
 from datetime import datetime
+from typing import Optional
 from app.enums import Team
 
 
 class InviteRequest(BaseModel):
     email: EmailStr
     team: Team
+    company_id: Optional[UUID] = None
 
 
 class InviteResponse(BaseModel):
@@ -20,6 +22,7 @@ class InviteResponse(BaseModel):
 class InviteValidate(BaseModel):
     email: str
     team: Team
+    company_name: Optional[str] = None
 
 
 class RegisterRequest(BaseModel):
@@ -42,6 +45,8 @@ class UserOut(BaseModel):
     team: Team
     is_active: bool
     is_admin: bool
+    company_id: Optional[UUID] = None
+    company_name: Optional[str] = None
     created_at: datetime
 
 
@@ -53,6 +58,8 @@ class UserListOut(BaseModel):
     full_name: str
     team: Team
     is_active: bool
+    company_id: Optional[UUID] = None
+    company_name: Optional[str] = None
     created_at: datetime
 
 
@@ -61,6 +68,7 @@ class CreateUserRequest(BaseModel):
     email: EmailStr
     password: str
     team: Team
+    company_id: Optional[UUID] = None
 
 
 class UserWorkloadOut(BaseModel):
@@ -76,3 +84,8 @@ class ChangePasswordRequest(BaseModel):
 
 class UpdateUserTeamRequest(BaseModel):
     team: Team
+    company_id: Optional[UUID] = None
+
+
+class UpdateUserCompanyRequest(BaseModel):
+    company_id: Optional[UUID] = None

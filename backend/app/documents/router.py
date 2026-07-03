@@ -189,7 +189,7 @@ async def get_available_doc_types(
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ):
-    by_type = await service.get_available_doc_types(db, shipment_ids)
+    by_type = await service.get_available_doc_types(db, actor, shipment_ids)
     return {"by_type": by_type}
 
 
@@ -199,7 +199,7 @@ async def bulk_download(
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ):
-    zip_bytes = await service.bulk_download_as_zip(db, body.shipment_ids, body.doc_types, body.group_by)
+    zip_bytes = await service.bulk_download_as_zip(db, actor, body.shipment_ids, body.doc_types, body.group_by)
     return StreamingResponse(
         io.BytesIO(zip_bytes),
         media_type="application/zip",

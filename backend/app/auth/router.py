@@ -48,7 +48,7 @@ async def invite_user(
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
-    invitation = await service.create_invitation(db, body.email, body.team, admin)
+    invitation = await service.create_invitation(db, body.email, body.team, admin, company_id=body.company_id)
     await send_invitation_email(invitation)
     return invitation
 
@@ -56,7 +56,10 @@ async def invite_user(
 @router.get("/invite/{token}", response_model=schemas.InviteValidate)
 async def validate_invite(token: str, db: AsyncSession = Depends(get_db)):
     invitation = await service.validate_invitation_token(db, token)
-    return {"email": invitation.email, "team": invitation.team}
+    company_name = None
+    if invitation.company_id:
+        company_name = await service.get_company_name(db, invitation.company_id)
+    return {"email": invitation.email, "team": invitation.team, "company_name": company_name}
 
 
 @router.post("/register", response_model=schemas.UserOut)
@@ -115,7 +118,7 @@ async def create_user(
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
-    return await service.create_user_directly(db, body.full_name, body.email, body.password, body.team, admin)
+    return await service.create_user_directly(db, body.full_name, body.email, body.password, body.team, admin, company_id=body.company_id)
 
 
 @router.get("/users", response_model=list[schemas.UserListOut])
@@ -160,7 +163,17 @@ async def update_user_team(
     db: AsyncSession = Depends(get_db),
     _: User = Depends(require_admin),
 ):
-    return await service.update_user_team(db, _uuid.UUID(user_id), body.team)
+    return await service.update_user_team(db, _uuid.UUID(user_id), body.team, company_id=body.company_id)
+
+
+@router.patch("/users/{user_id}/company", response_model=schemas.UserListOut)
+async def update_user_company(
+    user_id: str,
+    body: schemas.UpdateUserCompanyRequest,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    return await service.update_user_company(db, _uuid.UUID(user_id), body.company_id)
 
 
 @router.patch("/users/{user_id}/toggle-active", response_model=schemas.UserListOut)

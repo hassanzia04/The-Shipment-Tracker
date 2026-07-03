@@ -9,6 +9,7 @@ from app.config import settings
 from app.database import Base
 
 # Import all models so Alembic detects them
+import app.companies.models  # noqa
 import app.auth.models  # noqa
 import app.masters.models  # noqa
 import app.shipments.models  # noqa

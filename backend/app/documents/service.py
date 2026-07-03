@@ -16,6 +16,7 @@ from app.documents.models import Document
 from app.documents.compression import compress_file
 from app.enums import DocumentType, CUSTOMER_REQUIRED_DOCS, Team, ShipmentStage, TaskType, TaskStatus
 from app.auth.models import User
+from app.tenancy import company_scope
 
 try:
     import oci as _oci
@@ -96,7 +97,31 @@ def fetch_oci_bytes(oci_path: str) -> bytes | None:
 
 
 async def _assert_shipment_access(db: AsyncSession, actor: User, shipment_id: uuid.UUID) -> None:
-    pass  # all Customer team members share access to all shipments
+    """Customer-team users may only access documents of their own company's shipments.
+    404 (not 403) so cross-company shipment ids don't leak existence."""
+    scope = company_scope(actor)
+    if scope is None:
+        return
+    from app.shipments.models import Shipment
+    result = await db.execute(select(Shipment.company_id).where(Shipment.id == shipment_id))
+    shipment_company_id = result.scalar_one_or_none()
+    if shipment_company_id is None or shipment_company_id != scope:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+
+
+async def _filter_shipment_ids_to_scope(
+    db: AsyncSession, actor: User, shipment_ids: list[uuid.UUID]
+) -> list[uuid.UUID]:
+    """For bulk endpoints taking arbitrary shipment ids: silently drop ids outside
+    the customer user's company. Internal users pass through unchanged."""
+    scope = company_scope(actor)
+    if scope is None or not shipment_ids:
+        return shipment_ids
+    from app.shipments.models import Shipment
+    result = await db.execute(
+        select(Shipment.id).where(Shipment.id.in_(shipment_ids), Shipment.company_id == scope)
+    )
+    return [row[0] for row in result.all()]
 
 
 def extract_bl_from_ccro(raw: bytes) -> str | None:
@@ -492,9 +517,12 @@ async def download_pending_ccros_zip(db: AsyncSession) -> tuple[bytes, int]:
 
 async def get_available_doc_types(
     db: AsyncSession,
+    actor: User,
     shipment_ids: list[uuid.UUID],
 ) -> dict[str, list[dict]]:
     from app.shipments.models import Shipment
+
+    shipment_ids = await _filter_shipment_ids_to_scope(db, actor, shipment_ids)
 
     docs_result = await db.execute(
         select(Document.shipment_id, Document.doc_type)
@@ -541,11 +569,14 @@ _DOC_TYPE_LABELS: dict[DocumentType, str] = {
 
 async def bulk_download_as_zip(
     db: AsyncSession,
+    actor: User,
     shipment_ids: list[uuid.UUID],
     doc_types: list[DocumentType],
     group_by: str = "shipment",
 ) -> bytes:
     from app.shipments.models import Shipment
+
+    shipment_ids = await _filter_shipment_ids_to_scope(db, actor, shipment_ids)
 
     ships_result = await db.execute(
         select(Shipment.id, Shipment.bl_number).where(Shipment.id.in_(shipment_ids))

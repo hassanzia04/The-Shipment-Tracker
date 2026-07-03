@@ -9,7 +9,10 @@ from fastapi import HTTPException, status
 
 from app.config import settings
 from app.auth.models import User, Invitation
+from app.companies.models import Company
 from app.enums import Team
+
+CUSTOMER_TEAMS = {Team.CUSTOMER, Team.CUSTOMER_MANAGEMENT}
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -72,10 +75,32 @@ async def get_user_by_id(db: AsyncSession, user_id: uuid.UUID) -> User | None:
     return result.scalar_one_or_none()
 
 
-async def create_invitation(db: AsyncSession, email: str, team: Team, invited_by: User) -> Invitation:
+async def _validate_company_for_team(
+    db: AsyncSession, team: Team, company_id: uuid.UUID | None
+) -> uuid.UUID | None:
+    """Customer teams require an active company; internal teams never carry one."""
+    if team not in CUSTOMER_TEAMS:
+        return None
+    if company_id is None:
+        raise HTTPException(status_code=400, detail="A company is required for customer team users")
+    result = await db.execute(select(Company).where(Company.id == company_id))
+    company = result.scalar_one_or_none()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+    if not company.is_active:
+        raise HTTPException(status_code=400, detail="Company is deactivated")
+    return company_id
+
+
+async def create_invitation(
+    db: AsyncSession, email: str, team: Team, invited_by: User,
+    company_id: uuid.UUID | None = None,
+) -> Invitation:
     existing = await get_user_by_email(db, email)
     if existing:
         raise HTTPException(status_code=400, detail="User with this email already exists")
+
+    company_id = await _validate_company_for_team(db, team, company_id)
 
     token = str(uuid.uuid4())
     expires_at = datetime.now(timezone.utc) + timedelta(hours=settings.INVITATION_EXPIRE_HOURS)
@@ -85,12 +110,18 @@ async def create_invitation(db: AsyncSession, email: str, team: Team, invited_by
         team=team,
         token=token,
         invited_by_id=invited_by.id,
+        company_id=company_id,
         expires_at=expires_at,
     )
     db.add(invitation)
     await db.commit()
     await db.refresh(invitation)
     return invitation
+
+
+async def get_company_name(db: AsyncSession, company_id: uuid.UUID) -> str | None:
+    result = await db.execute(select(Company.name).where(Company.id == company_id))
+    return result.scalar_one_or_none()
 
 
 async def validate_invitation_token(db: AsyncSession, token: str) -> Invitation:
@@ -117,6 +148,7 @@ async def register_user(db: AsyncSession, token: str, full_name: str, password: 
         hashed_password=hash_password(password),
         team=invitation.team,
         invited_by_id=invitation.invited_by_id,
+        company_id=invitation.company_id,
     )
     db.add(user)
 
@@ -127,18 +159,21 @@ async def register_user(db: AsyncSession, token: str, full_name: str, password: 
 
 
 async def create_user_directly(
-    db: AsyncSession, full_name: str, email: str, password: str, team: Team, created_by: User
+    db: AsyncSession, full_name: str, email: str, password: str, team: Team, created_by: User,
+    company_id: uuid.UUID | None = None,
 ) -> User:
     _validate_password(password)
     existing = await get_user_by_email(db, email)
     if existing:
         raise HTTPException(status_code=400, detail="A user with this email already exists")
+    company_id = await _validate_company_for_team(db, team, company_id)
     user = User(
         email=email.lower(),
         full_name=full_name,
         hashed_password=hash_password(password),
         team=team,
         invited_by_id=created_by.id,
+        company_id=company_id,
     )
     db.add(user)
     await db.commit()
@@ -203,11 +238,30 @@ async def list_users_by_team_with_task_counts(db: AsyncSession, team: Team) -> l
     ]
 
 
-async def update_user_team(db: AsyncSession, user_id: uuid.UUID, team) -> User:
+async def update_user_team(
+    db: AsyncSession, user_id: uuid.UUID, team, company_id: uuid.UUID | None = None
+) -> User:
     user = await get_user_by_id(db, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    if team in CUSTOMER_TEAMS:
+        # Keep the user's existing company unless a new one is supplied
+        user.company_id = await _validate_company_for_team(db, team, company_id or user.company_id)
+    else:
+        user.company_id = None
     user.team = team
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
+async def update_user_company(db: AsyncSession, user_id: uuid.UUID, company_id: uuid.UUID | None) -> User:
+    user = await get_user_by_id(db, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.team not in CUSTOMER_TEAMS:
+        raise HTTPException(status_code=400, detail="Only customer team users can be assigned a company")
+    user.company_id = await _validate_company_for_team(db, user.team, company_id)
     await db.commit()
     await db.refresh(user)
     return user

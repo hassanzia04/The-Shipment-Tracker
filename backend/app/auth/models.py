@@ -5,6 +5,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 from app.database import Base
 from app.enums import Team
+from app.companies.models import Company  # noqa: F401 — needed for relationship
 
 
 class User(Base):
@@ -18,9 +19,15 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     invited_by_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    company_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 
     invited_by: Mapped["User | None"] = relationship("User", remote_side=[id])
+    company: Mapped["Company | None"] = relationship("Company", foreign_keys=[company_id], lazy="selectin")
+
+    @property
+    def company_name(self) -> str | None:
+        return self.company.name if self.company else None
 
 
 class Invitation(Base):
@@ -31,6 +38,7 @@ class Invitation(Base):
     team: Mapped[Team] = mapped_column(SAEnum(Team, name="team_enum"), nullable=False)
     token: Mapped[str] = mapped_column(String(512), unique=True, nullable=False, index=True)
     invited_by_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    company_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"), nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)

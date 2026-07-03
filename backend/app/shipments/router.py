@@ -25,6 +25,7 @@ async def list_shipments(
     limit: int = Query(25, ge=1, le=200),
     search: Optional[str] = Query(None),
     stage: Optional[ShipmentStage] = Query(None),
+    company_id: Optional[uuid.UUID] = Query(None),
     my_queue: bool = Query(False),
     task_type_filter: Optional[TaskType] = Query(None),
     missing_date: bool = Query(False),
@@ -53,6 +54,7 @@ async def list_shipments(
 ):
     items, total = await service.list_shipments(
         db, actor, skip=skip, limit=limit, search=search or None, stage=stage,
+        company_id=company_id,
         my_queue=my_queue, task_type_filter=task_type_filter,
         missing_date=missing_date,
         amls_search=amls_search or None, missing_amls=missing_amls,
@@ -185,6 +187,7 @@ async def container_view(
     amls_only: bool = Query(False),
     sort_by: Optional[str] = Query(None),
     sort_dir: str = Query('asc'),
+    company_id: Optional[uuid.UUID] = Query(None),
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ):
@@ -193,6 +196,7 @@ async def container_view(
         search=search or None, status_filter=status or None,
         from_date=from_date or None, to_date=to_date or None,
         amls_only=amls_only, sort_by=sort_by, sort_dir=sort_dir,
+        company_id=company_id,
     )
     return {"items": rows, "total": total, "skip": skip, "limit": limit}
 
@@ -208,10 +212,11 @@ async def container_view_export(
     do_expired: bool = Query(False),
     do_validity_from: Optional[str] = Query(None),
     do_validity_to: Optional[str] = Query(None),
+    company_id: Optional[uuid.UUID] = Query(None),
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ):
-    content = await service.export_container_view(db, actor, search=search, from_date=from_date, to_date=to_date, status=status, historical=historical, amls_only=amls_only, do_expired=do_expired, do_validity_from=do_validity_from, do_validity_to=do_validity_to)
+    content = await service.export_container_view(db, actor, search=search, from_date=from_date, to_date=to_date, status=status, historical=historical, amls_only=amls_only, do_expired=do_expired, do_validity_from=do_validity_from, do_validity_to=do_validity_to, company_id=company_id)
     return Response(
         content=content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -235,10 +240,11 @@ async def bl_export(
     do_expired: bool = Query(False),
     do_validity_from: Optional[date] = Query(None),
     do_validity_to: Optional[date] = Query(None),
+    company_id: Optional[uuid.UUID] = Query(None),
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ):
-    content = await service.export_shipments_list(db, actor, search=search, stage=stage, my_queue=my_queue, missing_date=missing_date, amls_search=amls_search or None, missing_amls=missing_amls, pull_out_from=pull_out_from, pull_out_to=pull_out_to, historical=historical, completed_from=completed_from, completed_to=completed_to, do_expired=do_expired, do_validity_from=do_validity_from, do_validity_to=do_validity_to)
+    content = await service.export_shipments_list(db, actor, search=search, stage=stage, my_queue=my_queue, missing_date=missing_date, amls_search=amls_search or None, missing_amls=missing_amls, pull_out_from=pull_out_from, pull_out_to=pull_out_to, historical=historical, completed_from=completed_from, completed_to=completed_to, do_expired=do_expired, do_validity_from=do_validity_from, do_validity_to=do_validity_to, company_id=company_id)
     return Response(
         content=content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

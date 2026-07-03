@@ -5,6 +5,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 from app.database import Base
 from app.auth.models import User  # noqa: F401 — needed for relationship
+from app.companies.models import Company  # noqa: F401 — needed for relationship
 from app.masters.models import OffloadingPoint, ProductType, LoadingPort, ShippingLine, BayanType, Consignee  # noqa: F401 — needed for relationships
 from app.enums import (
     ShipmentStage, TaskType, TaskStatus, ExternalEntity,
@@ -19,6 +20,7 @@ class Shipment(Base):
     bl_number: Mapped[str] = mapped_column(String(100), nullable=False, index=True, unique=True)
     invoice_number: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
     customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"), nullable=False, index=True)
     current_stage: Mapped[ShipmentStage] = mapped_column(
         SAEnum(ShipmentStage, name="shipment_stage_enum"), default=ShipmentStage.CUSTOMER, nullable=False, index=True
     )
@@ -49,6 +51,7 @@ class Shipment(Base):
     shipping_line: Mapped["ShippingLine | None"] = relationship("ShippingLine", foreign_keys=[shipping_line_id])
     bayan_type: Mapped["BayanType | None"] = relationship("BayanType", foreign_keys=[bayan_type_id])
     consignee: Mapped["Consignee | None"] = relationship("Consignee", foreign_keys=[consignee_id])
+    company: Mapped["Company"] = relationship("Company", foreign_keys=[company_id])
 
     @property
     def offloading_point_name(self) -> str | None:
@@ -73,6 +76,10 @@ class Shipment(Base):
     @property
     def consignee_name(self) -> str | None:
         return self.consignee.name if self.consignee else None
+
+    @property
+    def company_name(self) -> str | None:
+        return self.company.name if self.company else None
 
     @property
     def docs_approved(self) -> bool:

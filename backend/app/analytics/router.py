@@ -3,23 +3,40 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, case, cast, String, or_, and_
 from datetime import datetime, timedelta, timezone
 
+import uuid as _uuid_mod
+from typing import Optional
+
 from app.database import get_db
 from app.auth.dependencies import get_current_user
 from app.shipments.models import Shipment, ShipmentTask, ShipmentEvent, Container
 from app.masters.models import ShippingLine
 from app.auth.models import User
+from app.companies.models import Company
 from app.enums import ShipmentStage, TaskStatus, TaskType, Team, EventType, ContainerStatus
 from app.config import settings
+from app.tenancy import company_scope, effective_company_filter
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
 
 @router.get("/dashboard")
-async def dashboard(db: AsyncSession = Depends(get_db), _: User = Depends(get_current_user)):
+async def dashboard(
+    company_id: Optional[_uuid_mod.UUID] = Query(None),
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(get_current_user),
+):
+    # Tenant scoping: customer users are always locked to their company;
+    # internal users may optionally filter by company_id.
+    effective_company = effective_company_filter(actor, company_id)
+
+    def _scoped(q):
+        """Add the company clause. The query must reference/join Shipment."""
+        return q.where(Shipment.company_id == effective_company) if effective_company else q
+
     # ── Shipment counts by stage (non-IN_PROGRESS) ───────────────────────────
     stage_counts_result = await db.execute(
-        select(Shipment.current_stage, func.count(Shipment.id))
-        .where(Shipment.current_stage != ShipmentStage.IN_PROGRESS)
+        _scoped(select(Shipment.current_stage, func.count(Shipment.id))
+        .where(Shipment.current_stage != ShipmentStage.IN_PROGRESS))
         .group_by(Shipment.current_stage)
     )
     by_stage = {row[0].value: row[1] for row in stage_counts_result.all()}
@@ -29,7 +46,7 @@ async def dashboard(db: AsyncSession = Depends(get_db), _: User = Depends(get_cu
     # Track whether each task is assigned so unassigned PRO tasks get their own bucket
     _is_assigned = case((ShipmentTask.assigned_to_id != None, True), else_=False)
     task_breakdown_result = await db.execute(
-        select(
+        _scoped(select(
             ShipmentTask.task_type,
             ShipmentTask.status,
             ShipmentTask.assigned_team,
@@ -41,7 +58,7 @@ async def dashboard(db: AsyncSession = Depends(get_db), _: User = Depends(get_cu
             Shipment.current_stage == ShipmentStage.IN_PROGRESS,
             ShipmentTask.status.in_([TaskStatus.IN_PROGRESS, TaskStatus.ON_HOLD, TaskStatus.COMPLETED]),
             ShipmentTask.task_type != TaskType.BAYAN_PAYMENT,
-        )
+        ))
         .group_by(ShipmentTask.task_type, ShipmentTask.status, ShipmentTask.assigned_team, _is_assigned)
     )
     task_rows = task_breakdown_result.all()
@@ -66,7 +83,7 @@ async def dashboard(db: AsyncSession = Depends(get_db), _: User = Depends(get_cu
     from datetime import date as _date
     _today = _date.today()
     expired_do_result = await db.execute(
-        select(func.count(ShipmentTask.id))
+        _scoped(select(func.count(ShipmentTask.id))
         .join(Shipment, Shipment.id == ShipmentTask.shipment_id)
         .where(
             Shipment.current_stage == ShipmentStage.IN_PROGRESS,
@@ -74,7 +91,7 @@ async def dashboard(db: AsyncSession = Depends(get_db), _: User = Depends(get_cu
             ShipmentTask.status == TaskStatus.COMPLETED,
             Shipment.do_validity_date.isnot(None),
             Shipment.do_validity_date < _today,
-        )
+        ))
     )
     expired_do_count = expired_do_result.scalar_one_or_none() or 0
     if expired_do_count and "DO" in task_pipeline:
@@ -83,16 +100,17 @@ async def dashboard(db: AsyncSession = Depends(get_db), _: User = Depends(get_cu
 
     # ── Bayan payment pending (Customer action required) ──────────────────────
     bp_result = await db.execute(
-        select(func.count(ShipmentTask.id))
+        _scoped(select(func.count(ShipmentTask.id))
+        .join(Shipment, Shipment.id == ShipmentTask.shipment_id)
         .where(
             ShipmentTask.task_type == TaskType.BAYAN_PAYMENT,
             ShipmentTask.status == TaskStatus.IN_PROGRESS,
-        )
+        ))
     )
     bayan_payment_pending = bp_result.scalar() or 0
 
     total_active_result = await db.execute(
-        select(func.count(Shipment.id)).where(Shipment.current_stage != ShipmentStage.COMPLETED)
+        _scoped(select(func.count(Shipment.id)).where(Shipment.current_stage != ShipmentStage.COMPLETED))
     )
     total_active = total_active_result.scalar() or 0
     total_completed = by_stage.get(ShipmentStage.COMPLETED.value, 0)
@@ -111,7 +129,7 @@ async def dashboard(db: AsyncSession = Depends(get_db), _: User = Depends(get_cu
     )
 
     holds_result = await db.execute(
-        select(
+        _scoped(select(
             ShipmentTask,
             Shipment.bl_number,
             Shipment.id,
@@ -122,7 +140,7 @@ async def dashboard(db: AsyncSession = Depends(get_db), _: User = Depends(get_cu
         .join(Shipment, Shipment.id == ShipmentTask.shipment_id)
         .outerjoin(ShippingLine, ShippingLine.id == Shipment.shipping_line_id)
         .outerjoin(hold_time_sq, hold_time_sq.c.task_id == ShipmentTask.id)
-        .where(ShipmentTask.status == TaskStatus.ON_HOLD)
+        .where(ShipmentTask.status == TaskStatus.ON_HOLD))
         .order_by(hold_time_sq.c.held_at.asc().nullslast())
     )
     holds_rows = holds_result.all()
@@ -150,8 +168,8 @@ async def dashboard(db: AsyncSession = Depends(get_db), _: User = Depends(get_cu
 
     # ── All active shipments summary (capped at 50 — full list is on /shipments) ─
     shipments_result = await db.execute(
-        select(Shipment)
-        .where(Shipment.current_stage != ShipmentStage.COMPLETED)
+        _scoped(select(Shipment)
+        .where(Shipment.current_stage != ShipmentStage.COMPLETED))
         .order_by(Shipment.pull_out_date.asc().nullslast(), Shipment.created_at.asc())
         .limit(200)
     )
@@ -174,13 +192,13 @@ async def dashboard(db: AsyncSession = Depends(get_db), _: User = Depends(get_cu
         else_=cast(Container.status, String),
     )
     container_status_result = await db.execute(
-        select(_effective_status, func.count(Container.id))
+        _scoped(select(_effective_status, func.count(Container.id))
         .select_from(Container)
         .join(Shipment, Shipment.id == Container.shipment_id)
         .where(
             Shipment.current_stage != ShipmentStage.COMPLETED,
             Container.status.notin_([ContainerStatus.RETURNED, ContainerStatus.CLOSED]),
-        )
+        ))
         .group_by(_effective_status)
     )
     container_status_counts = {str(row[0]): row[1] for row in container_status_result.all()}
@@ -188,20 +206,20 @@ async def dashboard(db: AsyncSession = Depends(get_db), _: User = Depends(get_cu
     # Add declared-but-not-yet-entered containers as virtual PENDING entries.
     # These are shipments that have container_count set but fewer Container records.
     declared_result = await db.execute(
-        select(func.sum(Shipment.container_count))
+        _scoped(select(func.sum(Shipment.container_count))
         .where(
             Shipment.current_stage != ShipmentStage.COMPLETED,
             Shipment.container_count != None,
-        )
+        ))
     )
     total_declared = declared_result.scalar() or 0
     # Count ALL containers (including terminal statuses) so the gap reflects
     # truly missing Container records, not ones we filtered out of the widget.
     total_all_result = await db.execute(
-        select(func.count(Container.id))
+        _scoped(select(func.count(Container.id))
         .select_from(Container)
         .join(Shipment, Shipment.id == Container.shipment_id)
-        .where(Shipment.current_stage != ShipmentStage.COMPLETED)
+        .where(Shipment.current_stage != ShipmentStage.COMPLETED))
     )
     total_all = total_all_result.scalar() or 0
     pending_gap = max(0, int(total_declared) - total_all)
@@ -210,13 +228,13 @@ async def dashboard(db: AsyncSession = Depends(get_db), _: User = Depends(get_cu
 
     # Container count per pipeline stage (for stage-row annotations)
     containers_by_stage_result = await db.execute(
-        select(Shipment.current_stage, func.count(Container.id))
+        _scoped(select(Shipment.current_stage, func.count(Container.id))
         .select_from(Container)
         .join(Shipment, Shipment.id == Container.shipment_id)
         .where(
             Shipment.current_stage != ShipmentStage.COMPLETED,
             Container.status.notin_([ContainerStatus.RETURNED, ContainerStatus.CLOSED]),
-        )
+        ))
         .group_by(Shipment.current_stage)
     )
     containers_by_stage = {row[0].value: row[1] for row in containers_by_stage_result.all()}
@@ -250,8 +268,8 @@ async def dashboard(db: AsyncSession = Depends(get_db), _: User = Depends(get_cu
 
     # ── IN_PROGRESS shipment doc status (Permit / DO / Bayan) ────────────────
     in_progress_ships_result = await db.execute(
-        select(Shipment.id, Shipment.bl_number, Shipment.pull_out_date, Shipment.do_validity_date)
-        .where(Shipment.current_stage == ShipmentStage.IN_PROGRESS)
+        _scoped(select(Shipment.id, Shipment.bl_number, Shipment.pull_out_date, Shipment.do_validity_date)
+        .where(Shipment.current_stage == ShipmentStage.IN_PROGRESS))
         .order_by(Shipment.pull_out_date.asc().nullslast(), Shipment.created_at.asc())
     )
     in_progress_ships = in_progress_ships_result.all()
@@ -305,21 +323,21 @@ async def dashboard(db: AsyncSession = Depends(get_db), _: User = Depends(get_cu
 
     # ── Average completion time (completed shipments) ─────────────────────────
     completed_result = await db.execute(
-        select(
+        _scoped(select(
             func.avg(
                 func.extract("epoch", Shipment.completed_at) -
                 func.extract("epoch", Shipment.created_at)
             )
         )
-        .where(Shipment.completed_at != None)
+        .where(Shipment.completed_at != None))
     )
     avg_seconds = completed_result.scalar()
     avg_days = round(avg_seconds / 86400, 1) if avg_seconds else None
 
     # ── Recently completed ────────────────────────────────────────────────────
     recent_result = await db.execute(
-        select(Shipment)
-        .where(Shipment.current_stage == ShipmentStage.COMPLETED)
+        _scoped(select(Shipment)
+        .where(Shipment.current_stage == ShipmentStage.COMPLETED))
         .order_by(Shipment.completed_at.desc())
         .limit(5)
     )
@@ -338,13 +356,13 @@ async def dashboard(db: AsyncSession = Depends(get_db), _: User = Depends(get_cu
 
     # ── Volume by pull-out date (small summary table) ────────────────────────────
     volume_result = await db.execute(
-        select(
+        _scoped(select(
             func.min(Shipment.created_at).label("earliest_created"),
             Shipment.pull_out_date,
             func.count(Shipment.id).label("bl_count"),
             func.sum(func.coalesce(Shipment.container_count, 0)).label("container_total"),
         )
-        .where(Shipment.current_stage != ShipmentStage.COMPLETED)
+        .where(Shipment.current_stage != ShipmentStage.COMPLETED))
         .group_by(Shipment.pull_out_date)
         .order_by(Shipment.pull_out_date.asc().nullslast())
     )
@@ -360,12 +378,68 @@ async def dashboard(db: AsyncSession = Depends(get_db), _: User = Depends(get_cu
 
     # Containers in completed shipments (for the Completed stat card)
     completed_containers_result = await db.execute(
-        select(func.count(Container.id))
+        _scoped(select(func.count(Container.id))
         .select_from(Container)
         .join(Shipment, Shipment.id == Container.shipment_id)
-        .where(Shipment.current_stage == ShipmentStage.COMPLETED)
+        .where(Shipment.current_stage == ShipmentStage.COMPLETED))
     )
     completed_containers = completed_containers_result.scalar() or 0
+
+    # ── Company-wise breakdown (internal users only) ──────────────────────────
+    by_company = None
+    if company_scope(actor) is None:
+        _30d_ago = datetime.now(timezone.utc) - timedelta(days=30)
+        active_containers_sq = (
+            select(Container.shipment_id, func.count(Container.id).label("cnt"))
+            .where(Container.status.notin_([ContainerStatus.RETURNED, ContainerStatus.CLOSED]))
+            .group_by(Container.shipment_id)
+            .subquery()
+        )
+        holds_sq = (
+            select(ShipmentTask.shipment_id, func.count(ShipmentTask.id).label("cnt"))
+            .where(ShipmentTask.status == TaskStatus.ON_HOLD)
+            .group_by(ShipmentTask.shipment_id)
+            .subquery()
+        )
+        by_company_result = await db.execute(
+            select(
+                Company.id,
+                Company.name,
+                func.count(Shipment.id).filter(Shipment.current_stage != ShipmentStage.COMPLETED).label("active"),
+                func.count(Shipment.id).filter(Shipment.current_stage == ShipmentStage.CUSTOMER).label("awaiting_customer"),
+                func.count(Shipment.id).filter(Shipment.current_stage == ShipmentStage.IN_PROGRESS).label("in_progress"),
+                func.count(Shipment.id).filter(
+                    Shipment.current_stage.in_([ShipmentStage.TRANSPORT, ShipmentStage.DC_TRANSPORT])
+                ).label("in_transport"),
+                func.coalesce(func.sum(
+                    case((Shipment.current_stage != ShipmentStage.COMPLETED, func.coalesce(active_containers_sq.c.cnt, 0)), else_=0)
+                ), 0).label("active_containers"),
+                func.coalesce(func.sum(func.coalesce(holds_sq.c.cnt, 0)), 0).label("active_holds"),
+                func.count(Shipment.id).filter(
+                    Shipment.current_stage == ShipmentStage.COMPLETED,
+                    Shipment.completed_at >= _30d_ago,
+                ).label("completed_last_30d"),
+            )
+            .join(Shipment, Shipment.company_id == Company.id, isouter=True)
+            .outerjoin(active_containers_sq, active_containers_sq.c.shipment_id == Shipment.id)
+            .outerjoin(holds_sq, holds_sq.c.shipment_id == Shipment.id)
+            .group_by(Company.id, Company.name)
+            .order_by(Company.name)
+        )
+        by_company = [
+            {
+                "company_id": str(row[0]),
+                "company_name": row[1],
+                "active_shipments": row[2],
+                "awaiting_customer": row[3],
+                "in_progress": row[4],
+                "in_transport": row[5],
+                "active_containers": int(row[6] or 0),
+                "active_holds": int(row[7] or 0),
+                "completed_last_30d": row[8],
+            }
+            for row in by_company_result.all()
+        ]
 
     return {
         "summary": {
@@ -386,17 +460,20 @@ async def dashboard(db: AsyncSession = Depends(get_db), _: User = Depends(get_cu
         "container_status_counts": container_status_counts,
         "containers_by_stage": containers_by_stage,
         "volume_by_date": volume_by_date,
+        "by_company": by_company,
     }
 
 
 @router.get("/activity-feed")
 async def activity_feed(
     limit: int = Query(10, ge=1, le=50),
+    company_id: Optional[_uuid_mod.UUID] = Query(None),
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ):
+    effective_company = effective_company_filter(actor, company_id)
 
-    result = await db.execute(
+    q = (
         select(
             ShipmentEvent.id,
             ShipmentEvent.event_type,
@@ -414,6 +491,9 @@ async def activity_feed(
         .order_by(ShipmentEvent.created_at.desc())
         .limit(limit)
     )
+    if effective_company is not None:
+        q = q.where(Shipment.company_id == effective_company)
+    result = await db.execute(q)
     rows = result.all()
     return [
         {
@@ -562,6 +642,7 @@ async def reports(
     from_month: int | None = Query(None, ge=1, le=12),
     to_year: int | None = Query(None),
     to_month: int | None = Query(None, ge=1, le=12),
+    company_id: Optional[_uuid_mod.UUID] = Query(None),
     db: AsyncSession = Depends(get_db),
     actor: User = Depends(get_current_user),
 ):
@@ -578,10 +659,12 @@ async def reports(
     last_day = cal_mod.monthrange(to_year, to_month)[1]
     to_dt = datetime(to_year, to_month, last_day, 23, 59, 59, tzinfo=timezone.utc)
 
-    is_customer = actor.team == Team.CUSTOMER
+    # Company-level scoping: customer users see their whole company (not just their
+    # own created shipments); internal users may filter by company.
+    effective_company = effective_company_filter(actor, company_id)
     base_filter = []
-    if is_customer:
-        base_filter.append(Shipment.customer_id == actor.id)
+    if effective_company is not None:
+        base_filter.append(Shipment.company_id == effective_company)
 
     # Shipments created within the selected period — used as the base for all queries
     period_filter = base_filter + [Shipment.created_at >= from_dt, Shipment.created_at <= to_dt]
@@ -1015,9 +1098,12 @@ async def ai_summary(
     if not settings.ANTHROPIC_API_KEY:
         raise HTTPException(status_code=503, detail="AI summary is not configured")
 
-    # All permitted users see the full pipeline
+    # Customer users see only their own company's pipeline
+    effective_company = company_scope(actor)
     base_filter = []
-    active_filter = [Shipment.current_stage != ShipmentStage.COMPLETED]
+    if effective_company is not None:
+        base_filter.append(Shipment.company_id == effective_company)
+    active_filter = [Shipment.current_stage != ShipmentStage.COMPLETED, *base_filter]
 
     total_active = (await db.execute(
         select(func.count(Shipment.id)).where(*active_filter)

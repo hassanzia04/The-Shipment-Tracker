@@ -187,6 +187,8 @@ class ShipmentOut(BaseModel):
     bl_number: str
     invoice_number: str
     customer_id: UUID
+    company_id: UUID
+    company_name: Optional[str] = None
     current_stage: ShipmentStage
     pull_out_date: Optional[date]
     product_type_id: Optional[UUID]
@@ -260,6 +262,7 @@ class ShipmentListOut(BaseModel):
     bayan_type_name: Optional[str] = None
     shipping_line_name: Optional[str] = None
     offloading_date: Optional[datetime] = None
+    company_name: Optional[str] = None
 
 
 class PaginatedShipments(BaseModel):
@@ -400,6 +403,7 @@ class ContainerViewItem(BaseModel):
     outsourced_driver_name: Optional[str] = None
     loading_port_name: Optional[str] = None
     bayan_type_name: Optional[str] = None
+    company_name: Optional[str] = None
 
 
 class PaginatedContainerView(BaseModel):

@@ -17,6 +17,7 @@ from app.database import engine, Base
 from app.limiter import limiter
 
 # Import all models to register them with SQLAlchemy metadata
+import app.companies.models  # noqa
 import app.auth.models  # noqa
 import app.masters.models  # noqa
 import app.shipments.models  # noqa
@@ -24,6 +25,7 @@ import app.documents.models  # noqa
 import app.notifications.models  # noqa
 
 from app.auth.router import router as auth_router
+from app.companies.router import router as companies_router
 from app.masters.router import router as masters_router
 from app.shipments.router import router as shipments_router
 from app.documents.router import router as documents_router
@@ -59,6 +61,7 @@ app.add_middleware(
 )
 
 app.include_router(auth_router)
+app.include_router(companies_router)
 app.include_router(masters_router)
 app.include_router(shipments_router)
 app.include_router(documents_router)

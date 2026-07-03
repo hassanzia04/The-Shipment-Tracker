@@ -10,19 +10,21 @@ from openpyxl import load_workbook, Workbook
 
 from app.shipments.models import Shipment, ShipmentTask, ShipmentEvent, Container, ContainerEvent
 from app.auth.models import User
+from app.companies.models import Company
 from app.masters.models import ProductType, LoadingPort, ShippingLine, OffloadingPoint, OutsourcedTruck, BayanType, Consignee
 from app.enums import (
     ShipmentStage, TaskType, TaskStatus, ExternalEntity,
     HoldReason, ContainerStatus, EventType, Team, DocumentType,
     CUSTOMER_REQUIRED_DOCS, TEAM_HOLD_PERMISSIONS, HOLD_REASON_MAP
 )
+from app.tenancy import company_scope, effective_company_filter
 
 MUSCAT_TZ = ZoneInfo("Asia/Muscat")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-async def _get_shipment(db: AsyncSession, shipment_id: uuid.UUID) -> Shipment:
+async def _get_shipment(db: AsyncSession, shipment_id: uuid.UUID, actor: User | None = None) -> Shipment:
     result = await db.execute(
         select(Shipment)
         .options(
@@ -35,12 +37,15 @@ async def _get_shipment(db: AsyncSession, shipment_id: uuid.UUID) -> Shipment:
             selectinload(Shipment.shipping_line),
             selectinload(Shipment.bayan_type),
             selectinload(Shipment.consignee),
+            selectinload(Shipment.company),
         )
         .where(Shipment.id == shipment_id)
     )
     shipment = result.scalar_one_or_none()
     if not shipment:
         raise HTTPException(status_code=404, detail="Shipment not found")
+    if actor is not None:
+        _assert_customer_owns(shipment, actor)
     return shipment
 
 
@@ -160,11 +165,15 @@ async def create_shipment(
     if container_count < 1 or container_count > 99:
         raise HTTPException(status_code=400, detail="Container count must be between 1 and 99")
 
+    if actor.company_id is None:
+        raise HTTPException(status_code=403, detail="Only customer accounts linked to a company can create shipments")
+
     shipment = Shipment(
         bl_number=bl_number,
         invoice_number=invoice_number,
         container_count=container_count,
         customer_id=actor.id,
+        company_id=actor.company_id,
         pull_out_date=pull_out_date,
         product_type_id=product_type_id,
         loading_port_id=loading_port_id,
@@ -184,7 +193,7 @@ async def create_shipment(
 
 
 async def delete_shipment(db: AsyncSession, shipment_id: uuid.UUID, actor: User) -> None:
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
     if actor.is_admin:
         pass  # admin can delete at any stage
     else:
@@ -293,7 +302,7 @@ def _old_display_name(shipment: Shipment, field: str) -> str | None:
 
 
 async def update_shipment(db: AsyncSession, shipment_id: uuid.UUID, actor: User, **fields) -> Shipment:
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
     _assert_customer_owns(shipment, actor)
 
     # Stage gate and detail guards apply only when detail fields (non-pull_out_date) are being changed.
@@ -706,7 +715,7 @@ async def set_permit_ref(
     permit_ref: str | None,
 ) -> Shipment:
     _assert_team(actor, Team.PRO)
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
     permit_task = next(
         (t for t in shipment.tasks
          if t.task_type == TaskType.PERMIT
@@ -731,7 +740,7 @@ async def set_do_validity_date(
 ) -> Shipment:
     from datetime import date as date_type
     _assert_team(actor, Team.FFD)
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
     old = shipment.do_validity_date
     shipment.do_validity_date = do_validity_date
     fmt = lambda d: d.strftime('%d/%m/%Y') if d else 'not set'
@@ -784,7 +793,7 @@ async def assign_task_to_user(
     if remark:
         event_remark += f" — {remark}"
 
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
     await _record_event(db, shipment, EventType.TASK_ASSIGNED, actor, task_id=task_id, remark=event_remark)
     await db.commit()
 
@@ -814,6 +823,7 @@ async def list_shipments(
     limit: int = 25,
     search: str | None = None,
     stage: ShipmentStage | None = None,
+    company_id: uuid.UUID | None = None,
     my_queue: bool = False,
     task_type_filter: "TaskType | None" = None,
     missing_date: bool = False,
@@ -841,6 +851,11 @@ async def list_shipments(
     from sqlalchemy import func as sa_func
 
     base_where = []
+
+    # Tenant scoping: customer users always see only their company; internal users may filter
+    effective_company = effective_company_filter(actor, company_id)
+    if effective_company is not None:
+        base_where.append(Shipment.company_id == effective_company)
 
     # Active vs historic split — mutually exclusive
     if historical:
@@ -1054,6 +1069,7 @@ async def list_shipments(
         selectinload(Shipment.loading_port),
         selectinload(Shipment.bayan_type),
         selectinload(Shipment.shipping_line),
+        selectinload(Shipment.company),
     )
     for clause in base_where:
         q = q.where(clause)
@@ -1111,12 +1127,12 @@ async def list_shipments(
 
 
 async def get_shipment(db: AsyncSession, shipment_id: uuid.UUID, actor: User) -> Shipment:
-    return await _get_shipment(db, shipment_id)
+    return await _get_shipment(db, shipment_id, actor)
 
 
 async def set_amls_job_number(db: AsyncSession, shipment_id: uuid.UUID, actor: User, amls_job_number: str | None) -> Shipment:
     _assert_team(actor, Team.FFD)
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
     shipment.amls_job_number = amls_job_number.strip() if amls_job_number else None
     await db.commit()
     return await _get_shipment(db, shipment_id)
@@ -1125,7 +1141,7 @@ async def set_amls_job_number(db: AsyncSession, shipment_id: uuid.UUID, actor: U
 # ── Customer: Submit documents ────────────────────────────────────────────────
 
 async def submit_documents(db: AsyncSession, shipment_id: uuid.UUID, actor: User, remark: str | None = None) -> Shipment:
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
     _assert_customer_owns(shipment, actor)
     _assert_stage(shipment, ShipmentStage.CUSTOMER)
 
@@ -1168,7 +1184,7 @@ async def submit_documents(db: AsyncSession, shipment_id: uuid.UUID, actor: User
 async def send_back_to_customer(db: AsyncSession, shipment_id: uuid.UUID, actor: User, remark: str) -> Shipment:
     """FFD sends an already-approved IN_PROGRESS shipment back to the customer.
     Tasks are untouched — completed ones stay completed, in-progress ones pause."""
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
     _assert_team(actor, Team.FFD)
     _assert_stage(shipment, ShipmentStage.IN_PROGRESS)
 
@@ -1186,7 +1202,7 @@ async def send_back_to_customer(db: AsyncSession, shipment_id: uuid.UUID, actor:
 # ── FFD: Review documents ─────────────────────────────────────────────────────
 
 async def reject_documents(db: AsyncSession, shipment_id: uuid.UUID, actor: User, remark: str) -> Shipment:
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
     _assert_team(actor, Team.FFD)
     _assert_stage(shipment, ShipmentStage.FFD_REVIEW)
 
@@ -1201,7 +1217,7 @@ async def reject_documents(db: AsyncSession, shipment_id: uuid.UUID, actor: User
 
 
 async def approve_documents(db: AsyncSession, shipment_id: uuid.UUID, actor: User, rop_inspection_type_id=None) -> Shipment:
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
     _assert_team(actor, Team.FFD)
     _assert_stage(shipment, ShipmentStage.FFD_REVIEW)
 
@@ -1232,7 +1248,7 @@ async def approve_documents(db: AsyncSession, shipment_id: uuid.UUID, actor: Use
 # ── PRO: Complete Permit → FFD opens Bayan ────────────────────────────────────
 
 async def open_bayan_task(db: AsyncSession, shipment_id: uuid.UUID, actor: User) -> Shipment:
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
     _assert_team(actor, Team.FFD)
     _assert_stage(shipment, ShipmentStage.IN_PROGRESS)
     if _active_tasks(shipment, TaskType.BAYAN):
@@ -1273,7 +1289,7 @@ async def assign_hold(
     task.hold_remark = hold_remark
     task.release_remark = None
 
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
     await _record_event(
         db, shipment, EventType.TASK_HOLD_ASSIGNED, actor, task_id=task_id,
         remark=f"{hold_entity.value} — {hold_reason.value}" + (f": {hold_remark}" if hold_remark else ""),
@@ -1314,7 +1330,7 @@ async def release_hold(
     task.hold_reason = None
     task.hold_remark = None
 
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
     await _record_event(db, shipment, EventType.TASK_HOLD_RELEASED, actor, task_id=task_id, remark=release_remark or None)
     await db.commit()
     result = await db.execute(
@@ -1352,7 +1368,7 @@ async def complete_task_by_type(
     task.completed_at = datetime.now(timezone.utc)
     task.completed_by_id = actor.id
 
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
     await _record_event(db, shipment, EventType.TASK_COMPLETED, actor, task_id=task.id)
     await db.commit()
 
@@ -1389,7 +1405,7 @@ async def complete_task(
     task.completed_by_id = actor.id
     task_type = task.task_type
 
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
 
     if permit_not_required and task_type == TaskType.PERMIT:
         shipment.permit_not_required = True
@@ -1422,7 +1438,7 @@ async def complete_task(
 # ── FFD: Open CCRO task (when DO + Bayan + Permit all done) ──────────────────
 
 async def open_ccro_task(db: AsyncSession, shipment_id: uuid.UUID, actor: User) -> Shipment:
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
     _assert_team(actor, Team.FFD)
     _assert_stage(shipment, ShipmentStage.IN_PROGRESS)
     if _is_salalah_port(shipment):
@@ -1450,7 +1466,7 @@ async def open_ccro_task(db: AsyncSession, shipment_id: uuid.UUID, actor: User) 
 # ── PRO: Request Bayan payment from Customer ─────────────────────────────────
 
 async def request_bayan_payment(db: AsyncSession, shipment_id: uuid.UUID, actor: User, remark: str | None = None) -> Shipment:
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
     _assert_team(actor, Team.PRO)
     _assert_stage(shipment, ShipmentStage.IN_PROGRESS)
 
@@ -1495,7 +1511,7 @@ async def request_bayan_payment(db: AsyncSession, shipment_id: uuid.UUID, actor:
 # ── FFD: Delegate CCRO ROP issue to PRO ──────────────────────────────────────
 
 async def open_ccro_rop_task(db: AsyncSession, shipment_id: uuid.UUID, actor: User, remark: str) -> Shipment:
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
     _assert_team(actor, Team.FFD)
     if _active_tasks(shipment, TaskType.CCRO_ROP):
         raise HTTPException(status_code=400, detail="CCRO_ROP task already open")
@@ -1545,7 +1561,7 @@ async def _assert_container_not_active(db: AsyncSession, container_number: str, 
 
 
 async def add_container(db: AsyncSession, shipment_id: uuid.UUID, actor: User, container_number: str) -> Shipment:
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
     _assert_team(actor, Team.FFD)
     _assert_stage(shipment, ShipmentStage.IN_PROGRESS)
 
@@ -1572,7 +1588,7 @@ async def add_container(db: AsyncSession, shipment_id: uuid.UUID, actor: User, c
 # ── FFD: Confirm CCRO → move to Transport ────────────────────────────────────
 
 async def confirm_ccro_and_send_to_transport(db: AsyncSession, shipment_id: uuid.UUID, actor: User) -> Shipment:
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
     _assert_team(actor, Team.FFD)
     _assert_stage(shipment, ShipmentStage.IN_PROGRESS)
     if not shipment.containers:
@@ -1657,7 +1673,7 @@ async def confirm_salalah_transport(
 ) -> Shipment:
     """For Salalah port shipments: validate all 3 tasks are done, register any new
     container numbers, advance to TRANSPORT, and notify Transport + DC."""
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
     _assert_team(actor, Team.FFD)
     _assert_stage(shipment, ShipmentStage.IN_PROGRESS)
 
@@ -1733,7 +1749,7 @@ async def confirm_salalah_transport(
 async def recall_from_transport(db: AsyncSession, shipment_id: uuid.UUID, actor: User, remark: str) -> Shipment:
     """FFD pulls the shipment back to IN_PROGRESS so they can upload missing CCROs.
     Only allowed while no trucks have been assigned yet."""
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
     _assert_team(actor, Team.FFD)
     _assert_stage(shipment, ShipmentStage.TRANSPORT)
 
@@ -1760,7 +1776,7 @@ async def recall_from_transport(db: AsyncSession, shipment_id: uuid.UUID, actor:
 async def send_back_to_transport(db: AsyncSession, shipment_id: uuid.UUID, actor: User, remark: str) -> Shipment:
     """FFD re-confirms CCROs and pushes the shipment back to Transport after Transport
     returned it via send_back_to_ffd. Remark is mandatory — it explains what changed."""
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
     _assert_team(actor, Team.FFD)
     _assert_stage(shipment, ShipmentStage.IN_PROGRESS)
 
@@ -1804,7 +1820,7 @@ async def assign_truck(
     expected_arrival_at: datetime, offloading_point_id: uuid.UUID | None = None,
     driver_name_override: str | None = None,
 ) -> Shipment:
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
     _assert_team(actor, Team.TRANSPORT)
 
     result = await db.execute(select(Container).where(Container.id == container_id, Container.shipment_id == shipment_id))
@@ -1842,7 +1858,7 @@ async def unassign_truck(
     db: AsyncSession, shipment_id: uuid.UUID, container_id: uuid.UUID,
     actor: User, remark: str,
 ) -> Shipment:
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
     _assert_team(actor, Team.TRANSPORT)
 
     result = await db.execute(select(Container).where(Container.id == container_id, Container.shipment_id == shipment_id))
@@ -1873,7 +1889,7 @@ async def unassign_truck(
 # ── Transport: Mark breakdown ─────────────────────────────────────────────────
 
 async def mark_breakdown(db: AsyncSession, shipment_id: uuid.UUID, actor: User, container_id: uuid.UUID, remark: str) -> Shipment:
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
     _assert_team(actor, Team.TRANSPORT)
 
     result = await db.execute(select(Container).where(Container.id == container_id))
@@ -1896,7 +1912,7 @@ async def request_do_revalidation(
     db: AsyncSession, shipment_id: uuid.UUID, container_id: uuid.UUID,
     actor: User, remark: str,
 ) -> Shipment:
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
     _assert_team(actor, Team.TRANSPORT)
 
     result = await db.execute(select(Container).where(Container.id == container_id, Container.shipment_id == shipment_id))
@@ -1922,7 +1938,7 @@ async def request_do_revalidation(
 async def mark_do_revalidated(
     db: AsyncSession, shipment_id: uuid.UUID, container_id: uuid.UUID, actor: User,
 ) -> Shipment:
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
     _assert_team(actor, Team.FFD)
 
     result = await db.execute(select(Container).where(Container.id == container_id, Container.shipment_id == shipment_id))
@@ -1946,7 +1962,7 @@ async def return_container_to_ffd(
     db: AsyncSession, shipment_id: uuid.UUID, container_id: uuid.UUID,
     actor: User, remark: str,
 ) -> Shipment:
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
     _assert_team(actor, Team.TRANSPORT)
     _assert_stage(shipment, ShipmentStage.TRANSPORT, ShipmentStage.DC_TRANSPORT)
 
@@ -1973,7 +1989,7 @@ async def return_container_to_ffd(
 async def reset_container_to_transport(
     db: AsyncSession, shipment_id: uuid.UUID, container_id: uuid.UUID, actor: User,
 ) -> Shipment:
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
     _assert_team(actor, Team.FFD)
 
     container = next((c for c in shipment.containers if c.id == container_id), None)
@@ -2025,7 +2041,7 @@ async def close_container(
     db: AsyncSession, shipment_id: uuid.UUID, container_id: uuid.UUID,
     actor: User, remark: str,
 ) -> Shipment:
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
     _assert_team(actor, Team.FFD)
 
     container = next((c for c in shipment.containers if c.id == container_id), None)
@@ -2045,7 +2061,7 @@ async def close_container(
 # ── Transport: Send back to FFD (shipment-level — kept for history) ───────────
 
 async def send_back_to_ffd(db: AsyncSession, shipment_id: uuid.UUID, actor: User, remark: str) -> Shipment:
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
     _assert_team(actor, Team.TRANSPORT)
 
     prev = shipment.current_stage
@@ -2062,7 +2078,7 @@ async def send_back_to_ffd(db: AsyncSession, shipment_id: uuid.UUID, actor: User
 # ── DC: Mark container offloaded ──────────────────────────────────────────────
 
 async def mark_offloaded(db: AsyncSession, shipment_id: uuid.UUID, actor: User, container_id: uuid.UUID, offloaded_at: datetime | None = None) -> Shipment:
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
 
     result = await db.execute(select(Container).where(Container.id == container_id, Container.shipment_id == shipment_id))
     container = result.scalar_one_or_none()
@@ -2123,7 +2139,7 @@ async def mark_offloaded(db: AsyncSession, shipment_id: uuid.UUID, actor: User, 
 # ── DC/FFD/Transport: Undo offloading ────────────────────────────────────────
 
 async def undo_offloaded(db: AsyncSession, shipment_id: uuid.UUID, actor: User, container_id: uuid.UUID, remark: str) -> Shipment:
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
 
     result = await db.execute(select(Container).where(Container.id == container_id, Container.shipment_id == shipment_id))
     container = result.scalar_one_or_none()
@@ -2163,7 +2179,7 @@ async def undo_offloaded(db: AsyncSession, shipment_id: uuid.UUID, actor: User, 
 # ── Transport: Mark container returned ───────────────────────────────────────
 
 async def mark_returned(db: AsyncSession, shipment_id: uuid.UUID, actor: User, container_id: uuid.UUID) -> Shipment:
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
 
     result = await db.execute(select(Container).where(Container.id == container_id, Container.shipment_id == shipment_id))
     container = result.scalar_one_or_none()
@@ -2193,7 +2209,7 @@ async def assign_outsourced_truck(
     container_id: uuid.UUID, outsourced_truck_id: uuid.UUID,
     expected_arrival_at: datetime,
 ) -> Shipment:
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
     _assert_team(actor, Team.FFD)
 
     result = await db.execute(select(Container).where(Container.id == container_id, Container.shipment_id == shipment_id))
@@ -2226,7 +2242,7 @@ async def assign_outsourced_truck(
 async def delete_container(
     db: AsyncSession, shipment_id: uuid.UUID, container_id: uuid.UUID, actor: User
 ) -> Shipment:
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
     if not actor.is_admin:
         _assert_team(actor, Team.FFD)
         _assert_stage(shipment, ShipmentStage.IN_PROGRESS)
@@ -2275,7 +2291,11 @@ def _assert_team(actor: User, *teams: Team):
 
 
 def _assert_customer_owns(shipment: Shipment, actor: User):
-    pass  # all Customer team members share access to all shipments
+    """Customer-team users may only touch shipments of their own company.
+    404 (not 403) so cross-company shipment ids don't leak existence."""
+    scope = company_scope(actor)
+    if scope is not None and shipment.company_id != scope:
+        raise HTTPException(status_code=404, detail="Shipment not found")
 
 
 # ── Bulk Excel import ─────────────────────────────────────────────────────────
@@ -2330,6 +2350,9 @@ async def import_shipments_from_excel(
     actor: User,
     file: UploadFile,
 ) -> dict:
+    if actor.company_id is None:
+        raise HTTPException(status_code=403, detail="Only customer accounts linked to a company can import shipments")
+
     content = await file.read()
     try:
         wb = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
@@ -2434,6 +2457,7 @@ async def import_shipments_from_excel(
                         invoice_number=inv_num,
                         container_count=container_count,
                         customer_id=actor.id,
+                        company_id=actor.company_id,
                         pull_out_date=pull_out_date,
                         eta_at_port=eta_at_port,
                         product_type_id=product_type_id,
@@ -2518,7 +2542,7 @@ async def bulk_upload_ccros(
     from app.enums import DocumentType
 
     _assert_team(actor, Team.FFD)
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
     _assert_stage(shipment, ShipmentStage.IN_PROGRESS)
 
     ccro_task = next(
@@ -2718,7 +2742,7 @@ async def bulk_confirm_salalah_transport(
         container_numbers: list[str] = item["container_numbers"]
 
         try:
-            shipment = await _get_shipment(db, shipment_id)
+            shipment = await _get_shipment(db, shipment_id, actor)
         except HTTPException:
             continue
 
@@ -2793,7 +2817,7 @@ async def export_container_billing(
     to_date: str | None = None,
 ) -> bytes:
     from app.masters.models import Truck
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
 
     from datetime import date as date_type
     from datetime import datetime as dt_type
@@ -2896,13 +2920,14 @@ async def export_container_view(
     do_expired: bool = False,
     do_validity_from: str | None = None,
     do_validity_to: str | None = None,
+    company_id: uuid.UUID | None = None,
 ) -> bytes:
     from datetime import date as date_type
 
     rows, _ = await get_container_view(
         db, actor, historical=historical, skip=0, limit=None,
         search=search, status_filter=status, from_date=from_date, to_date=to_date,
-        amls_only=amls_only,
+        amls_only=amls_only, company_id=company_id,
     )
 
     if do_expired:
@@ -2978,6 +3003,7 @@ async def export_shipments_list(
     do_expired: bool = False,
     do_validity_from=None,
     do_validity_to=None,
+    company_id: uuid.UUID | None = None,
 ) -> bytes:
     from datetime import date as date_type
 
@@ -2992,6 +3018,7 @@ async def export_shipments_list(
         db, actor, skip=0, limit=10000,
         search=search or None,
         stage=stage_enum,
+        company_id=company_id,
         my_queue=my_queue,
         missing_date=missing_date,
         amls_search=amls_search or None,
@@ -3072,7 +3099,7 @@ async def rename_container(
     actor: User, container_number: str,
 ) -> Shipment:
     _assert_team(actor, Team.FFD)
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
     result = await db.execute(select(Container).where(Container.id == container_id, Container.shipment_id == shipment_id))
     container = result.scalar_one_or_none()
     if not container:
@@ -3103,7 +3130,7 @@ async def mark_container_arrived(
     arrived_at: datetime | None = None,
 ) -> Shipment:
     _assert_team(actor, Team.DC)
-    shipment = await _get_shipment(db, shipment_id)
+    shipment = await _get_shipment(db, shipment_id, actor)
 
     result = await db.execute(select(Container).where(Container.id == container_id, Container.shipment_id == shipment_id))
     container = result.scalar_one_or_none()
@@ -3141,7 +3168,7 @@ async def bulk_confirm_ccro_and_notify(
 
     for shipment_id in shipment_ids:
         try:
-            shipment = await _get_shipment(db, shipment_id)
+            shipment = await _get_shipment(db, shipment_id, actor)
         except HTTPException:
             skipped.append(str(shipment_id))
             continue
@@ -3236,6 +3263,7 @@ async def get_container_view(
     amls_only: bool = False,
     sort_by: str | None = None,
     sort_dir: str = 'asc',
+    company_id: uuid.UUID | None = None,
 ) -> tuple[list[dict], int]:
     from app.masters.models import Truck, OffloadingPoint as OffloadingPointModel
     from sqlalchemy import exists as sa_exists
@@ -3250,6 +3278,11 @@ async def get_container_view(
 
     # Build filters
     filters = []
+
+    # Tenant scoping: customer users always see only their company; internal users may filter
+    effective_company = effective_company_filter(actor, company_id)
+    if effective_company is not None:
+        filters.append(Shipment.company_id == effective_company)
 
     if historical:
         # Historical: physically returned to shipping line, offloaded, or FFD-closed
@@ -3381,6 +3414,7 @@ async def get_container_view(
             OTruck.driver_name.label("outsourced_driver_name"),
             LoadingPort.name.label("loading_port_name"),
             BayanType.name.label("bayan_type_name"),
+            Company.name.label("company_name"),
         )
         .join(Shipment, Shipment.id == Container.shipment_id)
         .outerjoin(Truck, Truck.id == Container.truck_id)
@@ -3389,6 +3423,7 @@ async def get_container_view(
         .outerjoin(OTruck, OTruck.id == Container.outsourced_truck_id)
         .outerjoin(LoadingPort, LoadingPort.id == Shipment.loading_port_id)
         .outerjoin(BayanType, BayanType.id == Shipment.bayan_type_id)
+        .outerjoin(Company, Company.id == Shipment.company_id)
         .where(*filters)
         .offset(skip)
     )
@@ -3443,6 +3478,7 @@ async def get_container_view(
             "outsourced_driver_name": row[17],
             "loading_port_name": row[18],
             "bayan_type_name": row[19],
+            "company_name": row[20],
         }
         for row in rows.all()
     ], total

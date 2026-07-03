@@ -160,8 +160,11 @@ TEMPLATES: dict[str, dict] = {
 }
 
 
-async def _get_team_users(db: AsyncSession, team: Team) -> list[User]:
-    result = await db.execute(select(User).where(User.team == team, User.is_active == True))
+async def _get_team_users(db: AsyncSession, team: Team, company_id: uuid.UUID | None = None) -> list[User]:
+    q = select(User).where(User.team == team, User.is_active == True)
+    if company_id is not None:
+        q = q.where(User.company_id == company_id)
+    result = await db.execute(q)
     return list(result.scalars().all())
 
 
@@ -257,8 +260,15 @@ async def notify_team(db: AsyncSession, shipment, team: Team, template_key: str,
     from app.notifications.tasks import send_email_task
 
     template = TEMPLATES.get(template_key, {})
-    users = await _get_team_users(db, team)
-    cc_emails = await _get_cc_emails_for_team(db, team)
+    # Customer-team notifications go only to the shipment's company; team CC lists
+    # are skipped for them so emails never leak across companies.
+    _customer_teams = {Team.CUSTOMER, Team.CUSTOMER_MANAGEMENT}
+    if team in _customer_teams:
+        users = await _get_team_users(db, team, company_id=shipment.company_id)
+        cc_emails = []
+    else:
+        users = await _get_team_users(db, team)
+        cc_emails = await _get_cc_emails_for_team(db, team)
     escaped_extra = {k: _html.escape(str(v)) for k, v in extra.items()}
 
     body = template.get("body", "").format(
@@ -350,10 +360,21 @@ async def notify_user(db: AsyncSession, shipment, user: User, template_key: str,
 _PULL_OUT_NOTIF_TEAMS = [Team.FFD, Team.TRANSPORT, Team.DC, Team.CUSTOMER]
 
 
-async def _get_pull_out_notif_users(db: AsyncSession) -> list[User]:
+async def _get_pull_out_notif_users(db: AsyncSession, company_ids: set[uuid.UUID]) -> list[User]:
+    """Internal teams get everyone; the CUSTOMER team only users of the affected companies."""
     users: list[User] = []
     for team in _PULL_OUT_NOTIF_TEAMS:
-        users.extend(await _get_team_users(db, team))
+        if team == Team.CUSTOMER:
+            result = await db.execute(
+                select(User).where(
+                    User.team == team,
+                    User.is_active == True,
+                    User.company_id.in_(company_ids),
+                )
+            )
+            users.extend(result.scalars().all())
+        else:
+            users.extend(await _get_team_users(db, team))
     return users
 
 
@@ -368,7 +389,7 @@ async def notify_pull_out_date_changed(
     from app.notifications.tasks import send_email_task
 
     template = TEMPLATES["pull_out_date_changed"]
-    users = await _get_pull_out_notif_users(db)
+    users = await _get_pull_out_notif_users(db, {shipment.company_id})
     cc_emails = await _get_cc_emails_for_team(db, Team.FFD)
 
     body = template["body"].format(
@@ -410,7 +431,7 @@ async def notify_team_bulk_pull_out(
     from app.notifications.tasks import send_email_task
 
     template = TEMPLATES["pull_out_dates_bulk_changed"]
-    users = await _get_pull_out_notif_users(db)
+    users = await _get_pull_out_notif_users(db, {s.company_id for s, _ in shipment_changes})
     cc_emails = await _get_cc_emails_for_team(db, Team.FFD)
     count = len(shipment_changes)
 
@@ -470,8 +491,8 @@ async def notify_bayan_payment_requested(db: AsyncSession, shipment) -> None:
     from app.documents.models import Document
     from app.enums import DocumentType
 
-    users = await _get_team_users(db, Team.CUSTOMER)
-    cc_emails = await _get_cc_emails_for_team(db, Team.CUSTOMER)
+    users = await _get_team_users(db, Team.CUSTOMER, company_id=shipment.company_id)
+    cc_emails: list[str] = []  # no team-level CC for customer emails — would leak across companies
 
     template = TEMPLATES["bayan_payment_requested"]
     subject = template["subject"]
@@ -594,11 +615,24 @@ async def notify_bulk_bayan_payment_requested(
     shipments: list,
     attachment_specs: list[dict],
 ) -> None:
-    """Send a single email to the Customer team with all Bayan PDFs attached and in-app notifications per shipment."""
+    """Send a single email per customer company with its Bayan PDFs attached and in-app notifications per shipment."""
     from app.notifications.tasks import send_email_with_attachments_task
 
-    users = await _get_team_users(db, Team.CUSTOMER)
-    cc_emails = await _get_cc_emails_for_team(db, Team.CUSTOMER)
+    if not shipments:
+        return
+
+    # Never mix companies in one customer email — split and recurse per company
+    company_ids = {s.company_id for s in shipments}
+    if len(company_ids) > 1:
+        sid_to_company = {str(s.id): s.company_id for s in shipments}
+        for cid in company_ids:
+            subset = [s for s in shipments if s.company_id == cid]
+            specs = [a for a in attachment_specs if sid_to_company.get(str(a.get("shipment_id"))) == cid]
+            await notify_bulk_bayan_payment_requested(db, subset, specs)
+        return
+
+    users = await _get_team_users(db, Team.CUSTOMER, company_id=shipments[0].company_id)
+    cc_emails: list[str] = []  # no team-level CC for customer emails — would leak across companies
     count = len(shipments)
     plural = "s" if count != 1 else ""
     bl_list = ", ".join(_html.escape(s.bl_number) for s in shipments)
