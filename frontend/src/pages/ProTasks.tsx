@@ -1,10 +1,14 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { api } from '@/lib/api'
+import { authApi } from '@/api/auth'
+import { shipmentsApi } from '@/api/shipments'
+import { useAuth } from '@/hooks/useAuth'
 import { formatDate } from '@/lib/dates'
 import { differenceInDays, parseISO } from 'date-fns'
-import { User, AlertTriangle, Clock, ChevronDown } from 'lucide-react'
+import { User, AlertTriangle, Clock, ChevronDown, UserCheck } from 'lucide-react'
+import toast from 'react-hot-toast'
 import clsx from 'clsx'
 
 interface ProTask {
@@ -65,6 +69,32 @@ const COLLAPSED_STORAGE_KEY = 'pro_tasks_collapsed'
 
 export function ProTasks() {
   const navigate = useNavigate()
+  const { user } = useAuth()
+  const qc = useQueryClient()
+  const canReassign = user?.team === 'FFD' || !!user?.is_admin
+  const [reassigningId, setReassigningId] = useState<string | null>(null)
+  const [savingReassign, setSavingReassign] = useState(false)
+
+  const { data: proUsers = [] } = useQuery({
+    queryKey: ['team-workload', 'PRO'],
+    queryFn: () => authApi.listTeamWorkload('PRO').then(r => r.data),
+    enabled: canReassign,
+  })
+
+  async function reassign(task: ProTask, assigneeId: string) {
+    setSavingReassign(true)
+    try {
+      await shipmentsApi.assignTask(task.shipment_id, task.task_id, assigneeId)
+      toast.success(`${TASK_LABEL[task.task_type] ?? task.task_type} task reassigned — ${task.bl_number}`)
+      setReassigningId(null)
+      qc.invalidateQueries({ queryKey: ['pro-tasks'] })
+    } catch (e: any) {
+      toast.error(e.response?.data?.detail || 'Failed to reassign task')
+    } finally {
+      setSavingReassign(false)
+    }
+  }
+
   const [collapsed, setCollapsed] = useState<Set<string>>(() => {
     try {
       const stored = localStorage.getItem(COLLAPSED_STORAGE_KEY)
@@ -243,6 +273,41 @@ export function ProTasks() {
                           <Clock size={11} />
                           {age === 0 ? 'Today' : `${age}d`}
                         </span>
+
+                        {/* Reassign (FFD/admin) */}
+                        {canReassign && (
+                          reassigningId === task.task_id ? (
+                            <span className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
+                              <select
+                                autoFocus
+                                defaultValue=""
+                                disabled={savingReassign}
+                                onChange={e => { if (e.target.value) void reassign(task, e.target.value) }}
+                                className="text-xs border dark:border-gray-600 rounded px-1.5 py-1 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                              >
+                                <option value="" disabled>Assign to…</option>
+                                {proUsers.filter(u => u.id !== task.pro_user_id).map(u => (
+                                  <option key={u.id} value={u.id}>{u.full_name} ({u.active_task_count})</option>
+                                ))}
+                              </select>
+                              <button
+                                onClick={() => setReassigningId(null)}
+                                disabled={savingReassign}
+                                className="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 px-1"
+                              >
+                                cancel
+                              </button>
+                            </span>
+                          ) : (
+                            <button
+                              onClick={e => { e.stopPropagation(); setReassigningId(task.task_id) }}
+                              title={task.pro_user_id ? 'Reassign this task to another PRO' : 'Assign this task to a PRO'}
+                              className="shrink-0 flex items-center gap-1 text-xs text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 border border-dashed border-gray-300 dark:border-gray-600 hover:border-blue-400 dark:hover:border-blue-500 rounded px-1.5 py-0.5 transition-colors"
+                            >
+                              <UserCheck size={11} /> {task.pro_user_id ? 'Reassign' : 'Assign'}
+                            </button>
+                          )
+                        )}
                       </div>
                     )
                   })}
