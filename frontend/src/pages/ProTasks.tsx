@@ -1,9 +1,10 @@
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { api } from '@/lib/api'
 import { formatDate } from '@/lib/dates'
 import { differenceInDays, parseISO } from 'date-fns'
-import { User, AlertTriangle, Clock } from 'lucide-react'
+import { User, AlertTriangle, Clock, ChevronDown } from 'lucide-react'
 import clsx from 'clsx'
 
 interface ProTask {
@@ -62,6 +63,16 @@ function ageDays(created_at: string): number {
 
 export function ProTasks() {
   const navigate = useNavigate()
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+
+  function toggleGroup(key: string) {
+    setCollapsed(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
 
   const { data: tasks = [], isLoading } = useQuery<ProTask[]>({
     queryKey: ['pro-tasks'],
@@ -116,10 +127,18 @@ export function ProTasks() {
           {sortedGroups.map(([key, groupTasks]) => {
             const userName = key === '__unassigned__' ? 'Unassigned' : key
             const onHold = groupTasks.filter(t => t.status === 'ON_HOLD').length
+            const isCollapsed = collapsed.has(key)
             return (
               <div key={key} className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-xl overflow-hidden shadow-sm">
                 {/* Group header */}
-                <div className="px-4 py-3 border-b dark:border-gray-700 flex items-center gap-2.5 bg-gray-50 dark:bg-gray-800/60">
+                <button
+                  type="button"
+                  onClick={() => toggleGroup(key)}
+                  className={clsx(
+                    'w-full px-4 py-3 flex items-center gap-2.5 bg-gray-50 dark:bg-gray-800/60 text-left hover:bg-gray-100 dark:hover:bg-gray-700/60 transition-colors',
+                    !isCollapsed && 'border-b dark:border-gray-700'
+                  )}
+                >
                   <div className="p-1.5 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
                     <User size={14} className="text-blue-600 dark:text-blue-400" />
                   </div>
@@ -127,16 +146,25 @@ export function ProTasks() {
                   <span className="ml-1 text-xs text-gray-500 dark:text-gray-400">
                     {groupTasks.length} task{groupTasks.length !== 1 ? 's' : ''}
                   </span>
-                  {onHold > 0 && (
-                    <span className="ml-auto flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400 font-medium">
-                      <AlertTriangle size={12} />
-                      {onHold} on hold
-                    </span>
-                  )}
-                </div>
+                  <span className="ml-auto flex items-center gap-3">
+                    {onHold > 0 && (
+                      <span className="flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400 font-medium">
+                        <AlertTriangle size={12} />
+                        {onHold} on hold
+                      </span>
+                    )}
+                    <ChevronDown
+                      size={16}
+                      className={clsx(
+                        'text-gray-400 dark:text-gray-500 transition-transform',
+                        isCollapsed && '-rotate-90'
+                      )}
+                    />
+                  </span>
+                </button>
 
                 {/* Task rows */}
-                <div className="divide-y dark:divide-gray-700">
+                <div className={clsx('divide-y dark:divide-gray-700', isCollapsed && 'hidden')}>
                   {groupTasks.map(task => {
                     const age = ageDays(task.created_at)
                     const isOnHold = task.status === 'ON_HOLD'
