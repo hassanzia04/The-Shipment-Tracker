@@ -3,7 +3,8 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
 import { notificationsApi } from '@/api/notifications'
-import { STAGE_LABELS, HOLD_REASON_LABELS, ENTITY_LABELS } from '@/types'
+import { companiesApi } from '@/api/companies'
+import { STAGE_LABELS, HOLD_REASON_LABELS, ENTITY_LABELS, isCustomerTeam } from '@/types'
 import type { ShipmentStage, ExternalEntity, HoldReason } from '@/types'
 import { Clock, CheckCircle, AlertTriangle, Package, Boxes, Send } from 'lucide-react'
 import clsx from 'clsx'
@@ -437,6 +438,15 @@ export function Reports() {
   const [fromMonth, setFromMonth] = useState(defaults.fromMonth)
   const [toYear, setToYear] = useState(defaults.toYear)
   const [toMonth, setToMonth] = useState(defaults.toMonth)
+  const [companyFilter, setCompanyFilter] = useState('')
+
+  // Internal users can narrow reports to one customer company; customers are scoped server-side
+  const showCompanyFilter = !!user && !isCustomerTeam(user)
+  const { data: companies = [] } = useQuery({
+    queryKey: ['companies'],
+    queryFn: () => companiesApi.list().then(r => r.data),
+    enabled: showCompanyFilter,
+  })
 
   function handlePreset(p: Preset) {
     setPreset(p)
@@ -457,9 +467,9 @@ export function Reports() {
   }
 
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ['reports', fromYear, fromMonth, toYear, toMonth],
+    queryKey: ['reports', fromYear, fromMonth, toYear, toMonth, companyFilter],
     queryFn: () =>
-      api.get(`/analytics/reports?from_year=${fromYear}&from_month=${fromMonth}&to_year=${toYear}&to_month=${toMonth}`)
+      api.get(`/analytics/reports?from_year=${fromYear}&from_month=${fromMonth}&to_year=${toYear}&to_month=${toMonth}${companyFilter ? `&company_id=${companyFilter}` : ''}`)
         .then(r => r.data),
     retry: 1,
   })
@@ -507,6 +517,18 @@ export function Reports() {
               {p.label}
             </button>
           ))}
+          {showCompanyFilter && (
+            <select
+              value={companyFilter}
+              onChange={e => setCompanyFilter(e.target.value)}
+              className="text-xs border dark:border-gray-600 rounded-lg px-2 py-1.5 bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+            >
+              <option value="">All customers</option>
+              {companies.map(c => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+          )}
           {preset !== 'custom' && (
             <span className="text-xs text-gray-400 dark:text-gray-500 ml-auto">
               {fromLabel} – {toLabel}

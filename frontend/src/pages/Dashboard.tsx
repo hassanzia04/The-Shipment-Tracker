@@ -327,6 +327,22 @@ export function Dashboard() {
       }
     }
   )
+  const { sorted: sortedByCompany, sort: companySort, toggle: companyToggle } = useSortable(
+    (data as any)?.by_company ?? [],
+    (r: any, col) => {
+      switch (col) {
+        case 'company':    return r.company_name
+        case 'active':     return r.active_shipments
+        case 'awaiting':   return r.awaiting_customer
+        case 'progress':   return r.in_progress
+        case 'transport':  return r.in_transport
+        case 'containers': return r.active_containers
+        case 'holds':      return r.active_holds
+        case 'completed':  return r.completed_last_30d
+        default:           return null
+      }
+    }
+  )
 
   const TASK_LABELS: Record<string, string> = {
     PERMIT:   'Permit (PRO)',
@@ -351,7 +367,7 @@ export function Dashboard() {
     </div>
   )
 
-  const { summary, by_stage, bayan_payment_pending, task_pipeline, entity_breakdown, active_holds, in_progress_doc_status, shipments, container_status_counts, containers_by_stage, volume_by_date } = data
+  const { summary, by_stage, bayan_payment_pending, task_pipeline, entity_breakdown, active_holds, in_progress_doc_status, shipments, container_status_counts, containers_by_stage, volume_by_date, by_company } = data
   const totalInPipeline = (summary.total_active + summary.total_completed) || 1
   const nonProgressStages: ShipmentStage[] = ['CUSTOMER', 'FFD_REVIEW', 'TRANSPORT', 'DC_TRANSPORT', 'COMPLETED']
 
@@ -698,6 +714,54 @@ export function Dashboard() {
           </div>
         </div>
       </div>
+
+      {/* ── By Customer breakdown (internal users only — backend returns null for customers) ── */}
+      {by_company && by_company.length > 0 && (
+        <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-xl overflow-hidden">
+          <div className="px-5 pt-4 pb-1">
+            <h2 className="font-semibold text-gray-800 dark:text-gray-100">By Customer</h2>
+            <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">Shipment breakdown per customer company — click a row to see its shipments</p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 dark:bg-gray-700/50 border-b dark:border-gray-700">
+                <tr>
+                  <SortableHeader label="Customer"        column="company"    sort={companySort} onSort={companyToggle} className="px-4 py-2.5 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
+                  <SortableHeader label="Active"          column="active"     sort={companySort} onSort={companyToggle} className="px-4 py-2.5 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
+                  <SortableHeader label="Awaiting Docs"   column="awaiting"   sort={companySort} onSort={companyToggle} className="px-4 py-2.5 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide hidden sm:table-cell" />
+                  <SortableHeader label="In Progress"     column="progress"   sort={companySort} onSort={companyToggle} className="px-4 py-2.5 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide hidden sm:table-cell" />
+                  <SortableHeader label="Transport"       column="transport"  sort={companySort} onSort={companyToggle} className="px-4 py-2.5 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide hidden md:table-cell" />
+                  <SortableHeader label="Containers"      column="containers" sort={companySort} onSort={companyToggle} className="px-4 py-2.5 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide hidden md:table-cell" />
+                  <SortableHeader label="Holds"           column="holds"      sort={companySort} onSort={companyToggle} className="px-4 py-2.5 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide" />
+                  <SortableHeader label="Completed (30d)" column="completed"  sort={companySort} onSort={companyToggle} className="px-4 py-2.5 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide hidden sm:table-cell" />
+                </tr>
+              </thead>
+              <tbody className="divide-y dark:divide-gray-700">
+                {sortedByCompany.map((c: any) => (
+                  <tr key={c.company_id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                    <td className="px-4 py-2.5 font-medium text-gray-900 dark:text-white">
+                      <Link to={`/shipments?company_id=${c.company_id}&stage=`} className="hover:text-blue-600 dark:hover:text-blue-400 hover:underline">
+                        {c.company_name}
+                      </Link>
+                    </td>
+                    <td className="px-4 py-2.5 font-semibold tabular-nums text-gray-800 dark:text-gray-100">{c.active_shipments || '—'}</td>
+                    <td className="px-4 py-2.5 tabular-nums text-gray-600 dark:text-gray-300 hidden sm:table-cell">{c.awaiting_customer || '—'}</td>
+                    <td className="px-4 py-2.5 tabular-nums text-gray-600 dark:text-gray-300 hidden sm:table-cell">{c.in_progress || '—'}</td>
+                    <td className="px-4 py-2.5 tabular-nums text-gray-600 dark:text-gray-300 hidden md:table-cell">{c.in_transport || '—'}</td>
+                    <td className="px-4 py-2.5 tabular-nums text-gray-600 dark:text-gray-300 hidden md:table-cell">{c.active_containers || '—'}</td>
+                    <td className="px-4 py-2.5 tabular-nums">
+                      {c.active_holds > 0
+                        ? <span className="text-red-600 dark:text-red-400 font-semibold">{c.active_holds}</span>
+                        : <span className="text-gray-400 dark:text-gray-600">—</span>}
+                    </td>
+                    <td className="px-4 py-2.5 tabular-nums text-green-700 dark:text-green-400 hidden sm:table-cell">{c.completed_last_30d || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* ── In Progress — Document Status (collapsible) ── */}
       {in_progress_doc_status?.length > 0 && (

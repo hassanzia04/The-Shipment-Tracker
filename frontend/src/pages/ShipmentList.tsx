@@ -24,7 +24,8 @@ import {
   CheckCircle, DollarSign, Pencil, FileSpreadsheet, Files, Download, Loader2,
   SlidersHorizontal, Pause, Unlock, FileDown,
 } from 'lucide-react'
-import { STAGE_LABELS, TASK_TYPE_LABELS, ENTITY_LABELS, HOLD_REASON_LABELS, HOLD_REASON_MAP, TEAM_HOLD_PERMISSIONS } from '@/types'
+import { STAGE_LABELS, TASK_TYPE_LABELS, ENTITY_LABELS, HOLD_REASON_LABELS, HOLD_REASON_MAP, TEAM_HOLD_PERMISSIONS, isCustomerTeam } from '@/types'
+import { companiesApi } from '@/api/companies'
 import type { ShipmentListItem, ShipmentStage, TaskType, TaskStatus, Team, ExternalEntity, HoldReason } from '@/types'
 import type { SortState } from '@/lib/sort'
 import { formatDate, formatDateTime } from '@/lib/dates'
@@ -35,6 +36,7 @@ import clsx from 'clsx'
 const ALL_COLUMNS = [
   { key: 'invoice',              label: 'Invoice' },
   { key: 'consignee',            label: 'Consignee' },
+  { key: 'company',              label: 'Customer' },
   { key: 'port',                 label: 'Port of Loading' },
   { key: 'offloading_location',  label: 'Offloading Location' },
   { key: 'bayan_type',           label: 'Bayan Type' },
@@ -49,7 +51,7 @@ const ALL_COLUMNS = [
 ] as const
 
 // Columns hidden on mobile by default (previously handled by Tailwind responsive classes)
-const MOBILE_DEFAULT_HIDDEN = new Set(['invoice', 'consignee', 'port', 'offloading_location', 'bayan_type', 'shipping_line', 'pull_out', 'eta', 'do_validity', 'amls', 'permit_no'])
+const MOBILE_DEFAULT_HIDDEN = new Set(['invoice', 'consignee', 'company', 'port', 'offloading_location', 'bayan_type', 'shipping_line', 'pull_out', 'eta', 'do_validity', 'amls', 'permit_no'])
 
 // ── Progress status indicator ─────────────────────────────────────────────────
 
@@ -615,6 +617,7 @@ function InlineHoldPanel({ shipmentId, userTeam, onDone }: {
 interface ColFilters {
   bl: string
   consignee: string
+  company: string
   port: string
   offloading: string
   bayan_type: string
@@ -630,7 +633,7 @@ interface ColFilters {
   permit: string
 }
 
-function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCustomer, isPRO, isDC, isTransport, isAdmin, currentUserId, expandedId, onExpand, proUsers, onRefresh, sort, onSort, hiddenCols = new Set(), isMobile = false, historical = false, colFilters, onColFilter }: {
+function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCustomer, isPRO, isDC, isTransport, isAdmin, currentUserId, expandedId, onExpand, proUsers, onRefresh, sort, onSort, hiddenCols = new Set(), isMobile = false, historical = false, colFilters, onColFilter, showCompanyCol = false, companyOptions = [] }: {
   shipments: ShipmentListItem[]
   page: number
   totalPages: number
@@ -654,10 +657,12 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
   historical?: boolean
   colFilters: ColFilters
   onColFilter: (key: keyof ColFilters, value: string) => void
+  showCompanyCol?: boolean
+  companyOptions?: { value: string; label: string }[]
 }) {
   const qc = useQueryClient()
   const offset = (page - 1) * PAGE_SIZE
-  const colSpan = isFFD ? 16 : (isCustomer || isPRO) ? 16 : isAdmin ? 16 : (isDC || isTransport) ? 16 : 15
+  const colSpan = (isFFD ? 16 : (isCustomer || isPRO) ? 16 : isAdmin ? 16 : (isDC || isTransport) ? 16 : 15) + (showCompanyCol ? 1 : 0)
 
   function colCls(key: string, whenVisible: string): string {
     if (hiddenCols.has(key)) return 'hidden'
@@ -1020,6 +1025,11 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
               <th className={colCls('consignee', 'hidden lg:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>
                 <div className="flex items-center gap-1">Consignee<ColumnFilterPopover filter={{ type: 'text', value: colFilters.consignee, onChange: v => onColFilter('consignee', v), placeholder: 'Filter consignee…' }} /></div>
               </th>
+              {showCompanyCol && (
+                <th className={colCls('company', 'hidden lg:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>
+                  <div className="flex items-center gap-1">Customer<ColumnFilterPopover filter={{ type: 'select', value: colFilters.company, onChange: v => onColFilter('company', v), options: companyOptions, allLabel: 'All customers' }} /></div>
+                </th>
+              )}
               <th className={colCls('port', 'hidden xl:table-cell text-left px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap')}>
                 <div className="flex items-center gap-1">Port of Loading<ColumnFilterPopover filter={{ type: 'text', value: colFilters.port, onChange: v => onColFilter('port', v), placeholder: 'Filter port…' }} /></div>
               </th>
@@ -1148,6 +1158,11 @@ function PriorityTable({ shipments, page, totalPages, total, onPage, isFFD, isCu
                     <td className={colCls('consignee', 'hidden lg:table-cell px-3 py-3 text-sm text-gray-600 dark:text-gray-300 max-w-[160px]')}>
                       <span className="truncate block" title={s.consignee_name ?? undefined}>{s.consignee_name ?? <span className="text-gray-400 dark:text-gray-500 italic text-xs">—</span>}</span>
                     </td>
+                    {showCompanyCol && (
+                      <td className={colCls('company', 'hidden lg:table-cell px-3 py-3 text-sm text-gray-600 dark:text-gray-300 max-w-[140px]')}>
+                        <span className="truncate block" title={s.company_name ?? undefined}>{s.company_name ?? <span className="text-gray-400 dark:text-gray-500 italic text-xs">—</span>}</span>
+                      </td>
+                    )}
                     <td className={colCls('port', 'hidden xl:table-cell px-3 py-3 text-xs text-gray-600 dark:text-gray-300 whitespace-nowrap')}>
                       {s.loading_port_name || <span className="text-gray-400">—</span>}
                     </td>
@@ -1871,6 +1886,8 @@ export function ShipmentList() {
   const isTransport  = user?.team === 'TRANSPORT'
   const isDC         = user?.team === 'DC'
   const hasContainerView = !isPRO
+  // Internal users can see and filter by customer company; customer users are scoped server-side
+  const showCompanyCol = !!user && !isCustomerTeam(user)
 
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
@@ -1884,6 +1901,9 @@ export function ShipmentList() {
   const setStageFilter = (s: ShipmentStage | '' | 'my_queue') => setSearchParams(p => { p.set('stage', s); return p })
   const historical = searchParams.get('historical') === 'true'
   const setHistorical = (v: boolean) => setSearchParams(p => { p.set('historical', String(v)); p.set('page', '1'); if (v) p.delete('stage'); return p })
+  // Company (customer) filter — URL-driven so the dashboard can link to /shipments?company_id=…
+  const filterCompany = searchParams.get('company_id') ?? ''
+  const setFilterCompany = (v: string) => setSearchParams(p => { if (v) p.set('company_id', v); else p.delete('company_id'); p.set('page', '1'); return p })
   const [missingDate, setMissingDate] = useState(false)
   const [amlsSearch, setAmlsSearch] = useState('')
   const [debouncedAmlsSearch, setDebouncedAmlsSearch] = useState('')
@@ -1985,11 +2005,19 @@ export function ShipmentList() {
     enabled: isFFD,
   })
 
+  const { data: companies = [] } = useQuery({
+    queryKey: ['companies'],
+    queryFn: () => companiesApi.list().then(r => r.data),
+    enabled: showCompanyCol,
+  })
+  const companyOptions = companies.map(c => ({ value: c.id, label: c.name }))
+
   async function handleBlExport() {
     try {
       const { data } = await shipmentsApi.blExport({
         search: debouncedSearch || undefined,
         stage: (!historical && !isMyQueue) ? (stageFilter || undefined) : undefined,
+        company_id: filterCompany || undefined,
         my_queue: isMyQueue || undefined,
         missing_date: (!historical && missingDate) || undefined,
         amls_search: debouncedAmlsSearch || undefined,
@@ -2041,12 +2069,13 @@ export function ShipmentList() {
   const isMyQueue = !historical && stageFilter === 'my_queue'
 
   const { data, isLoading } = useQuery({
-    queryKey: ['shipments', skip, debouncedSearch, stageFilter, missingDate, debouncedAmlsSearch, missingAmls, pullOutFrom, pullOutTo, sort.column, sort.dir, historical, completedFrom, completedTo, debouncedConsignee, debouncedPort, debouncedOffloading, debouncedBayanType, debouncedShippingLine, filterEtaFrom, filterEtaTo, filterDoValidityFrom, filterDoValidityTo, debouncedPermit, filterDoExpired, filterDoExpiringSoon],
+    queryKey: ['shipments', skip, debouncedSearch, stageFilter, filterCompany, missingDate, debouncedAmlsSearch, missingAmls, pullOutFrom, pullOutTo, sort.column, sort.dir, historical, completedFrom, completedTo, debouncedConsignee, debouncedPort, debouncedOffloading, debouncedBayanType, debouncedShippingLine, filterEtaFrom, filterEtaTo, filterDoValidityFrom, filterDoValidityTo, debouncedPermit, filterDoExpired, filterDoExpiringSoon],
     queryFn: () => shipmentsApi.list({
       skip,
       limit: PAGE_SIZE,
       search: debouncedSearch || undefined,
       stage: (!historical && !isMyQueue) ? (stageFilter || undefined) : undefined,
+      company_id: filterCompany || undefined,
       my_queue: isMyQueue || undefined,
       missing_date: (!historical && missingDate) || undefined,
       amls_search: debouncedAmlsSearch || undefined,
@@ -2080,6 +2109,7 @@ export function ShipmentList() {
   const colFilters: ColFilters = {
     bl: search,
     consignee: filterConsignee,
+    company: filterCompany,
     port: filterPort,
     offloading: filterOffloading,
     bayan_type: filterBayanType,
@@ -2099,6 +2129,7 @@ export function ShipmentList() {
     switch (key) {
       case 'bl': setSearch(value); break
       case 'consignee': setFilterConsignee(value); break
+      case 'company': setFilterCompany(value); break
       case 'port': setFilterPort(value); break
       case 'offloading': setFilterOffloading(value); break
       case 'bayan_type': setFilterBayanType(value); break
@@ -2478,7 +2509,7 @@ export function ShipmentList() {
               {showColPicker && (
                 <div className="absolute right-0 top-full mt-1 z-50 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg p-3 min-w-[190px]">
                   <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-2 uppercase tracking-wide">Visible columns</p>
-                  {ALL_COLUMNS.map(col => (
+                  {ALL_COLUMNS.filter(col => col.key !== 'company' || showCompanyCol).map(col => (
                     <label key={col.key} className="flex items-center gap-2 py-1 cursor-pointer hover:text-gray-900 dark:hover:text-white">
                       <input
                         type="checkbox"
@@ -2566,6 +2597,8 @@ export function ShipmentList() {
           historical={historical}
           colFilters={colFilters}
           onColFilter={handleColFilter}
+          showCompanyCol={showCompanyCol}
+          companyOptions={companyOptions}
         />
       )}
 

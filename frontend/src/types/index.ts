@@ -62,8 +62,24 @@ export interface User {
   team: Team
   is_active: boolean
   is_admin: boolean
+  company_id: string | null
+  company_name: string | null
   created_at: string
 }
+
+export interface Company {
+  id: string
+  name: string
+  is_active: boolean
+  created_at: string
+  user_count: number
+  shipment_count: number
+}
+
+/** Customer-side teams (tenant-scoped users). Covers CUSTOMER_MANAGEMENT too —
+ * use this instead of ad-hoc `team === 'CUSTOMER'` checks for tenancy gating. */
+export const isCustomerTeam = (user: { team: Team } | null | undefined): boolean =>
+  user?.team === 'CUSTOMER' || user?.team === 'CUSTOMER_MANAGEMENT'
 
 export interface Task {
   id: string
@@ -115,6 +131,8 @@ export interface Shipment {
   bl_number: string
   invoice_number: string
   customer_id: string
+  company_id: string
+  company_name: string | null
   current_stage: ShipmentStage
   pull_out_date: string | null
   product_type_id: string | null
@@ -181,6 +199,7 @@ export interface ShipmentListItem {
   bayan_type_name: string | null
   shipping_line_name: string | null
   offloading_date: string | null
+  company_name: string | null
 }
 
 export interface ContainerViewItem {
@@ -215,6 +234,7 @@ export interface ContainerViewItem {
   outsourced_driver_name: string | null
   loading_port_name: string | null
   bayan_type_name: string | null
+  company_name: string | null
 }
 
 export interface OutsourcedTruck {

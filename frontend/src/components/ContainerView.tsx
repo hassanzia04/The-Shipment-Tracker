@@ -5,6 +5,7 @@ import { differenceInCalendarDays, parseISO, isValid } from 'date-fns'
 import { shipmentsApi } from '@/api/shipments'
 import { documentsApi, openDocument } from '@/api/documents'
 import { mastersApi } from '@/api/masters'
+import { companiesApi } from '@/api/companies'
 import type { SortState } from '@/lib/sort'
 import { SortableHeader } from '@/components/SortableHeader'
 import { ColumnFilterPopover } from '@/components/ColumnFilterPopover'
@@ -843,6 +844,7 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
 
 export function ContainerView({ team, historical = false }: Props) {
   const qc = useQueryClient()
+  const showCompanyFilter = team !== 'CUSTOMER' && team !== 'CUSTOMER_MANAGEMENT'
   const [downloadingCcros, setDownloadingCcros] = useState(false)
   const [amlsOnly, setAmlsOnly] = useState(team === 'DC')
   const [search, setSearch] = useState('')
@@ -850,6 +852,7 @@ export function ContainerView({ team, historical = false }: Props) {
   const [filterFrom, setFilterFrom] = useState('')
   const [filterTo, setFilterTo] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
+  const [companyFilter, setCompanyFilter] = useState('')
   const [exporting, setExporting] = useState(false)
   const [page, setPage] = useState(1)
   const [sort, setSort] = useState<SortState>({ column: null, dir: 'asc' })
@@ -882,19 +885,26 @@ export function ContainerView({ team, historical = false }: Props) {
 
   useEffect(() => {
     setPage(1)
-  }, [debouncedSearch, statusFilter, filterFrom, filterTo, amlsOnly, historical])
+  }, [debouncedSearch, statusFilter, companyFilter, filterFrom, filterTo, amlsOnly, historical])
+
+  const { data: companies = [] } = useQuery({
+    queryKey: ['companies'],
+    queryFn: () => companiesApi.list().then(r => r.data),
+    enabled: showCompanyFilter,
+  })
 
   const skip = historical ? (page - 1) * HISTORICAL_PAGE_SIZE : 0
   const limit = historical ? HISTORICAL_PAGE_SIZE : 500
 
   const { data, isLoading, refetch } = useQuery({
-    queryKey: ['container-view', historical, debouncedSearch, statusFilter, filterFrom, filterTo, amlsOnly, skip, sort.column, sort.dir],
+    queryKey: ['container-view', historical, debouncedSearch, statusFilter, companyFilter, filterFrom, filterTo, amlsOnly, skip, sort.column, sort.dir],
     queryFn: () => shipmentsApi.containerView({
       historical,
       skip,
       limit,
       search: debouncedSearch || undefined,
       status: statusFilter || undefined,
+      company_id: companyFilter || undefined,
       from_date: filterFrom || undefined,
       to_date: filterTo || undefined,
       amls_only: (amlsOnly && team === 'DC') || undefined,
@@ -954,6 +964,7 @@ export function ContainerView({ team, historical = false }: Props) {
         from_date: filterFrom || undefined,
         to_date: filterTo || undefined,
         status: statusFilter || undefined,
+        company_id: companyFilter || undefined,
         historical,
         amls_only: (amlsOnly && team === 'DC') || undefined,
         do_expired: (cfDoExpired && !cfDoExpiringSoon) || undefined,
@@ -1149,6 +1160,18 @@ export function ContainerView({ team, historical = false }: Props) {
             <option value="">All statuses</option>
             {Object.entries(STATUS_LABEL).map(([val, label]) => (
               <option key={val} value={val}>{label}</option>
+            ))}
+          </select>
+        )}
+        {showCompanyFilter && (
+          <select
+            value={companyFilter}
+            onChange={e => setCompanyFilter(e.target.value)}
+            className="w-full sm:w-auto text-xs border dark:border-gray-600 rounded-lg px-2 py-1.5 bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+          >
+            <option value="">All customers</option>
+            {companies.map(c => (
+              <option key={c.id} value={c.id}>{c.name}</option>
             ))}
           </select>
         )}
