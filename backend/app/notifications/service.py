@@ -14,8 +14,8 @@ from app.config import settings
 
 TEMPLATES: dict[str, dict] = {
     "shipment_created": {
-        "subject": "FFD Tracker — New shipment submitted for review",
-        "body": "A new shipment BL: {bl_number} has been submitted by the customer and is awaiting your review.",
+        "subject": "FFD Tracker — New shipment from {company} for review",
+        "body": "A new shipment BL: {bl_number} has been submitted by {company} and is awaiting your review.",
     },
     "permit_assigned": {
         "subject": "FFD Tracker — Permit task assigned to your team",
@@ -98,8 +98,8 @@ TEMPLATES: dict[str, dict] = {
         "body": "FFD has returned a container on BL: {bl_number} back to your queue for truck assignment.",
     },
     "documents_resubmitted": {
-        "subject": "FFD Tracker — Shipment re-submitted after send-back",
-        "body": "BL: {bl_number} has been re-submitted by the customer after your send-back. Please log in to resume processing.",
+        "subject": "FFD Tracker — {company} re-submitted a shipment after send-back",
+        "body": "BL: {bl_number} has been re-submitted by {company} after your send-back. Please log in to resume processing.",
     },
     "documents_rejected": {
         "subject": "FFD Tracker — Documents returned for correction",
@@ -277,12 +277,28 @@ async def notify_team(db: AsyncSession, shipment, team: Team, template_key: str,
         cc_emails = await _get_cc_emails_for_team(db, team)
     escaped_extra = {k: _html.escape(str(v)) for k, v in extra.items()}
 
+    # Customer company name — available to every template as {company}
+    from app.companies.models import Company as _Company
+    company_name = (await db.execute(
+        select(_Company.name).where(_Company.id == shipment.company_id)
+    )).scalar_one_or_none() or ""
+
     body = template.get("body", "").format(
         bl_number=_html.escape(shipment.bl_number),
         team=_html.escape(team.value),
+        company=_html.escape(company_name),
         **escaped_extra,
     )
-    subject = f"{template.get('subject', 'FFD Tracker')} — BL: {shipment.bl_number}"
+    subject_tpl = template.get("subject", "FFD Tracker")
+    try:
+        subject_prefix = subject_tpl.format(
+            bl_number=shipment.bl_number,
+            company=company_name,
+            **{k: str(v) for k, v in extra.items()},
+        )
+    except (KeyError, IndexError):
+        subject_prefix = subject_tpl
+    subject = f"{subject_prefix} — BL: {shipment.bl_number}"
     shipment_url = f"{settings.FRONTEND_URL}/shipments/{shipment.id}"
 
     remark_val = escaped_extra.get("remark", "").strip()
