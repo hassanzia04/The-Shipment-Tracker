@@ -4,7 +4,7 @@ import { Upload, X, CheckCircle, AlertCircle, Loader, Search, Eye, RotateCw } fr
 import toast from 'react-hot-toast'
 import { documentsApi, type MiscAnalysisItem } from '@/api/documents'
 import { shipmentsApi } from '@/api/shipments'
-import { isRetryableUploadError, uploadErrorDetail } from '@/lib/uploadErrors'
+import { isRetryableUploadError, uploadErrorDetail, newRowId } from '@/lib/uploadErrors'
 import type { ShipmentListItem } from '@/types'
 import clsx from 'clsx'
 
@@ -38,7 +38,7 @@ export function BulkMiscUploadModal({ onClose, onDone }: Props) {
 
   const onDrop = useCallback(async (accepted: File[]) => {
     const newRows: RowState[] = accepted.map(file => ({
-      id: crypto.randomUUID(),
+      id: newRowId(),
       file,
       analysis: null,
       analyzing: true,

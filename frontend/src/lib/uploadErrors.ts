@@ -1,4 +1,13 @@
-// Shared helpers for the bulk upload modals' failure handling.
+// Shared helpers for the bulk upload modals.
+
+/** Stable client-side row id. crypto.randomUUID() only exists in secure
+ * contexts (HTTPS / localhost) — over plain http (e.g. the test server IP)
+ * it is undefined, so fall back to a timestamp+random id. Uniqueness only
+ * needs to hold within one modal session. */
+export function newRowId(): string {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID()
+  return `row-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
 
 /** True when the failure never got a server verdict (network error / timeout)
  * or the server itself broke (5xx) — retrying makes sense. A 4xx means the
