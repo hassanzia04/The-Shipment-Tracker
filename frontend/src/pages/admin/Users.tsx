@@ -223,7 +223,8 @@ export function AdminUsers() {
           </div>
 
           {companies.length > 0 && (
-            <table className="w-full text-sm">
+            <div className="overflow-x-auto">
+            <table className="w-full text-sm min-w-[440px]">
               <thead className="bg-gray-50 dark:bg-gray-700/50 border-b dark:border-gray-700">
                 <tr>
                   <th className="px-4 py-2 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide">Company</th>
@@ -281,6 +282,7 @@ export function AdminUsers() {
                 ))}
               </tbody>
             </table>
+            </div>
           )}
         </div>
       </div>
@@ -432,13 +434,14 @@ export function AdminUsers() {
 
       {/* Users list */}
       <div className="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-xl overflow-hidden">
-        <table className="w-full text-sm">
+        <div className="overflow-x-auto">
+        <table className="w-full text-sm min-w-[560px]">
           <thead className="bg-gray-50 dark:bg-gray-700/50 border-b dark:border-gray-700">
             <tr>
               <SortableHeader label="Name"    column="name"    sort={sort} onSort={toggle} className="px-4 py-3 text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide" />
               <SortableHeader label="Email"   column="email"   sort={sort} onSort={toggle} className="px-4 py-3 text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide hidden sm:table-cell" />
               <SortableHeader label="Team"    column="team"    sort={sort} onSort={toggle} className="px-4 py-3 text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide" />
-              <SortableHeader label="Company" column="company" sort={sort} onSort={toggle} className="px-4 py-3 text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide hidden sm:table-cell" />
+              <SortableHeader label="Company" column="company" sort={sort} onSort={toggle} className="px-4 py-3 text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide" />
               <SortableHeader label="Status"  column="status"  sort={sort} onSort={toggle} className="px-4 py-3 text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide" />
               <SortableHeader label="Joined"  column="joined"  sort={sort} onSort={toggle} className="px-4 py-3 text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide hidden sm:table-cell" />
               <th />
@@ -458,7 +461,7 @@ export function AdminUsers() {
                     {TEAMS.map(t => <option key={t} value={t}>{TEAM_LABELS[t]}</option>)}
                   </select>
                 </td>
-                <td className="px-4 py-3 hidden sm:table-cell">
+                <td className="px-4 py-3">
                   {pendingTeam[u.id] ? (
                     <span className="flex items-center gap-1">
                       <select
@@ -511,6 +514,7 @@ export function AdminUsers() {
             ))}
           </tbody>
         </table>
+        </div>
       </div>
     </div>
   )

@@ -81,19 +81,23 @@ function BulkActionBar({ count, countClass, onClear, children }: {
     </button>
   )
   return (
-    <div className="fixed z-50 inset-x-2 bottom-[4.5rem] lg:inset-x-auto lg:left-1/2 lg:-translate-x-1/2 lg:bottom-6 pointer-events-none">
-      <div className="pointer-events-auto bg-gray-900 dark:bg-gray-700 text-white border border-gray-700 dark:border-gray-600 rounded-xl lg:rounded-2xl shadow-xl px-3 py-2.5 lg:px-5 lg:py-3">
-        <div className="flex lg:hidden items-center justify-between gap-2 mb-2">
-          {label}
-          {clearBtn('flex')}
-        </div>
-        <div className="flex items-center gap-2 overflow-x-auto lg:overflow-x-visible lg:flex-wrap">
-          <span className="hidden lg:block shrink-0">{label}</span>
-          {children}
-          {clearBtn('hidden lg:flex')}
+    <>
+      {/* In-flow spacer so the fixed dock never hides the last rows when scrolled to the bottom */}
+      <div aria-hidden className="h-32 lg:h-20" />
+      <div className="fixed z-50 inset-x-2 bottom-[4.5rem] lg:inset-x-auto lg:left-1/2 lg:-translate-x-1/2 lg:bottom-6 pointer-events-none">
+        <div className="pointer-events-auto bg-gray-900 dark:bg-gray-700 text-white border border-gray-700 dark:border-gray-600 rounded-xl lg:rounded-2xl shadow-xl px-3 py-2.5 lg:px-5 lg:py-3">
+          <div className="flex lg:hidden items-center justify-between gap-2 mb-2">
+            {label}
+            {clearBtn('flex')}
+          </div>
+          <div className="flex items-center gap-2 overflow-x-auto lg:overflow-x-visible lg:flex-wrap [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <span className="hidden lg:block shrink-0">{label}</span>
+            {children}
+            {clearBtn('hidden lg:flex')}
+          </div>
         </div>
       </div>
-    </div>
+    </>
   )
 }
 
