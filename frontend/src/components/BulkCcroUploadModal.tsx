@@ -1,15 +1,17 @@
 import { useState, useCallback, useRef } from 'react'
 import { useDropzone } from 'react-dropzone'
-import { Upload, X, CheckCircle, AlertCircle, Loader, Search, Eye, AlertTriangle } from 'lucide-react'
+import { Upload, X, CheckCircle, AlertCircle, Loader, Search, Eye, AlertTriangle, RotateCw } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { documentsApi, type CcroAnalysisItem } from '@/api/documents'
 import { shipmentsApi } from '@/api/shipments'
+import { isRetryableUploadError, uploadErrorDetail } from '@/lib/uploadErrors'
 import type { ShipmentListItem } from '@/types'
 import clsx from 'clsx'
 
 type UploadStatus = 'idle' | 'uploading' | 'done' | 'duplicate' | 'not_detected' | 'error'
 
 interface RowState {
+  id: string
   file: File
   analysis: CcroAnalysisItem | null
   analyzing: boolean
@@ -23,6 +25,7 @@ interface RowState {
   hasActiveCcroTask: boolean
   uploadStatus: UploadStatus
   uploadResult: string | null
+  retryable: boolean
   detectedDoDate: string | null
   confirmedDoDate: string
   doDateSaved: boolean
@@ -47,6 +50,7 @@ export function BulkCcroUploadModal({ onClose, onDone }: Props) {
 
   const onDrop = useCallback(async (accepted: File[]) => {
     const newRows: RowState[] = accepted.map(file => ({
+      id: crypto.randomUUID(),
       file,
       analysis: null,
       analyzing: true,
@@ -60,6 +64,7 @@ export function BulkCcroUploadModal({ onClose, onDone }: Props) {
       hasActiveCcroTask: false,
       uploadStatus: 'idle',
       uploadResult: null,
+      retryable: false,
       detectedDoDate: null,
       confirmedDoDate: '',
       doDateSaved: false,
@@ -68,33 +73,31 @@ export function BulkCcroUploadModal({ onClose, onDone }: Props) {
 
     try {
       const { data } = await documentsApi.analyzeCCROs(accepted)
-      setRows(prev => {
-        const updated = [...prev]
-        const offset = updated.length - accepted.length
-        data.forEach((item, i) => {
-          const idx = offset + i
-          if (updated[idx]) {
-            updated[idx] = {
-              ...updated[idx],
-              analysis: item,
-              analyzing: false,
-              shipmentId: item.shipment_id,
-              blNumber: item.bl_number,
-              containerCount: item.container_count,
-              detectedContainer: item.detected_container,
-              containerNumber: item.detected_container ?? '',
-              hasExistingDoc: item.has_existing_doc,
-              conflictBl: item.conflict_bl,
-              hasActiveCcroTask: item.has_active_ccro_task,
-              detectedDoDate: item.detected_do_date ?? null,
-              confirmedDoDate: item.detected_do_date ?? '',
-            }
-          }
-        })
-        return updated
-      })
+      // Match results to rows by stable id — the list may have changed
+      // (rows removed, another batch dropped) while analysis was running
+      const resultById = new Map(newRows.map((r, i) => [r.id, data[i]]))
+      setRows(prev => prev.map(r => {
+        const item = resultById.get(r.id)
+        if (!item) return r
+        return {
+          ...r,
+          analysis: item,
+          analyzing: false,
+          shipmentId: item.shipment_id,
+          blNumber: item.bl_number,
+          containerCount: item.container_count,
+          detectedContainer: item.detected_container,
+          containerNumber: item.detected_container ?? '',
+          hasExistingDoc: item.has_existing_doc,
+          conflictBl: item.conflict_bl,
+          hasActiveCcroTask: item.has_active_ccro_task,
+          detectedDoDate: item.detected_do_date ?? null,
+          confirmedDoDate: item.detected_do_date ?? '',
+        }
+      }))
     } catch {
-      setRows(prev => prev.map(r => r.analyzing ? { ...r, analyzing: false } : r))
+      const droppedIds = new Set(newRows.map(r => r.id))
+      setRows(prev => prev.map(r => droppedIds.has(r.id) ? { ...r, analyzing: false } : r))
       toast.error('Failed to analyze files')
     }
   }, [])
@@ -105,107 +108,84 @@ export function BulkCcroUploadModal({ onClose, onDone }: Props) {
     multiple: true,
   })
 
+  // All async row updates address rows by id, never by index — the list can
+  // change (removals, extra drops) while uploads/analysis are in flight
+  const setRow = (id: string, patch: Partial<RowState>) =>
+    setRows(prev => prev.map(r => r.id === id ? { ...r, ...patch } : r))
+
+  /** Apply one bulk-response result to a row. Returns the outcome bucket. */
+  function applyResult(id: string, result: { status: string; conflict_bl?: string | null }): 'done' | 'duplicate' | 'failed' {
+    if (result.status === 'created' || result.status === 'matched') {
+      setRow(id, { uploadStatus: 'done', uploadResult: result.status === 'created' ? 'Container added' : 'Container matched', retryable: false })
+      return 'done'
+    }
+    if (result.status === 'duplicate') {
+      setRow(id, {
+        uploadStatus: 'duplicate',
+        uploadResult: result.conflict_bl ? `Already active on ${result.conflict_bl}` : 'CCRO already uploaded for this container',
+        retryable: false,
+      })
+      return 'duplicate'
+    }
+    setRow(id, { uploadStatus: 'not_detected', uploadResult: 'Container not found in PDF', retryable: false })
+    return 'failed'
+  }
+
   async function handleUpload() {
     setUploading(true)
 
-    // Group idle+matched rows by shipment_id
-    const grouped = new Map<string, { rowIndexes: number[]; files: File[]; containerNumbers: (string | null)[] }>()
-    rows.forEach((row, idx) => {
+    // Group idle+matched rows by shipment_id, holding the row objects themselves
+    const grouped = new Map<string, RowState[]>()
+    rows.forEach(row => {
       if (!row.shipmentId || row.uploadStatus !== 'idle' || row.hasExistingDoc || row.conflictBl || !row.hasActiveCcroTask) return
-      if (!grouped.has(row.shipmentId)) grouped.set(row.shipmentId, { rowIndexes: [], files: [], containerNumbers: [] })
-      grouped.get(row.shipmentId)!.rowIndexes.push(idx)
-      grouped.get(row.shipmentId)!.files.push(row.file)
-      grouped.get(row.shipmentId)!.containerNumbers.push(row.containerNumber || null)
+      if (!grouped.has(row.shipmentId)) grouped.set(row.shipmentId, [])
+      grouped.get(row.shipmentId)!.push(row)
     })
 
     // Mark all as uploading
-    setRows(prev => {
-      const updated = [...prev]
-      for (const { rowIndexes } of grouped.values()) {
-        rowIndexes.forEach(i => { updated[i] = { ...updated[i], uploadStatus: 'uploading' } })
-      }
-      return updated
-    })
+    for (const group of grouped.values()) {
+      group.forEach(r => setRow(r.id, { uploadStatus: 'uploading' }))
+    }
 
     const confirmedShipmentIds: string[] = []
     let totalFailed = 0
     let totalDuplicates = 0
 
-    for (const [shipmentId, { rowIndexes, files, containerNumbers }] of grouped) {
+    for (const [shipmentId, group] of grouped) {
       try {
-        const { data } = await shipmentsApi.bulkCcroUpload(shipmentId, files, containerNumbers)
-
-        // Compute flags directly from response data — NOT inside the setRows updater,
-        // because React calls updaters lazily.
-        const shipmentHadSuccess = data.results.some(
-          r => r.status === 'created' || r.status === 'matched'
+        const { data } = await shipmentsApi.bulkCcroUpload(
+          shipmentId,
+          group.map(r => r.file),
+          group.map(r => r.containerNumber || null),
         )
-        const shipmentFailed = data.results.filter(
-          r => r.status !== 'created' && r.status !== 'matched'
-        ).length
-        totalFailed += shipmentFailed
-        totalDuplicates += data.results.filter(r => r.status === 'duplicate').length
 
-        setRows(prev => {
-          const updated = [...prev]
-          data.results.forEach((result, fi) => {
-            const rowIdx = rowIndexes[fi]
-            if (rowIdx === undefined) return
-            if (result.status === 'created' || result.status === 'matched') {
-              updated[rowIdx] = {
-                ...updated[rowIdx],
-                uploadStatus: 'done',
-                uploadResult: result.status === 'created' ? 'Container added' : 'Container matched',
-              }
-            } else if (result.status === 'duplicate') {
-              updated[rowIdx] = {
-                ...updated[rowIdx],
-                uploadStatus: 'duplicate',
-                uploadResult: result.conflict_bl
-                  ? `Already active on ${result.conflict_bl}`
-                  : 'CCRO already uploaded for this container',
-              }
-            } else {
-              updated[rowIdx] = {
-                ...updated[rowIdx],
-                uploadStatus: 'not_detected',
-                uploadResult: 'Container not found in PDF',
-              }
-            }
-          })
-          return updated
+        let shipmentHadSuccess = false
+        data.results.forEach((result, fi) => {
+          const rowRef = group[fi]
+          if (!rowRef) return
+          const outcome = applyResult(rowRef.id, result)
+          if (outcome === 'done') shipmentHadSuccess = true
+          else totalFailed++
+          if (outcome === 'duplicate') totalDuplicates++
         })
 
         if (shipmentHadSuccess) {
           confirmedShipmentIds.push(shipmentId)
           // Save DO validity dates for rows that had a detected date confirmed by the user
-          const rowsWithDoDate = rowIndexes.filter(i => {
-            const r = rows[i]
-            return r.confirmedDoDate && r.detectedDoDate
-          })
-          for (const i of rowsWithDoDate) {
-            const r = rows[i]
+          for (const rowRef of group.filter(r => r.confirmedDoDate && r.detectedDoDate)) {
             try {
-              await shipmentsApi.setDoValidity(r.shipmentId!, r.confirmedDoDate)
-              setRows(prev => {
-                const u = [...prev]
-                u[i] = { ...u[i], doDateSaved: true }
-                return u
-              })
+              await shipmentsApi.setDoValidity(shipmentId, rowRef.confirmedDoDate)
+              setRow(rowRef.id, { doDateSaved: true })
             } catch {
               // non-blocking — user can update manually
             }
           }
         }
       } catch (err: unknown) {
-        const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-        const message = typeof detail === 'string' ? detail : 'Upload failed'
-        totalFailed += rowIndexes.length
-        setRows(prev => {
-          const updated = [...prev]
-          rowIndexes.forEach(i => { updated[i] = { ...updated[i], uploadStatus: 'error', uploadResult: message } })
-          return updated
-        })
+        const message = uploadErrorDetail(err)
+        const retryable = isRetryableUploadError(err)
+        totalFailed += group.length
+        group.forEach(r => setRow(r.id, { uploadStatus: 'error', uploadResult: message, retryable }))
       }
     }
 
@@ -219,7 +199,31 @@ export function BulkCcroUploadModal({ onClose, onDone }: Props) {
         await doConfirm(confirmedShipmentIds)
       }
     } else {
-      if (totalFailed > 0 || totalDuplicates > 0) toast.error('All files were duplicates or failed')
+      if (totalFailed > 0 || totalDuplicates > 0) toast.error('Some files were duplicates or failed — use Retry/Remove on the highlighted rows')
+    }
+  }
+
+  async function retryRow(row: RowState) {
+    if (!row.shipmentId) return
+    setRow(row.id, { uploadStatus: 'uploading' })
+    try {
+      const { data } = await shipmentsApi.bulkCcroUpload(row.shipmentId, [row.file], [row.containerNumber || null])
+      const result = data.results[0]
+      if (!result) return
+      const outcome = applyResult(row.id, result)
+      if (outcome === 'done') {
+        if (row.confirmedDoDate && row.detectedDoDate) {
+          try {
+            await shipmentsApi.setDoValidity(row.shipmentId, row.confirmedDoDate)
+            setRow(row.id, { doDateSaved: true })
+          } catch { /* non-blocking */ }
+        }
+        // Make the shipment confirmable now that it has an uploaded CCRO
+        setPendingConfirm(prev => prev.includes(row.shipmentId!) ? prev : [...prev, row.shipmentId!])
+        onDone()
+      }
+    } catch (err: unknown) {
+      setRow(row.id, { uploadStatus: 'error', uploadResult: uploadErrorDetail(err), retryable: isRetryableUploadError(err) })
     }
   }
 
@@ -242,25 +246,17 @@ export function BulkCcroUploadModal({ onClose, onDone }: Props) {
     }
   }
 
-  function removeRow(idx: number) {
-    setRows(prev => prev.filter((_, i) => i !== idx))
+  function removeRow(id: string) {
+    setRows(prev => prev.filter(r => r.id !== id))
   }
 
-  function setContainerNumber(idx: number, value: string) {
-    setRows(prev => {
-      const updated = [...prev]
-      updated[idx] = { ...updated[idx], containerNumber: value }
-      return updated
-    })
+  function setContainerNumber(id: string, value: string) {
+    setRow(id, { containerNumber: value })
   }
 
-  function setManualMatch(idx: number, shipmentId: string, blNumber: string, containerCount: number | null) {
-    setRows(prev => {
-      const updated = [...prev]
-      // Reset analyze-phase flags — they belonged to the old shipment. Server validates on upload.
-      updated[idx] = { ...updated[idx], shipmentId, blNumber, containerCount, hasExistingDoc: false, conflictBl: null, hasActiveCcroTask: true }
-      return updated
-    })
+  function setManualMatch(id: string, shipmentId: string, blNumber: string, containerCount: number | null) {
+    // Reset analyze-phase flags — they belonged to the old shipment. Server validates on upload.
+    setRow(id, { shipmentId, blNumber, containerCount, hasExistingDoc: false, conflictBl: null, hasActiveCcroTask: true })
   }
 
   // Build per-BL groups for summary display
@@ -379,14 +375,15 @@ export function BulkCcroUploadModal({ onClose, onDone }: Props) {
 
               {/* File rows */}
               <div className="space-y-2">
-                {rows.map((row, idx) => (
+                {rows.map(row => (
                   <CcroFileRow
-                    key={`${row.file.name}-${idx}`}
+                    key={row.id}
                     row={row}
-                    onRemove={() => removeRow(idx)}
-                    onMatch={(sid, bl, cc) => setManualMatch(idx, sid, bl, cc)}
-                    onContainerChange={v => setContainerNumber(idx, v)}
-                    onDoDateChange={v => setRows(prev => { const u = [...prev]; u[idx] = { ...u[idx], confirmedDoDate: v }; return u })}
+                    onRemove={() => removeRow(row.id)}
+                    onMatch={(sid, bl, cc) => setManualMatch(row.id, sid, bl, cc)}
+                    onContainerChange={v => setContainerNumber(row.id, v)}
+                    onDoDateChange={v => setRow(row.id, { confirmedDoDate: v })}
+                    onRetry={() => retryRow(row)}
                   />
                 ))}
               </div>
@@ -462,12 +459,14 @@ function CcroFileRow({
   onMatch,
   onContainerChange,
   onDoDateChange,
+  onRetry,
 }: {
   row: RowState
   onRemove: () => void
   onMatch: (shipmentId: string, blNumber: string, containerCount: number | null) => void
   onContainerChange: (value: string) => void
   onDoDateChange: (value: string) => void
+  onRetry: () => void
 }) {
   const [searching, setSearching] = useState(false)
   const [loadingResults, setLoadingResults] = useState(false)
@@ -559,17 +558,37 @@ function CcroFileRow({
       </div>
 
       {/* Result after upload */}
-      {isSettled && row.uploadResult && (
-        <div className="ml-7 space-y-0.5">
-          <p className={clsx(
-            'text-xs',
-            row.uploadStatus === 'done' ? 'text-green-600 dark:text-green-400' :
-            'text-red-600 dark:text-red-400',
-          )}>
-            {row.uploadResult}
-          </p>
+      {isSettled && (
+        <div className="ml-7 space-y-1.5">
+          {row.uploadResult && (
+            <p className={clsx(
+              'text-xs',
+              row.uploadStatus === 'done' ? 'text-green-600 dark:text-green-400' :
+              'text-red-600 dark:text-red-400',
+            )}>
+              {row.uploadResult}
+            </p>
+          )}
           {row.uploadStatus === 'done' && row.doDateSaved && (
             <p className="text-xs text-blue-600 dark:text-blue-400">✓ DO validity date updated</p>
+          )}
+          {row.uploadStatus !== 'done' && (
+            <div className="flex items-center gap-3">
+              {row.retryable && (
+                <button
+                  onClick={onRetry}
+                  className="flex items-center gap-1 text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline"
+                >
+                  <RotateCw size={11} /> Retry
+                </button>
+              )}
+              <button
+                onClick={onRemove}
+                className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:underline"
+              >
+                <X size={11} /> Remove
+              </button>
+            </div>
           )}
         </div>
       )}

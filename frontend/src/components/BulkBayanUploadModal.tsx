@@ -1,13 +1,15 @@
 import { useState, useCallback, useRef } from 'react'
 import { useDropzone } from 'react-dropzone'
-import { Upload, X, CheckCircle, AlertCircle, Loader, Search, Eye } from 'lucide-react'
+import { Upload, X, CheckCircle, AlertCircle, Loader, Search, Eye, RotateCw } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { documentsApi, type BayanAnalysisItem } from '@/api/documents'
 import { shipmentsApi } from '@/api/shipments'
+import { isRetryableUploadError, uploadErrorDetail } from '@/lib/uploadErrors'
 import type { ShipmentListItem } from '@/types'
 import clsx from 'clsx'
 
 interface RowState {
+  id: string
   file: File
   analysis: BayanAnalysisItem | null
   analyzing: boolean
@@ -18,6 +20,7 @@ interface RowState {
   completeTask: boolean
   uploadStatus: 'idle' | 'uploading' | 'done' | 'error'
   uploadResult: string | null
+  retryable: boolean
 }
 
 interface Props {
@@ -35,12 +38,16 @@ function isTransfer(name: string | null) {
   return name?.toLowerCase() === 'transfer'
 }
 
+type Phase = 'idle' | 'uploading' | 'payment' | 'completing'
+
 export function BulkBayanUploadModal({ onClose, onDone }: Props) {
   const [rows, setRows] = useState<RowState[]>([])
   const [uploading, setUploading] = useState(false)
+  const [phase, setPhase] = useState<Phase>('idle')
 
   const onDrop = useCallback(async (accepted: File[]) => {
     const newRows: RowState[] = accepted.map(file => ({
+      id: crypto.randomUUID(),
       file,
       analysis: null,
       analyzing: true,
@@ -51,32 +58,31 @@ export function BulkBayanUploadModal({ onClose, onDone }: Props) {
       completeTask: true,
       uploadStatus: 'idle',
       uploadResult: null,
+      retryable: false,
     }))
     setRows(prev => [...prev, ...newRows])
 
     try {
       const { data } = await documentsApi.analyzeBayans(accepted)
-      setRows(prev => {
-        const updated = [...prev]
-        const offset = updated.length - accepted.length
-        data.forEach((item, i) => {
-          const idx = offset + i
-          if (updated[idx]) {
-            updated[idx] = {
-              ...updated[idx],
-              analysis: item,
-              analyzing: false,
-              shipmentId: item.shipment_id,
-              blNumber: item.bl_number,
-              bayanTypeName: item.bayan_type_name,
-              hasExistingDoc: item.has_existing_doc,
-            }
-          }
-        })
-        return updated
-      })
+      // Match results to rows by stable id — the list may have changed
+      // (rows removed, another batch dropped) while analysis was running
+      const resultById = new Map(newRows.map((r, i) => [r.id, data[i]]))
+      setRows(prev => prev.map(r => {
+        const item = resultById.get(r.id)
+        if (!item) return r
+        return {
+          ...r,
+          analysis: item,
+          analyzing: false,
+          shipmentId: item.shipment_id,
+          blNumber: item.bl_number,
+          bayanTypeName: item.bayan_type_name,
+          hasExistingDoc: item.has_existing_doc,
+        }
+      }))
     } catch {
-      setRows(prev => prev.map(r => r.analyzing ? { ...r, analyzing: false } : r))
+      const droppedIds = new Set(newRows.map(r => r.id))
+      setRows(prev => prev.map(r => droppedIds.has(r.id) ? { ...r, analyzing: false } : r))
       toast.error('Failed to analyze files')
     }
   }, [])
@@ -87,38 +93,40 @@ export function BulkBayanUploadModal({ onClose, onDone }: Props) {
     multiple: true,
   })
 
+  // All async row updates address rows by id, never by index — the list can
+  // change (removals, extra drops) while uploads/analysis are in flight
+  const setRow = (id: string, patch: Partial<RowState>) =>
+    setRows(prev => prev.map(r => r.id === id ? { ...r, ...patch } : r))
+
+  async function uploadRow(row: RowState): Promise<boolean> {
+    if (!row.shipmentId) return false
+    setRow(row.id, { uploadStatus: 'uploading' })
+    try {
+      await documentsApi.upload({ shipment_id: row.shipmentId, doc_type: 'BAYAN', file: row.file })
+      setRow(row.id, { uploadStatus: 'done' })
+      return true
+    } catch (err: unknown) {
+      setRow(row.id, { uploadStatus: 'error', uploadResult: uploadErrorDetail(err), retryable: isRetryableUploadError(err) })
+      return false
+    }
+  }
+
   async function handleUpload() {
     setUploading(true)
-    const uploadedIds = new Set<string>()
+    const eligible = rows.filter(r => r.shipmentId && r.uploadStatus === 'idle' && !r.hasExistingDoc)
 
-    // Phase 1: upload all files in parallel
-    await Promise.all(
-      rows.map(async (row, idx) => {
-        if (!row.shipmentId || row.uploadStatus !== 'idle' || row.hasExistingDoc) return
-        setRows(prev => {
-          const u = [...prev]; u[idx] = { ...u[idx], uploadStatus: 'uploading' }; return u
-        })
-        try {
-          await documentsApi.upload({ shipment_id: row.shipmentId, doc_type: 'BAYAN', file: row.file })
-          uploadedIds.add(row.shipmentId)
-          setRows(prev => {
-            const u = [...prev]; u[idx] = { ...u[idx], uploadStatus: 'done' }; return u
-          })
-        } catch (err: unknown) {
-          const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-          const message = typeof detail === 'string' ? detail : 'Upload failed'
-          setRows(prev => {
-            const u = [...prev]; u[idx] = { ...u[idx], uploadStatus: 'error', uploadResult: message }; return u
-          })
-        }
-      })
-    )
+    // Stage 1: upload all files in parallel
+    setPhase('uploading')
+    const outcomes = await Promise.all(eligible.map(async row => ({ row, ok: await uploadRow(row) })))
+    const uploaded = outcomes.filter(o => o.ok).map(o => o.row)
+    const errorCount = outcomes.length - uploaded.length
 
-    // Phase 2: bulk payment request for Transfer rows — one call, one email
-    const transferIds = rows
-      .filter(r => r.shipmentId && r.completeTask && isTransfer(r.bayanTypeName) && uploadedIds.has(r.shipmentId!))
+    // Stage 2: bulk payment request for Transfer rows — one call, one combined email
+    const transferIds = uploaded
+      .filter(r => r.completeTask && isTransfer(r.bayanTypeName))
       .map(r => r.shipmentId!)
     if (transferIds.length > 0) {
+      setPhase('payment')
       try {
         await shipmentsApi.bulkRequestBayanPayment(transferIds)
       } catch {
@@ -126,57 +134,68 @@ export function BulkBayanUploadModal({ onClose, onDone }: Props) {
       }
     }
 
-    // Phase 3: complete BAYAN tasks for all successfully uploaded rows
-    await Promise.all(
-      rows
-        .filter(r => r.shipmentId && r.completeTask && uploadedIds.has(r.shipmentId!))
-        .map(async row => {
+    // Stage 3: complete BAYAN tasks for all successfully uploaded rows
+    const toComplete = uploaded.filter(r => r.completeTask)
+    if (toComplete.length > 0) {
+      setPhase('completing')
+      await Promise.all(
+        toComplete.map(async row => {
           try {
             await shipmentsApi.completeTaskByType(row.shipmentId!, 'BAYAN', { skipPaymentEmail: isTransfer(row.bayanTypeName) })
           } catch {
             toast.error(`Could not complete Bayan task for ${row.blNumber}`)
           }
         })
-    )
+      )
+    }
 
+    setPhase('idle')
     setUploading(false)
-    const successCount = uploadedIds.size
-    const errorCount = rows.filter(r => r.uploadStatus === 'error').length
     if (errorCount === 0) {
-      toast.success(`${successCount} Bayan${successCount !== 1 ? 's' : ''} uploaded`)
+      toast.success(`${uploaded.length} Bayan${uploaded.length !== 1 ? 's' : ''} uploaded`)
       onDone()
       onClose()
     } else {
-      toast.error(`${errorCount} file${errorCount !== 1 ? 's' : ''} failed to upload`)
+      toast.error(`${errorCount} file${errorCount !== 1 ? 's' : ''} failed — use Retry on the highlighted rows`)
     }
   }
 
-  function removeRow(idx: number) {
-    setRows(prev => prev.filter((_, i) => i !== idx))
+  async function retryRow(row: RowState) {
+    // Single-row retry runs the same three stages for just this file
+    const ok = await uploadRow(row)
+    if (!ok) return
+    if (row.completeTask) {
+      if (isTransfer(row.bayanTypeName)) {
+        try {
+          await shipmentsApi.bulkRequestBayanPayment([row.shipmentId!])
+        } catch {
+          toast.error('Could not send payment request email — complete the task manually if needed')
+        }
+      }
+      try {
+        await shipmentsApi.completeTaskByType(row.shipmentId!, 'BAYAN', { skipPaymentEmail: isTransfer(row.bayanTypeName) })
+      } catch {
+        toast.error(`Could not complete Bayan task for ${row.blNumber}`)
+      }
+    }
+    toast.success(`${row.file.name} uploaded`)
+    onDone()
   }
 
-  function setManualMatch(idx: number, shipmentId: string, blNumber: string, bayanTypeName: string | null) {
-    setRows(prev => {
-      const updated = [...prev]
-      updated[idx] = { ...updated[idx], shipmentId, blNumber, bayanTypeName, hasExistingDoc: false }
-      return updated
-    })
+  function removeRow(id: string) {
+    setRows(prev => prev.filter(r => r.id !== id))
   }
 
-  function unmatchRow(idx: number) {
-    setRows(prev => {
-      const updated = [...prev]
-      updated[idx] = { ...updated[idx], shipmentId: null, blNumber: null, bayanTypeName: null, hasExistingDoc: false }
-      return updated
-    })
+  function setManualMatch(id: string, shipmentId: string, blNumber: string, bayanTypeName: string | null) {
+    setRow(id, { shipmentId, blNumber, bayanTypeName, hasExistingDoc: false })
   }
 
-  function setCompleteTask(idx: number, value: boolean) {
-    setRows(prev => {
-      const updated = [...prev]
-      updated[idx] = { ...updated[idx], completeTask: value }
-      return updated
-    })
+  function unmatchRow(id: string) {
+    setRow(id, { shipmentId: null, blNumber: null, bayanTypeName: null, hasExistingDoc: false })
+  }
+
+  function setCompleteTask(id: string, value: boolean) {
+    setRow(id, { completeTask: value })
   }
 
   const matchedIds = new Set(rows.map(r => r.shipmentId).filter((id): id is string => id !== null))
@@ -217,15 +236,16 @@ export function BulkBayanUploadModal({ onClose, onDone }: Props) {
 
           {rows.length > 0 && (
             <div className="space-y-2">
-              {rows.map((row, idx) => (
+              {rows.map(row => (
                 <BayanFileRow
-                  key={`${row.file.name}-${idx}`}
+                  key={row.id}
                   row={row}
                   matchedIds={matchedIds}
-                  onRemove={() => removeRow(idx)}
-                  onMatch={(sid, bl, typeName) => setManualMatch(idx, sid, bl, typeName)}
-                  onUnmatch={() => unmatchRow(idx)}
-                  onCompleteChange={v => setCompleteTask(idx, v)}
+                  onRemove={() => removeRow(row.id)}
+                  onMatch={(sid, bl, typeName) => setManualMatch(row.id, sid, bl, typeName)}
+                  onUnmatch={() => unmatchRow(row.id)}
+                  onCompleteChange={v => setCompleteTask(row.id, v)}
+                  onRetry={() => retryRow(row)}
                 />
               ))}
             </div>
@@ -234,19 +254,25 @@ export function BulkBayanUploadModal({ onClose, onDone }: Props) {
 
         <div className="px-6 py-4 border-t dark:border-gray-700 flex items-center justify-between gap-3">
           <div className="flex flex-col gap-0.5">
-            <p className="text-xs text-gray-500 dark:text-gray-400">
-              {rows.length === 0
-                ? 'No files selected'
-                : !allAnalyzed
-                ? 'Analyzing files…'
-                : pendingManual > 0
-                ? `${pendingManual} file${pendingManual !== 1 ? 's' : ''} need manual assignment`
-                : `${readyCount} file${readyCount !== 1 ? 's' : ''} ready to upload`}
-            </p>
-            {allAnalyzed && transferCount > 0 && (
-              <p className="text-xs text-blue-600 dark:text-blue-400">
-                Payment request will be sent for {transferCount} Transfer BL{transferCount !== 1 ? 's' : ''}
-              </p>
+            {uploading ? (
+              <UploadStages phase={phase} hasTransfers={transferCount > 0} />
+            ) : (
+              <>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  {rows.length === 0
+                    ? 'No files selected'
+                    : !allAnalyzed
+                    ? 'Analyzing files…'
+                    : pendingManual > 0
+                    ? `${pendingManual} file${pendingManual !== 1 ? 's' : ''} need manual assignment`
+                    : `${readyCount} file${readyCount !== 1 ? 's' : ''} ready to upload`}
+                </p>
+                {allAnalyzed && transferCount > 0 && (
+                  <p className="text-xs text-blue-600 dark:text-blue-400">
+                    Payment request will be sent for {transferCount} Transfer BL{transferCount !== 1 ? 's' : ''}
+                  </p>
+                )}
+              </>
             )}
           </div>
           <div className="flex gap-2">
@@ -271,6 +297,46 @@ export function BulkBayanUploadModal({ onClose, onDone }: Props) {
   )
 }
 
+/** Live stage indicator shown in the footer while the bulk upload runs:
+ *  Uploading Bayans → Sending payment email → Completing tasks */
+function UploadStages({ phase, hasTransfers }: { phase: Phase; hasTransfers: boolean }) {
+  const steps: { key: Phase; label: string }[] = [
+    { key: 'uploading', label: 'Uploading Bayans' },
+    ...(hasTransfers ? [{ key: 'payment' as Phase, label: 'Sending payment email' }] : []),
+    { key: 'completing', label: 'Completing tasks' },
+  ]
+  const order: Phase[] = ['uploading', 'payment', 'completing']
+  const activeIdx = order.indexOf(phase)
+  return (
+    <div className="flex items-center gap-2 flex-wrap">
+      {steps.map((s, i) => {
+        const stepIdx = order.indexOf(s.key)
+        const state = stepIdx < activeIdx ? 'done' : stepIdx === activeIdx ? 'active' : 'pending'
+        return (
+          <span key={s.key} className="flex items-center gap-2">
+            {i > 0 && <span className="text-gray-300 dark:text-gray-600 text-xs">→</span>}
+            <span
+              className={clsx(
+                'flex items-center gap-1 text-xs font-medium',
+                state === 'done' ? 'text-green-600 dark:text-green-400' :
+                state === 'active' ? 'text-blue-600 dark:text-blue-400' :
+                'text-gray-400 dark:text-gray-500',
+              )}
+            >
+              {state === 'done'
+                ? <CheckCircle size={12} />
+                : state === 'active'
+                ? <Loader size={12} className="animate-spin" />
+                : <span className="w-2.5 h-2.5 rounded-full border border-current inline-block" />}
+              {s.label}
+            </span>
+          </span>
+        )
+      })}
+    </div>
+  )
+}
+
 const TYPE_STYLES: Record<string, string> = {
   transfer: 'text-blue-700 dark:text-blue-400 bg-blue-100 dark:bg-blue-900/30',
   bonded:   'text-orange-700 dark:text-orange-400 bg-orange-100 dark:bg-orange-900/30',
@@ -288,6 +354,7 @@ function BayanFileRow({
   onMatch,
   onUnmatch,
   onCompleteChange,
+  onRetry,
 }: {
   row: RowState
   matchedIds: Set<string>
@@ -295,6 +362,7 @@ function BayanFileRow({
   onMatch: (shipmentId: string, blNumber: string, bayanTypeName: string | null) => void
   onUnmatch: () => void
   onCompleteChange: (v: boolean) => void
+  onRetry: () => void
 }) {
   const [searching, setSearching] = useState(false)
   const [loadingResults, setLoadingResults] = useState(false)
@@ -379,8 +447,28 @@ function BayanFileRow({
         )}
       </div>
 
-      {row.uploadStatus === 'error' && row.uploadResult && (
-        <p className="text-xs text-red-600 dark:text-red-400 ml-7">{row.uploadResult}</p>
+      {row.uploadStatus === 'error' && (
+        <div className="ml-7 space-y-1.5">
+          {row.uploadResult && (
+            <p className="text-xs text-red-600 dark:text-red-400">{row.uploadResult}</p>
+          )}
+          <div className="flex items-center gap-3">
+            {row.retryable && (
+              <button
+                onClick={onRetry}
+                className="flex items-center gap-1 text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline"
+              >
+                <RotateCw size={11} /> Retry
+              </button>
+            )}
+            <button
+              onClick={onRemove}
+              className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:underline"
+            >
+              <X size={11} /> Remove
+            </button>
+          </div>
+        </div>
       )}
 
       {!row.analyzing && row.uploadStatus === 'idle' && (

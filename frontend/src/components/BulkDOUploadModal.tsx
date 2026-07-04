@@ -1,13 +1,15 @@
 import { useState, useCallback, useRef } from 'react'
 import { useDropzone } from 'react-dropzone'
-import { Upload, X, CheckCircle, AlertCircle, Loader, Search, Eye } from 'lucide-react'
+import { Upload, X, CheckCircle, AlertCircle, Loader, Search, Eye, RotateCw } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { documentsApi, type DOAnalysisItem } from '@/api/documents'
 import { shipmentsApi } from '@/api/shipments'
+import { isRetryableUploadError, uploadErrorDetail } from '@/lib/uploadErrors'
 import type { ShipmentListItem } from '@/types'
 import clsx from 'clsx'
 
 interface RowState {
+  id: string
   file: File
   analysis: DOAnalysisItem | null
   analyzing: boolean
@@ -18,6 +20,7 @@ interface RowState {
   completeTask: boolean
   uploadStatus: 'idle' | 'uploading' | 'done' | 'error'
   uploadResult: string | null
+  retryable: boolean
 }
 
 interface Props {
@@ -32,6 +35,7 @@ export function BulkDOUploadModal({ onClose, onDone, renewalMode = false }: Prop
 
   const onDrop = useCallback(async (accepted: File[]) => {
     const newRows: RowState[] = accepted.map(file => ({
+      id: crypto.randomUUID(),
       file,
       analysis: null,
       analyzing: true,
@@ -42,35 +46,34 @@ export function BulkDOUploadModal({ onClose, onDone, renewalMode = false }: Prop
       completeTask: !renewalMode,
       uploadStatus: 'idle',
       uploadResult: null,
+      retryable: false,
     }))
     setRows(prev => [...prev, ...newRows])
 
     try {
       const { data } = await documentsApi.analyzeDOs(accepted, renewalMode)
-      setRows(prev => {
-        const updated = [...prev]
-        const offset = updated.length - accepted.length
-        data.forEach((item, i) => {
-          const idx = offset + i
-          if (updated[idx]) {
-            updated[idx] = {
-              ...updated[idx],
-              analysis: item,
-              analyzing: false,
-              shipmentId: item.shipment_id,
-              blNumber: item.bl_number,
-              doDate: item.detected_date ?? '',
-              hasExistingDoc: item.has_existing_doc,
-            }
-          }
-        })
-        return updated
-      })
+      // Match results to rows by stable id — the list may have changed
+      // (rows removed, another batch dropped) while analysis was running
+      const resultById = new Map(newRows.map((r, i) => [r.id, data[i]]))
+      setRows(prev => prev.map(r => {
+        const item = resultById.get(r.id)
+        if (!item) return r
+        return {
+          ...r,
+          analysis: item,
+          analyzing: false,
+          shipmentId: item.shipment_id,
+          blNumber: item.bl_number,
+          doDate: item.detected_date ?? '',
+          hasExistingDoc: item.has_existing_doc,
+        }
+      }))
     } catch {
-      setRows(prev => prev.map(r => r.analyzing ? { ...r, analyzing: false } : r))
+      const droppedIds = new Set(newRows.map(r => r.id))
+      setRows(prev => prev.map(r => droppedIds.has(r.id) ? { ...r, analyzing: false } : r))
       toast.error('Failed to analyze files')
     }
-  }, [])
+  }, [renewalMode])
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -78,93 +81,77 @@ export function BulkDOUploadModal({ onClose, onDone, renewalMode = false }: Prop
     multiple: true,
   })
 
+  // All async row updates address rows by id, never by index — the list can
+  // change (removals, extra drops) while uploads/analysis are in flight
+  const setRow = (id: string, patch: Partial<RowState>) =>
+    setRows(prev => prev.map(r => r.id === id ? { ...r, ...patch } : r))
+
+  async function uploadRow(row: RowState): Promise<boolean> {
+    if (!row.shipmentId || !row.doDate) return false
+    setRow(row.id, { uploadStatus: 'uploading' })
+    try {
+      await documentsApi.upload({ shipment_id: row.shipmentId, doc_type: 'DO', file: row.file, force_replace: renewalMode || row.hasExistingDoc })
+      await shipmentsApi.setDoValidity(row.shipmentId, row.doDate)
+      if (row.completeTask) {
+        try {
+          await shipmentsApi.completeTaskByType(row.shipmentId, 'DO')
+        } catch {
+          toast.error(`Could not complete DO task for ${row.blNumber}`)
+        }
+      }
+      setRow(row.id, { uploadStatus: 'done' })
+      return true
+    } catch (err: unknown) {
+      setRow(row.id, { uploadStatus: 'error', uploadResult: uploadErrorDetail(err), retryable: isRetryableUploadError(err) })
+      return false
+    }
+  }
+
   async function handleUpload() {
     setUploading(true)
-    let successCount = 0
-    let errorCount = 0
-
-    await Promise.all(
-      rows.map(async (row, idx) => {
-        if (!row.shipmentId || !row.doDate || row.uploadStatus !== 'idle') return
-        if (!renewalMode && row.hasExistingDoc) return
-        setRows(prev => {
-          const updated = [...prev]
-          updated[idx] = { ...updated[idx], uploadStatus: 'uploading' }
-          return updated
-        })
-        try {
-          await documentsApi.upload({ shipment_id: row.shipmentId, doc_type: 'DO', file: row.file, force_replace: renewalMode || row.hasExistingDoc })
-          await shipmentsApi.setDoValidity(row.shipmentId, row.doDate)
-          if (row.completeTask) {
-            try {
-              await shipmentsApi.completeTaskByType(row.shipmentId, 'DO')
-            } catch {
-              toast.error(`Could not complete DO task for ${row.blNumber}`)
-            }
-          }
-          setRows(prev => {
-            const updated = [...prev]
-            updated[idx] = { ...updated[idx], uploadStatus: 'done' }
-            return updated
-          })
-          successCount++
-        } catch (err: unknown) {
-          const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-          const message = typeof detail === 'string' ? detail : 'Upload failed'
-          setRows(prev => {
-            const updated = [...prev]
-            updated[idx] = { ...updated[idx], uploadStatus: 'error', uploadResult: message }
-            return updated
-          })
-          errorCount++
-        }
-      })
+    const eligible = rows.filter(r =>
+      r.shipmentId && r.doDate && r.uploadStatus === 'idle' && (renewalMode || !r.hasExistingDoc)
     )
-
+    const outcomes = await Promise.all(eligible.map(uploadRow))
     setUploading(false)
+
+    const successCount = outcomes.filter(Boolean).length
+    const errorCount = outcomes.length - successCount
     if (errorCount === 0) {
       toast.success(`${successCount} DO${successCount !== 1 ? 's' : ''} uploaded`)
       onDone()
       onClose()
     } else {
-      toast.error(`${errorCount} file${errorCount !== 1 ? 's' : ''} failed to upload`)
+      toast.error(`${errorCount} file${errorCount !== 1 ? 's' : ''} failed — use Retry on the highlighted rows`)
     }
   }
 
-  function removeRow(idx: number) {
-    setRows(prev => prev.filter((_, i) => i !== idx))
+  async function retryRow(row: RowState) {
+    const ok = await uploadRow(row)
+    if (ok) {
+      toast.success(`${row.file.name} uploaded`)
+      onDone()
+    }
   }
 
-  function setManualMatch(idx: number, shipmentId: string, blNumber: string) {
-    setRows(prev => {
-      const updated = [...prev]
-      updated[idx] = { ...updated[idx], shipmentId, blNumber, hasExistingDoc: false }
-      return updated
-    })
+  function removeRow(id: string) {
+    setRows(prev => prev.filter(r => r.id !== id))
   }
 
-  function unmatchRow(idx: number) {
-    setRows(prev => {
-      const updated = [...prev]
-      updated[idx] = { ...updated[idx], shipmentId: null, blNumber: null, hasExistingDoc: false }
-      return updated
-    })
+  function setManualMatch(id: string, shipmentId: string, blNumber: string) {
+    setRow(id, { shipmentId, blNumber, hasExistingDoc: false })
   }
 
-  function setCompleteTask(idx: number, value: boolean) {
-    setRows(prev => {
-      const updated = [...prev]
-      updated[idx] = { ...updated[idx], completeTask: value }
-      return updated
-    })
+  function unmatchRow(id: string) {
+    setRow(id, { shipmentId: null, blNumber: null, hasExistingDoc: false })
   }
 
-  function setDate(idx: number, date: string) {
-    setRows(prev => {
-      const updated = [...prev]
-      updated[idx] = { ...updated[idx], doDate: date }
-      return updated
-    })
+  function setCompleteTask(id: string, value: boolean) {
+    setRow(id, { completeTask: value })
+  }
+
+  function setDate(id: string, date: string) {
+    setRow(id, { doDate: date })
   }
 
   const matchedIds = new Set(rows.map(r => r.shipmentId).filter((id): id is string => id !== null))
@@ -207,17 +194,18 @@ export function BulkDOUploadModal({ onClose, onDone, renewalMode = false }: Prop
 
           {rows.length > 0 && (
             <div className="space-y-2">
-              {rows.map((row, idx) => (
+              {rows.map(row => (
                 <DOFileRow
-                  key={`${row.file.name}-${idx}`}
+                  key={row.id}
                   row={row}
                   matchedIds={matchedIds}
                   renewalMode={renewalMode}
-                  onRemove={() => removeRow(idx)}
-                  onMatch={(sid, bl) => setManualMatch(idx, sid, bl)}
-                  onUnmatch={() => unmatchRow(idx)}
-                  onDateChange={date => setDate(idx, date)}
-                  onCompleteChange={v => setCompleteTask(idx, v)}
+                  onRemove={() => removeRow(row.id)}
+                  onMatch={(sid, bl) => setManualMatch(row.id, sid, bl)}
+                  onUnmatch={() => unmatchRow(row.id)}
+                  onDateChange={date => setDate(row.id, date)}
+                  onCompleteChange={v => setCompleteTask(row.id, v)}
+                  onRetry={() => retryRow(row)}
                 />
               ))}
             </div>
@@ -275,6 +263,7 @@ function DOFileRow({
   onUnmatch,
   onDateChange,
   onCompleteChange,
+  onRetry,
 }: {
   row: RowState
   matchedIds: Set<string>
@@ -284,6 +273,7 @@ function DOFileRow({
   onUnmatch: () => void
   onDateChange: (date: string) => void
   onCompleteChange: (v: boolean) => void
+  onRetry: () => void
 }) {
   const [searching, setSearching] = useState(false)
   const [loadingResults, setLoadingResults] = useState(false)
@@ -374,8 +364,28 @@ function DOFileRow({
         )}
       </div>
 
-      {row.uploadStatus === 'error' && row.uploadResult && (
-        <p className="text-xs text-red-600 dark:text-red-400 ml-7">{row.uploadResult}</p>
+      {row.uploadStatus === 'error' && (
+        <div className="ml-7 space-y-1.5">
+          {row.uploadResult && (
+            <p className="text-xs text-red-600 dark:text-red-400">{row.uploadResult}</p>
+          )}
+          <div className="flex items-center gap-3">
+            {row.retryable && (
+              <button
+                onClick={onRetry}
+                className="flex items-center gap-1 text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline"
+              >
+                <RotateCw size={11} /> Retry
+              </button>
+            )}
+            <button
+              onClick={onRemove}
+              className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:underline"
+            >
+              <X size={11} /> Remove
+            </button>
+          </div>
+        </div>
       )}
 
       {!row.analyzing && row.uploadStatus === 'idle' && (
