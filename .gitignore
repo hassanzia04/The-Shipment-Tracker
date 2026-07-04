@@ -1,8 +1,7 @@
-# Environment files — NEVER commit these
+# Environment files — NEVER commit these (keep only the .env.example template)
 .env
-.env.prod
-.env.local
-.env.*.local
+.env.*
+!.env.example
 
 # Python
 __pycache__/
