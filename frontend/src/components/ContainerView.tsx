@@ -77,13 +77,14 @@ function tomorrowDateStr() {
 
 // ── Individual row ────────────────────────────────────────────────────────────
 
-function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical = false }: {
+function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical = false, showCompany = false }: {
   c: ContainerViewItem
   team: string
   trucks: Truck[]
   outsourcedTrucks: OutsourcedTruck[]
   onUpdated: () => void
   historical?: boolean
+  showCompany?: boolean
 }) {
   const qc = useQueryClient()
   const [expanded, setExpanded] = useState<'assign' | 'issue' | 'arrived' | 'offloaded' | 'undo_offload' | 'return' | 'revalidation' | 'assign_outsourced' | 'unassign' | null>(null)
@@ -381,6 +382,13 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
             </span>
           )}
         </td>
+
+        {/* Customer (internal users only) */}
+        {showCompany && (
+          <td className="px-3 py-3 hidden md:table-cell">
+            <span className="text-sm text-gray-600 dark:text-gray-300">{c.company_name || '—'}</span>
+          </td>
+        )}
         {/* Container # */}
         <td className="px-3 py-3">
           <p className="text-sm font-medium text-gray-800 dark:text-gray-100">{c.container_number}</p>
@@ -593,7 +601,7 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
       {/* ── Assign truck form ── */}
       {expanded === 'assign' && (
         <tr>
-          <td colSpan={10} className="p-0">
+          <td colSpan={showCompany ? 11 : 10} className="p-0">
             <div className="px-5 py-3 bg-blue-50 dark:bg-blue-900/10 border-t border-b dark:border-gray-700 space-y-3">
               <p className="text-xs font-semibold text-blue-700 dark:text-blue-400">Assign Truck & Driver</p>
               <div className="flex flex-wrap gap-3">
@@ -629,7 +637,7 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
       {/* ── Return to FFD form ── */}
       {expanded === 'return' && (
         <tr>
-          <td colSpan={10} className="p-0">
+          <td colSpan={showCompany ? 11 : 10} className="p-0">
             <div className="px-5 py-3 bg-orange-50 dark:bg-orange-900/10 border-t border-b dark:border-gray-700 space-y-2">
               <p className="text-xs font-semibold text-orange-700 dark:text-orange-400">Return CCRO to FFD</p>
               <p className="text-xs text-orange-600 dark:text-orange-500">Explain why a truck could not be assigned for this container.</p>
@@ -655,7 +663,7 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
       {/* ── Unassign truck form ── */}
       {expanded === 'unassign' && (
         <tr>
-          <td colSpan={10} className="p-0">
+          <td colSpan={showCompany ? 11 : 10} className="p-0">
             <div className="px-5 py-3 bg-rose-50 dark:bg-rose-900/10 border-t border-b dark:border-gray-700 space-y-2">
               <p className="text-xs font-semibold text-rose-700 dark:text-rose-400">Unassign Truck</p>
               <p className="text-xs text-rose-600 dark:text-rose-500">Container will return to Pending. You can then reassign a truck or return the CCRO to FFD.</p>
@@ -681,7 +689,7 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
       {/* ── Arrival time form ── */}
       {expanded === 'arrived' && (
         <tr>
-          <td colSpan={10} className="p-0">
+          <td colSpan={showCompany ? 11 : 10} className="p-0">
             <div className="px-5 py-3 bg-purple-50 dark:bg-purple-900/10 border-t border-b dark:border-gray-700 space-y-2">
               <p className="text-xs font-semibold text-purple-700 dark:text-purple-400">
                 {c.arrived_at ? 'Edit Arrival Time' : 'Record Arrival Time'}
@@ -707,7 +715,7 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
       {/* ── Offloading time form ── */}
       {expanded === 'offloaded' && (
         <tr>
-          <td colSpan={10} className="p-0">
+          <td colSpan={showCompany ? 11 : 10} className="p-0">
             <div className="px-5 py-3 bg-green-50 dark:bg-green-900/10 border-t border-b dark:border-gray-700 space-y-2">
               <p className="text-xs font-semibold text-green-700 dark:text-green-400">
                 {c.offloaded_at ? 'Edit Offloading Time' : 'Record Offloading Time'}
@@ -733,7 +741,7 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
       {/* ── Undo offloading form ── */}
       {expanded === 'undo_offload' && (
         <tr>
-          <td colSpan={10} className="p-0">
+          <td colSpan={showCompany ? 11 : 10} className="p-0">
             <div className="px-5 py-3 bg-amber-50 dark:bg-amber-900/10 border-t border-b dark:border-gray-700 space-y-2">
               <p className="text-xs font-semibold text-amber-700 dark:text-amber-400">Undo Offloading</p>
               <p className="text-xs text-amber-600 dark:text-amber-500">Container will revert to its previous status. Provide a reason for the audit log.</p>
@@ -759,7 +767,7 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
       {/* ── DO revalidation request form ── */}
       {expanded === 'revalidation' && (
         <tr>
-          <td colSpan={10} className="p-0">
+          <td colSpan={showCompany ? 11 : 10} className="p-0">
             <div className="px-5 py-3 bg-rose-50 dark:bg-rose-900/10 border-t border-b dark:border-gray-700 space-y-2">
               <p className="text-xs font-semibold text-rose-700 dark:text-rose-400">Request DO Revalidation</p>
               <p className="text-xs text-rose-600 dark:text-rose-500">Explain why the DO needs to be revalidated before this container can be returned.</p>
@@ -785,7 +793,7 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
       {/* ── Issue (breakdown / delay) form ── */}
       {expanded === 'issue' && (
         <tr>
-          <td colSpan={10} className="p-0">
+          <td colSpan={showCompany ? 11 : 10} className="p-0">
             <div className="px-5 py-3 bg-amber-50 dark:bg-amber-900/10 border-t border-b dark:border-gray-700 space-y-3">
               <p className="text-xs font-semibold text-amber-700 dark:text-amber-400">Report Issue</p>
               <div className="flex gap-2">
@@ -815,7 +823,7 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
       {/* ── Assign outsourced truck form ── */}
       {expanded === 'assign_outsourced' && (
         <tr>
-          <td colSpan={10} className="p-0">
+          <td colSpan={showCompany ? 11 : 10} className="p-0">
             <div className="px-5 py-3 bg-cyan-50 dark:bg-cyan-900/10 border-t border-b dark:border-gray-700 space-y-3">
               <p className="text-xs font-semibold text-cyan-700 dark:text-cyan-400">Assign Outsourced Truck (Non-AMLS)</p>
               <div className="flex flex-wrap gap-3">
@@ -1218,6 +1226,9 @@ export function ContainerView({ team, historical = false, focusCompanyIds }: Pro
                   <SortableHeader label="B/L Number" column="bl" sort={sort} onSort={toggleSort} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide"
                     filter={<ColumnFilterPopover filter={{ type: 'text', value: cfBl, onChange: setCfBl, placeholder: 'Filter BL…' }} />}
                   />
+                  {showCompanyFilter && (
+                    <th className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap hidden md:table-cell">Customer</th>
+                  )}
                   <SortableHeader label="Container" column="container" sort={sort} onSort={toggleSort} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide"
                     filter={<ColumnFilterPopover filter={{ type: 'text', value: cfContainer, onChange: setCfContainer, placeholder: 'Filter container…' }} />}
                   />
@@ -1255,6 +1266,7 @@ export function ContainerView({ team, historical = false, focusCompanyIds }: Pro
                     outsourcedTrucks={outsourcedTrucks as OutsourcedTruck[]}
                     onUpdated={refetch}
                     historical={historical}
+                    showCompany={showCompanyFilter}
                   />
                 ))}
               </tbody>
