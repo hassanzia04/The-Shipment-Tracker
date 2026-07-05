@@ -54,7 +54,7 @@ const ALL_COLUMNS = [
 ] as const
 
 // Columns hidden on mobile by default (previously handled by Tailwind responsive classes)
-const MOBILE_DEFAULT_HIDDEN = new Set(['invoice', 'consignee', 'company', 'port', 'offloading_location', 'bayan_type', 'shipping_line', 'pull_out', 'eta', 'do_validity', 'amls', 'permit_no'])
+const MOBILE_DEFAULT_HIDDEN = new Set(['invoice', 'consignee', 'port', 'offloading_location', 'bayan_type', 'shipping_line', 'pull_out', 'eta', 'do_validity', 'amls', 'permit_no'])
 
 // ── Bulk-selection action bar ─────────────────────────────────────────────────
 // Desktop: centered floating pill. Mobile: full-width dock above the bottom nav
@@ -2590,7 +2590,7 @@ export function ShipmentList() {
               No Pull Out Date
             </button>
           )}
-          {!historical && isFFD && (
+          {!historical && !isPRO && (
             <button
               onClick={() => { setFilterDoExpired(v => !v); setFilterDoExpiringSoon(false) }}
               className={clsx(
@@ -2603,7 +2603,7 @@ export function ShipmentList() {
               DO Expired
             </button>
           )}
-          {!historical && isFFD && filterDoExpired && (
+          {!historical && !isPRO && filterDoExpired && (
             <button
               onClick={() => setFilterDoExpiringSoon(v => !v)}
               className={clsx(

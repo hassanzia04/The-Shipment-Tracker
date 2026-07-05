@@ -385,7 +385,7 @@ function ContainerRow({ c, team, trucks, outsourcedTrucks, onUpdated, historical
 
         {/* Customer (internal users only) */}
         {showCompany && (
-          <td className="px-3 py-3 hidden md:table-cell">
+          <td className="px-3 py-3">
             <span className="text-sm text-gray-600 dark:text-gray-300">{c.company_name || '—'}</span>
           </td>
         )}
@@ -1227,7 +1227,7 @@ export function ContainerView({ team, historical = false, focusCompanyIds }: Pro
                     filter={<ColumnFilterPopover filter={{ type: 'text', value: cfBl, onChange: setCfBl, placeholder: 'Filter BL…' }} />}
                   />
                   {showCompanyFilter && (
-                    <th className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap hidden md:table-cell">Customer</th>
+                    <th className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap">Customer</th>
                   )}
                   <SortableHeader label="Container" column="container" sort={sort} onSort={toggleSort} className="px-3 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide"
                     filter={<ColumnFilterPopover filter={{ type: 'text', value: cfContainer, onChange: setCfContainer, placeholder: 'Filter container…' }} />}
